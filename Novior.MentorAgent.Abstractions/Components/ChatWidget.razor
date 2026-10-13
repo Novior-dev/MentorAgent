@@ -1,0 +1,418 @@
+﻿@using Novior.MentorAgent.Abstractions.Core
+@using Novior.MentorAgent.Abstractions.Models
+@using Microsoft.JSInterop
+@inject MentorLocalizer L
+@inject IOptions<MentorWidgetOptions> Options
+@inject IJSRuntime JSRuntime
+@implements IDisposable
+
+@* Injects CSS and JS automatically — no changes needed in App.razor *@
+@* The file names are not namespaces: a WASM or MAUI index.html names them, so they stay on a rename.
+   Only the _content/<package id>/ part follows the package (ContractNameTests). *@
+<HeadContent>
+    <link rel="stylesheet" href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=10" />
+    <script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=10"></script>
+</HeadContent>
+
+@{
+    var opt = Options.Value;
+    var posClass = opt.Position switch
+    {
+        ChatPosition.BottomLeft => "bm-pos--bottom-left",
+        ChatPosition.TopRight   => "bm-pos--top-right",
+        ChatPosition.TopLeft    => "bm-pos--top-left",
+        ChatPosition.SideRight  => "bm-pos--side-right",
+        ChatPosition.SideLeft   => "bm-pos--side-left",
+        _                       => "bm-pos--bottom-right"
+    };
+}
+
+@{
+    var themeVars = BuildThemeVars(opt);
+}
+@if (!string.IsNullOrEmpty(themeVars))
+{
+    <style>:root { @((MarkupString)themeVars) }</style>
+}
+
+@{
+    var effectiveAvatar = string.IsNullOrWhiteSpace(opt.AvatarUrl)
+        ? "_content/Novior.MentorAgent.Abstractions/IconMA.png"
+        : opt.AvatarUrl;
+}
+
+<div class="bm-root @posClass @(_open ? "bm-open" : "")">
+
+    @* Backdrop *@
+    <div class="bm-backdrop" @onclick="Close"></div>
+
+    @* Floating Button *@
+    <button class="bm-fab @(_busy ? "bm-fab--busy" : "") @(!_busy && !_open ? "bm-fab--avatar" : "")"
+            @onclick="Toggle"
+            aria-label="@L.Get("fab.open") @opt.BotName"
+            title="@opt.BotName">
+
+        @if (!_busy && !_open)
+        {
+            <img src="@effectiveAvatar" alt="@opt.BotName" class="bm-fab__avatar-img" />
+        }
+
+        <span class="bm-fab__icon">
+            @if (_busy)
+            {
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" class="bm-spin-ring" />
+                </svg>
+            }
+            else if (_open)
+            {
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+            }
+            else
+            {
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    <circle cx="9" cy="10" r="1" fill="currentColor" />
+                    <circle cx="12" cy="10" r="1" fill="currentColor" />
+                    <circle cx="15" cy="10" r="1" fill="currentColor" />
+                </svg>
+            }
+        </span>
+        @if (_unread > 0 && !_open)
+        {
+            <span class="bm-badge">@(_unread > 9 ? "9+" : _unread.ToString())</span>
+        }
+    </button>
+
+    @* Chat Panel *@
+    <div class="bm-panel" role="dialog" aria-label="@opt.BotName Chat">
+
+        @* Header *@
+        <header class="bm-header">
+            <div class="bm-header__avatar">
+                <img src="@effectiveAvatar" alt="@opt.BotName" class="bm-avatar-img" />
+            </div>
+            <div class="bm-header__info">
+                <span class="bm-header__name">@opt.BotName</span>
+                <span class="bm-header__status @(_busy ? "bm-header__status--busy" : "bm-header__status--online")">
+                    <span class="bm-status-dot"></span>
+                    @(_busy ? L.Get("status.busy") : L.Get("status.online"))
+                </span>
+            </div>
+            @* Status pills — a *sibling* of the action buttons, not a child. Nested inside them
+               they could only ever compete with the title for the same row, and at the default
+               400px panel avatar + name + two pills + four buttons do not fit: the name lost,
+               wrapped to three lines and slid under the badges. As a sibling the header can wrap
+               and hand this block its own row instead. *@
+            @{
+                    var hostedTools = ActiveHostedTools;
+                    var showHosted  = opt.ShowHostedToolsStatus && hostedTools.Count > 0;
+                }
+                @if ((opt.ShowMcpStatus && opt.HasMcpServers) || (opt.ShowA2AStatus && opt.HasRemoteAgents) || showHosted)
+                {
+                    <div class="bm-status-pills">
+                        @if (showHosted)
+                        {
+                            <button class="bm-hosted-pill"
+                                    @onclick="@(() => _hostedDetailOpen = !_hostedDetailOpen)"
+                                    title="@($"{L.Get("hosted.title")} — {L.Get("hosted.hint")}")"
+                                    aria-label="@($"{L.Get("hosted.title")} — {L.Get("hosted.hint")}")">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                                     width="10" height="10" aria-hidden="true">
+                                    <circle cx="8" cy="8" r="6.5" />
+                                    <path d="M1.5 8h13M8 1.5c1.8 1.9 2.7 4.1 2.7 6.5S9.8 12.6 8 14.5C6.2 12.6 5.3 10.4 5.3 8S6.2 3.4 8 1.5z" />
+                                </svg>
+                                <span class="bm-hosted-pill__name">
+                                    @(hostedTools.Count == 1 ? HostedToolLabel(hostedTools[0]) : $"{hostedTools.Count} tools")
+                                </span>
+                                <span class="bm-hosted-pill__dot"></span>
+                            </button>
+                        }
+                        @if (opt.ShowMcpStatus && opt.HasMcpServers)
+                        {
+                            <button class="bm-mcp-pill @McpPillClass"
+                                    @onclick="@(() => _mcpDetailOpen = !_mcpDetailOpen)"
+                                    title="@McpPillTitle"
+                                    aria-label="@McpPillTitle">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                                     width="10" height="10" aria-hidden="true">
+                                    <rect x="1" y="1" width="4" height="4" rx="1" />
+                                    <rect x="11" y="1" width="4" height="4" rx="1" />
+                                    <rect x="1" y="11" width="4" height="4" rx="1" />
+                                    <path d="M3 5.5v2a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 13 7.5v-2" />
+                                    <path d="M13 11v-2" />
+                                </svg>
+                                <span class="bm-mcp-pill__name">@McpPillLabel</span>
+                                <span class="bm-mcp-pill__dot"></span>
+                            </button>
+                        }
+                        @if (opt.ShowA2AStatus && opt.HasRemoteAgents)
+                        {
+                            <button class="bm-a2a-pill"
+                                    @onclick="@(() => _a2aDetailOpen = !_a2aDetailOpen)"
+                                    title="@A2APillTitle"
+                                    aria-label="@A2APillTitle">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                                     width="10" height="10" aria-hidden="true">
+                                    <circle cx="4"  cy="8"  r="2.5" />
+                                    <circle cx="12" cy="4"  r="2.5" />
+                                    <circle cx="12" cy="12" r="2.5" />
+                                    <path d="M6.5 7L9.5 5M6.5 9L9.5 11" />
+                                </svg>
+                                <span class="bm-a2a-pill__name">
+                                    @(opt.RemoteAgentDisplays.Count == 1
+                                        ? opt.RemoteAgentDisplays[0].Name
+                                        : string.Format(L.Get("a2a.agents"), opt.RemoteAgentDisplays.Count))
+                                </span>
+                                <span class="bm-a2a-pill__dot"></span>
+                            </button>
+                        }
+                    </div>
+                }
+            <div class="bm-header__actions">
+                @if (opt.EnableVoiceOutput && _voiceSynthSupported)
+                {
+                    <button class="bm-icon-btn @(_voiceOutputEnabled ? "bm-icon-btn--active" : "")"
+                            @onclick="ToggleVoiceOutput"
+                            title="@L.Get(_voiceOutputEnabled ? "voice.output.disable" : "voice.output.enable")"
+                            aria-label="@L.Get(_voiceOutputEnabled ? "voice.output.disable" : "voice.output.enable")">
+                        @if (_voiceOutputEnabled)
+                        {
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                            </svg>
+                        }
+                        else
+                        {
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                                <line x1="23" y1="9" x2="17" y2="15" />
+                                <line x1="17" y1="9" x2="23" y2="15" />
+                            </svg>
+                        }
+                    </button>
+                }
+                @* #18 — the tour is worth nothing if it can only ever be seen once, by accident,
+                   on the very first visit. This is how a user gets back to it. *@
+                @if (opt.EnableOnboardingTour)
+                {
+                    <button class="bm-icon-btn" @onclick="ReplayTour" title="@L.Get("tour.replay")" aria-label="@L.Get("tour.replay")">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                    </button>
+                }
+                <button class="bm-icon-btn" @onclick="ResetSession" disabled="@(!CanReset)" title="@L.Get("header.reset")" aria-label="@L.Get("header.reset")">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                        <path d="M3 3v5h5" />
+                    </svg>
+                </button>
+                <button class="bm-icon-btn" @onclick="Close" title="@L.Get("header.close")" aria-label="@L.Get("header.close")">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        @* Hosted tools Detail Bar (#15) — which provider-side tools the model may use *@
+        @if (opt.ShowHostedToolsStatus && _hostedDetailOpen && ActiveHostedTools.Count > 0)
+        {
+            <div class="bm-hosted-detail">
+                <div class="bm-hosted-detail__inner">
+                    <span class="bm-hosted-detail__label">@L.Get("hosted.title")</span>
+                    <div class="bm-hosted-detail__list">
+                        @foreach (var tool in ActiveHostedTools)
+                        {
+                            <div class="bm-hosted-detail__item">
+                                <span class="bm-hosted-detail__dot"></span>
+                                <span class="bm-hosted-detail__name">@HostedToolLabel(tool)</span>
+                            </div>
+                        }
+                    </div>
+                    <span class="bm-hosted-detail__hint">@L.Get("hosted.hint")</span>
+                    <button class="bm-hosted-detail__close" @onclick="@(() => _hostedDetailOpen = false)" title="@L.Get("header.close")" aria-label="@L.Get("header.close")">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+                             width="12" height="12" aria-hidden="true">
+                            <path d="M3 3l10 10M13 3L3 13" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        }
+
+        @* MCP Detail Bar — inlined to avoid EventCallback child→parent re-render issues *@
+        @if (opt.ShowMcpStatus && opt.HasMcpServers && _mcpDetailOpen)
+        {
+            <div class="bm-mcp-detail">
+                <div class="bm-mcp-detail__inner">
+                    <span class="bm-mcp-detail__label">MCP</span>
+                    <div class="bm-mcp-detail__list">
+                        @foreach (var (name, connected) in _mcpServerStatus)
+                        {
+                            var itemClass = connected == null  ? "bm-mcp-detail__item--connecting"
+                                          : connected == true  ? "bm-mcp-detail__item--online"
+                                                               : "bm-mcp-detail__item--offline";
+                            var stateText = connected == null  ? "connecting"
+                                          : connected == true  ? "online"
+                                                               : "offline";
+                            <div class="bm-mcp-detail__item @itemClass">
+                                <span class="bm-mcp-detail__dot"></span>
+                                <span class="bm-mcp-detail__name">@name</span>
+                                <span class="bm-mcp-detail__state">@stateText</span>
+                            </div>
+                        }
+                    </div>
+                    <button class="bm-mcp-detail__close" @onclick="@(() => _mcpDetailOpen = false)" title="Chiudi">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+                             width="12" height="12" aria-hidden="true">
+                            <path d="M3 3l10 10M13 3L3 13" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        }
+
+        @* A2A Detail Bar — inlined to avoid EventCallback child→parent re-render issues *@
+        @if (opt.ShowA2AStatus && opt.HasRemoteAgents && _a2aDetailOpen)
+        {
+            <div class="bm-a2a-detail">
+                <div class="bm-a2a-detail__inner">
+                    <span class="bm-a2a-detail__label">A2A</span>
+                    <div class="bm-a2a-detail__list">
+                        @foreach (var agent in opt.RemoteAgentDisplays)
+                        {
+                            <div class="bm-a2a-detail__item">
+                                <span class="bm-a2a-detail__dot"></span>
+                                <span class="bm-a2a-detail__name">@agent.Name</span>
+                                <span class="bm-a2a-detail__url">@agent.AgentCardUrl</span>
+                            </div>
+                        }
+                    </div>
+                    <button class="bm-a2a-detail__close" @onclick="@(() => _a2aDetailOpen = false)" title="Chiudi">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+                             width="12" height="12" aria-hidden="true">
+                            <path d="M3 3l10 10M13 3L3 13" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        }
+
+        @* Action Indicator *@
+        @if (!string.IsNullOrEmpty(_currentAction))
+        {
+            <div class="bm-action-bar">
+                <span class="bm-action-bar__pulse"></span>
+                <span class="bm-action-bar__text">@_currentAction</span>
+            </div>
+        }
+
+        @* Confirmation — inline (no child component, no EventCallback indirection) *@
+        @if (_confirmRequest is not null)
+        {
+            <div class="bm-confirm">
+                <div class="bm-confirm__icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                        <line x1="12" y1="9" x2="12" y2="13"/>
+                        <line x1="12" y1="17" x2="12.01" y2="17"/>
+                    </svg>
+                </div>
+                <div class="bm-confirm__body">
+                    <p class="bm-confirm__title">@L.Get("confirm.title")</p>
+                    <p class="bm-confirm__desc">@_confirmRequest.Message</p>
+                </div>
+                <div class="bm-confirm__actions">
+                    <button class="bm-btn bm-btn--ghost"    @onclick="HandleCancel">@L.Get("confirm.cancel")</button>
+                    <button class="bm-btn bm-btn--primary"  @onclick="HandleConfirm">@L.Get("confirm.ok")</button>
+                </div>
+            </div>
+        }
+
+        @* Messages *@
+        <div class="bm-messages" @ref="_scrollEl">
+            @if (_tourOpen)
+            {
+                <OnboardingTour Steps="_tourSteps"
+                                StartIndex="_tourIndex"
+                                OnIndexChanged="OnTourIndexChanged"
+                                OnClose="CloseTour"
+                                OnNavigate="TourNavigate"
+                                OnAsk="TourAsk" />
+            }
+            else if (_messages.Count == 0)
+            {
+                <WelcomePanel BotName="@opt.BotName"
+                              WelcomeMessage="@opt.WelcomeMessage"
+                              EnableSuggestions="@opt.EnableSuggestions"
+                              OnChipClick="SendMessage" />
+            }
+            else
+            {
+                @for (int i = 0; i < _messages.Count; i++)
+                {
+                    var idx = i;
+                    <MessageBubble Message="_messages[idx]"
+                                   SentAt="@(_messageTimestamps.Count > idx ? _messageTimestamps[idx] : (DateTime?)null)"
+                                   Sources="@(_messageSources.TryGetValue(idx, out var s) ? s : null)" />
+
+                    @* #14 L2 — cards belonging to this message, under its bubble *@
+                    @if (_messageCards.TryGetValue(idx, out var cards))
+                    {
+                        <CascadingValue Value="CardDispatch" Name="@MentorCardView.WidgetDispatchName" IsFixed="true">
+                            <div class="bm-cards">
+                                @foreach (var card in cards)
+                                {
+                                    @if (CardTemplate is not null)
+                                    {
+                                        @CardTemplate(card)
+                                    }
+                                    else
+                                    {
+                                        <MentorCardView Card="card" OnAction="OnCardAction" />
+                                    }
+                                }
+                            </div>
+                        </CascadingValue>
+                    }
+                }
+                @if (_streamingText.Length > 0)
+                {
+                    <MessageBubble Message="new ChatMessage(ChatRole.Assistant, _streamingText.ToString())"
+                                   IsStreaming="true" />
+                }
+                @if (_busy && _streamingText.Length == 0)
+                {
+                    <TypingIndicator />
+                }
+            }
+        </div>
+
+        @* Stop button *@
+        @if (_busy)
+        {
+            <div class="bm-stop-bar">
+                <button class="bm-stop-btn" @onclick="CancelRequest" title="@L.Get("stop.request")">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12">
+                        <rect x="5" y="5" width="14" height="14" rx="2" />
+                    </svg>
+                    @L.Get("stop.request")
+                </button>
+            </div>
+        }
+
+        @* Input *@
+        <ChatInput OnSend="SendUserMessage"
+                   Disabled="_busy"
+                   Placeholder="@(string.IsNullOrWhiteSpace(opt.InputPlaceholder) ? null : opt.InputPlaceholder)" />
+
+    </div>
+</div>

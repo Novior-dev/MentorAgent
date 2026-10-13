@@ -1,0 +1,49 @@
+@using Novior.MentorAgent.Abstractions.Models
+@inject IOptions<MentorWidgetOptions> Options
+
+@if (!Options.Value.HasMcpServers || _status.Count == 0) { return; }
+
+@if (Visible)
+{
+    <div class="bm-mcp-detail">
+        <div class="bm-mcp-detail__inner">
+            <span class="bm-mcp-detail__label">MCP</span>
+            <div class="bm-mcp-detail__list">
+                @foreach (var (name, connected) in _status)
+                {
+                    var itemClass = connected == null  ? "bm-mcp-detail__item--connecting"
+                                  : connected == true  ? "bm-mcp-detail__item--online"
+                                                       : "bm-mcp-detail__item--offline";
+                    var stateText = connected == null  ? "connecting"
+                                  : connected == true  ? "online"
+                                                       : "offline";
+                    <div class="bm-mcp-detail__item @itemClass">
+                        <span class="bm-mcp-detail__dot"></span>
+                        <span class="bm-mcp-detail__name">@name</span>
+                        <span class="bm-mcp-detail__state">@stateText</span>
+                    </div>
+                }
+            </div>
+            <button class="bm-mcp-detail__close" @onclick="OnClose" title="Chiudi">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+                     width="12" height="12" aria-hidden="true">
+                    <path d="M3 3l10 10M13 3L3 13" />
+                </svg>
+            </button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public IReadOnlyDictionary<string, bool?>? ServerStatus { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private Dictionary<string, bool?> _status = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override void OnParametersSet()
+    {
+        if (ServerStatus is not null)
+            _status = new Dictionary<string, bool?>(ServerStatus, StringComparer.OrdinalIgnoreCase);
+    }
+}

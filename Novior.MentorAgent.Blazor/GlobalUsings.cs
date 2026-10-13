@@ -1,0 +1,9 @@
+﻿global using Novior.MentorAgent.Abstractions.Interfaces;
+global using Novior.MentorAgent.Abstractions.Models;
+global using Novior.MentorAgent.Abstractions.Core;
+global using Novior.MentorAgent.Blazor.Models;
+global using Microsoft.AspNetCore.Http.Connections.Client;
+global using Microsoft.AspNetCore.SignalR.Client;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Logging;
+global using System.Text.Json;

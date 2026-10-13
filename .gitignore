@@ -1,0 +1,61 @@
+﻿# ── Build output ─────────────────────────────────────────────────────────────
+bin/
+obj/
+out/
+publish/
+
+# ── NuGet ─────────────────────────────────────────────────────────────────────
+*.nupkg
+*.snupkg
+.nuget/
+nupkg/
+packages/
+!**/packages/repositories.config
+
+# ── Visual Studio ─────────────────────────────────────────────────────────────
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+.vscode/
+*.rsuser
+
+# ── Rider ─────────────────────────────────────────────────────────────────────
+.idea/
+*.sln.iml
+
+# ── .NET ─────────────────────────────────────────────────────────────────────
+project.lock.json
+project.fragment.lock.json
+artifacts/
+artifacts-rc*/
+**/Properties/launchSettings.json
+
+# ── Blazor WASM ───────────────────────────────────────────────────────────────
+wwwroot/_content/
+wwwroot/_framework/
+
+# ── Secrets — MAI committare API keys ────────────────────────────────────────
+appsettings.Development.json
+appsettings.Production.json
+secrets.json
+*.pfx
+*.p12
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+LogFiles/
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Coverage & Test ───────────────────────────────────────────────────────────
+TestResults/
+coverage/
+*.coveragexml
+*.coverage

@@ -1,0 +1,119 @@
+@using Novior.MentorAgent.Abstractions.Core
+@using Novior.MentorAgent.Abstractions.Models
+@inject MentorLocalizer L
+
+@*
+    Guided first-run tour (roadmap #18).
+
+    Purely presentational: it is handed the steps and raises callbacks. Where the steps come from
+    (generated on the server, fetched over HTTP, or hand-written) is the host's problem, which is
+    what lets the same component serve Blazor Server and WebAssembly.
+
+    It renders inside the chat panel rather than as a page overlay on purpose. A spotlight over the
+    host application would have to know that application's DOM — selectors it cannot be given
+    without every host annotating its markup — and would break the first time a layout changed.
+*@
+
+@if (Steps.Count == 0) { return; }
+
+<div class="bm-tour" role="dialog" aria-modal="true" aria-label="@Current.Title">
+
+    <div class="bm-tour__head">
+        <span class="bm-tour__count">@string.Format(L.Get("tour.step"), _index + 1, Steps.Count)</span>
+        <button class="bm-tour__skip" @onclick="Finish" type="button">@L.Get("tour.skip")</button>
+    </div>
+
+    <div class="bm-tour__body">
+        <p class="bm-tour__title">@Current.Title</p>
+        <p class="bm-tour__text">@Current.Body</p>
+
+        @if (!string.IsNullOrWhiteSpace(Current.TryAsking))
+        {
+            @* The point of the tour: users rarely fail to find an assistant, they fail to know
+               what to ask it. One tap sends a question this app can actually answer. *@
+            <button class="bm-tour__ask" type="button"
+                    @onclick="() => OnAsk.InvokeAsync(Current.TryAsking!)">
+                <span class="bm-tour__ask-label">@L.Get("tour.ask")</span>
+                <span class="bm-tour__ask-text">@Current.TryAsking</span>
+            </button>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(Current.Url))
+        {
+            <button class="bm-tour__link" type="button"
+                    @onclick="() => OnNavigate.InvokeAsync(Current.Url!)">
+                @L.Get("tour.open") <span class="bm-tour__url">@Current.Url</span>
+            </button>
+        }
+    </div>
+
+    <div class="bm-tour__dots">
+        @for (var i = 0; i < Steps.Count; i++)
+        {
+            <span class="bm-tour__dot @(i == _index ? "bm-tour__dot--on" : "")"></span>
+        }
+    </div>
+
+    <div class="bm-tour__actions">
+        <button class="bm-btn bm-btn--ghost" type="button" disabled="@(_index == 0)" @onclick="Back">
+            @L.Get("tour.back")
+        </button>
+        <button class="bm-btn bm-btn--primary" type="button" @onclick="Next">
+            @(IsLast ? L.Get("tour.done") : L.Get("tour.next"))
+        </button>
+    </div>
+</div>
+
+@code {
+    /// <summary>The steps to walk through. An empty list renders nothing.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<MentorTourStep> Steps { get; set; } = [];
+
+    /// <summary>Raised when the tour is completed or skipped — both end it for good.</summary>
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    /// <summary>Raised with the step's URL when the user asks to open that screen.</summary>
+    [Parameter] public EventCallback<string> OnNavigate { get; set; }
+
+    /// <summary>Raised with the step's ready-made question when the user taps it.</summary>
+    [Parameter] public EventCallback<string> OnAsk { get; set; }
+
+    /// <summary>
+    /// Step to open on, so a tour the user left part-way through resumes instead of restarting.
+    /// Out-of-range values are clamped rather than rejected — the step count can shrink between
+    /// deployments, and an onboarding tour is not worth an exception.
+    /// </summary>
+    [Parameter] public int StartIndex { get; set; }
+
+    /// <summary>
+    /// Raised whenever the current step changes, so the host can remember where the user got to.
+    /// The component itself persists nothing: it has no idea whether it is running in Blazor
+    /// Server or WebAssembly, and storage is the host's business.
+    /// </summary>
+    [Parameter] public EventCallback<int> OnIndexChanged { get; set; }
+
+    private int _index;
+
+    protected override void OnInitialized()
+        => _index = Math.Clamp(StartIndex, 0, Math.Max(0, Steps.Count - 1));
+
+    private MentorTourStep Current => Steps[Math.Clamp(_index, 0, Steps.Count - 1)];
+    private bool IsLast => _index >= Steps.Count - 1;
+
+    private Task Back()
+    {
+        if (_index == 0) return Task.CompletedTask;
+        _index--;
+        return OnIndexChanged.InvokeAsync(_index);
+    }
+
+    private async Task Next()
+    {
+        if (IsLast) { await Finish(); return; }
+        _index++;
+        await OnIndexChanged.InvokeAsync(_index);
+    }
+
+    // Skip and Done are the same outcome: the user has decided they are finished with the tour,
+    // and showing it again on the next visit would be the exact behaviour people complain about.
+    private Task Finish() => OnClose.InvokeAsync();
+}

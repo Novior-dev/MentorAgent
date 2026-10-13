@@ -1,0 +1,543 @@
+@using Novior.MentorAgent.Abstractions.Core
+@using Novior.MentorAgent.Abstractions.Models
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@inject IJSRuntime JS
+@inject MentorLocalizer L
+@inject IOptions<MentorWidgetOptions> Options
+@implements IAsyncDisposable
+
+<div class="bm-input-area @(_dragOver ? "bm-input-area--drag" : "")" @ref="_inputArea">
+
+    @* ── Image input (roadmap #13) — upload, paste, drag & drop, URL ───────── *@
+    @if (ImageInput)
+    {
+        @if (_dragOver)
+        {
+            <div class="bm-drop-hint">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="M21 15l-5-5L5 21" />
+                </svg>
+                <span>@L.Get("attach.drop")</span>
+            </div>
+        }
+
+        @if (_attachments.Count > 0)
+        {
+            <div class="bm-attach-strip">
+                @foreach (var a in _attachments)
+                {
+                    var item = a;
+                    <div class="bm-attach-thumb" title="@(item.FileName ?? L.Get("attach.image"))">
+                        <img src="@item.ToDisplaySrc()" alt="@(item.FileName ?? L.Get("attach.image"))" />
+                        <button class="bm-attach-thumb__remove"
+                                type="button"
+                                @onclick="@(() => RemoveAttachment(item))"
+                                title="@L.Get("attach.remove")"
+                                aria-label="@L.Get("attach.remove")">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" width="9" height="9">
+                                <path d="M3 3l10 10M13 3L3 13" />
+                            </svg>
+                        </button>
+                    </div>
+                }
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(_attachError))
+        {
+            <div class="bm-attach-error" role="alert">@_attachError</div>
+        }
+
+        @if (_urlOpen)
+        {
+            <div class="bm-attach-url">
+                <input class="bm-attach-url__input"
+                       type="url"
+                       @bind="_urlText"
+                       @bind:event="oninput"
+                       @onkeydown="OnUrlKeyDown"
+                       placeholder="@L.Get("attach.url.placeholder")"
+                       aria-label="@L.Get("attach.url")" />
+                <button class="bm-attach-url__add"
+                        type="button"
+                        @onclick="AddUrlAttachment"
+                        disabled="@(string.IsNullOrWhiteSpace(_urlText))">
+                    @L.Get("attach.url.add")
+                </button>
+            </div>
+        }
+    }
+
+    <div class="bm-input-wrap @(Disabled ? "bm-input-wrap--disabled" : "")">
+
+        @if (Options.Value.EnableVoiceInput && _voiceSupported)
+        {
+            <button class="bm-voice-btn @(VoiceActive ? "bm-voice-btn--active" : "")"
+                    @onclick="ToggleVoice"
+                    title="@(VoiceActive ? L.Get("voice.stop") : L.Get("voice.start"))"
+                    aria-label="@(VoiceActive ? L.Get("voice.stop") : L.Get("voice.start"))"
+                    disabled="@Disabled"
+                    type="button">
+                @if (VoiceActive)
+                {
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="6" y="6" width="12" height="12" rx="2" />
+                    </svg>
+                }
+                else
+                {
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                        <line x1="12" y1="19" x2="12" y2="23" />
+                        <line x1="8" y1="23" x2="16" y2="23" />
+                    </svg>
+                }
+            </button>
+        }
+
+        @if (ImageInput)
+        {
+            @* The hidden <input type="file"> is driven by the <label> below — no JS click() needed. *@
+            <InputFile id="@_fileInputId"
+                       class="bm-attach-file"
+                       multiple
+                       accept="@AcceptTypes"
+                       OnChange="OnFilesSelected" />
+            <label class="bm-attach-btn @(Disabled ? "bm-attach-btn--disabled" : "")"
+                   for="@_fileInputId"
+                   title="@L.Get("attach.add")"
+                   aria-label="@L.Get("attach.add")">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+            </label>
+            <button class="bm-attach-btn @(_urlOpen ? "bm-attach-btn--active" : "")"
+                    type="button"
+                    @onclick="ToggleUrlInput"
+                    title="@L.Get("attach.url")"
+                    aria-label="@L.Get("attach.url")"
+                    disabled="@Disabled">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                </svg>
+            </button>
+        }
+
+        <textarea class="bm-input @(_isListening ? "bm-input--listening" : "")"
+                  @bind="_text"
+                  @bind:event="oninput"
+                  @onkeydown="OnKeyDown"
+                  placeholder="@(_isListening ? L.Get("voice.listening") : (Placeholder ?? L.Get("input.placeholder")))"
+                  rows="1"
+                  disabled="@Disabled"
+                  maxlength="@(Options.Value.MaxMessageLength > 0 ? Options.Value.MaxMessageLength : 4000)"
+                  @ref="_textarea">
+        </textarea>
+
+        <button class="bm-send-btn @(CanSend ? "bm-send-btn--active" : "")"
+                @onclick="Send"
+                disabled="@(!CanSend)"
+                type="button"
+                aria-label="@L.Get("input.send")">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z" />
+            </svg>
+        </button>
+    </div>
+    <div class="bm-input-hint">
+        <span>@L.Get("input.hint.send")</span>
+        <span>@L.Get("input.hint.newline")</span>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public EventCallback<MentorUserMessage> OnSend { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+
+    private string _text = string.Empty;
+    private ElementReference _textarea;
+    private ElementReference _inputArea;
+    private bool _isListening = false;
+    private bool _voiceSupported = false;
+    // #17 — a hands-free session outlives any single recognition pass, so the button state
+    // cannot be derived from _isListening alone.
+    private bool _handsFreeActive = false;
+    private bool VoiceActive => _isListening || _handsFreeActive;
+    private DotNetObjectReference<ChatInput>? _dotnetRef;
+
+    // ── Image attachments (#13) ───────────────────────────────────────────────
+    private readonly List<MentorAttachment> _attachments = [];
+    private readonly string _fileInputId = $"bm-file-{Guid.NewGuid():N}";
+    private bool    _dragOver;
+    private bool    _urlOpen;
+    private string  _urlText     = string.Empty;
+    private string? _attachError;
+    private bool    _attachWired;
+
+    private bool ImageInput  => Options.Value.EnableImageInput;
+    private string AcceptTypes => string.Join(",", Options.Value.AllowedImageTypes);
+    private int  MaxImages   => Math.Max(1, Options.Value.MaxImagesPerMessage);
+    private int  MaxBytes    => Math.Max(1024, Options.Value.MaxImageBytes);
+
+    private bool CanSend => !Disabled && !_isListening
+                            && (!string.IsNullOrWhiteSpace(_text) || _attachments.Count > 0);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        if (Options.Value.EnableVoiceInput)
+        {
+            try
+            {
+                _voiceSupported = await JS.InvokeAsync<bool>("MentorAgent.isVoiceSupported");
+                if (_voiceSupported)
+                {
+                    _dotnetRef ??= DotNetObjectReference.Create(this);
+                    StateHasChanged();
+                }
+            }
+            catch { _voiceSupported = false; }
+        }
+
+        // Paste + drag & drop are wired in JS on the input area (#13).
+        if (ImageInput && !_attachWired)
+        {
+            try
+            {
+                _dotnetRef ??= DotNetObjectReference.Create(this);
+                // MaxBytes is passed so JS can downscale an oversized image (a screenshot is
+                // routinely 5-10 MB) instead of the user just getting a "too large" refusal.
+                await JS.InvokeVoidAsync("MentorAgent.attachInit", _dotnetRef, _inputArea, MaxBytes);
+                _attachWired = true;
+            }
+            catch { /* JS not loaded yet — paste/drop stay off, upload and URL still work */ }
+        }
+    }
+
+    // ── Voice ─────────────────────────────────────────────────────────────────
+
+    private async Task ToggleVoice()
+    {
+        // In hands-free mode the microphone cycles — it is deliberately closed while the answer
+        // is being spoken. The button has to end the *session*, not the current recognition pass,
+        // otherwise pressing it during playback appears to do nothing and the loop reopens.
+        if (_isListening || _handsFreeActive)
+        {
+            _handsFreeActive = false;
+            await JS.InvokeVoidAsync("MentorAgent.stopVoice");
+            return;
+        }
+
+        _dotnetRef ??= DotNetObjectReference.Create(this);
+        var o = Options.Value;
+        _handsFreeActive = o.VoiceHandsFree;
+
+        await JS.InvokeVoidAsync("MentorAgent.startVoice", _dotnetRef, o.Language.ToIsoCode(),
+            new { handsFree = o.VoiceHandsFree, bargeIn = o.VoiceBargeIn, interim = true });
+    }
+
+    [JSInvokable]
+    public void OnVoiceStarted()
+    {
+        _isListening = true;
+        _text = string.Empty;
+        InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public void OnVoiceStopped()
+    {
+        _isListening = false;
+        InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Live transcript while the user is still speaking (#17). Shown, never sent: the engine
+    /// rewrites interim text as it hears more, so submitting it would send a half-heard question.
+    /// </summary>
+    [JSInvokable]
+    public void OnVoiceInterim(string partial)
+    {
+        if (!_isListening) return;
+        _text = partial;
+        InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnVoiceResult(string transcript)
+    {
+        _isListening = false;
+        _text = transcript;
+        await InvokeAsync(StateHasChanged);
+        await Send();
+    }
+
+    [JSInvokable]
+    public void OnVoiceError(string error)
+    {
+        _isListening = false;
+        // The JS side already gave up on the loop for anything that reaches here; keeping the
+        // button lit would advertise a session that no longer exists.
+        _handsFreeActive = false;
+        InvokeAsync(StateHasChanged);
+    }
+
+    // ── Image attachments (#13) ───────────────────────────────────────────────
+
+    /// <summary>Attach button / file picker. Bytes are streamed, never sent as one interop payload.</summary>
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        _attachError = null;
+        foreach (var selected in e.GetMultipleFiles(MaxImages))
+        {
+            if (!AcceptType(selected.ContentType)) continue;
+
+            var file = selected;
+            // An oversized image is downscaled in the browser rather than refused — a screenshot
+            // is routinely 5-10 MB and vision models tile it at 512 px anyway. GIFs are left
+            // alone: a canvas round-trip would flatten the animation.
+            if (file.Size > MaxBytes && !string.Equals(file.ContentType, "image/gif", StringComparison.OrdinalIgnoreCase))
+            {
+                try { file = await file.RequestImageFileAsync(file.ContentType, 2000, 2000); }
+                catch { /* keep the original — the size check below reports it */ }
+            }
+            if (!AcceptSize(file.Size)) continue;
+
+            try
+            {
+                await using var stream = file.OpenReadStream(MaxBytes);
+                Add(await ToAttachmentAsync(stream, selected.ContentType, selected.Name));
+            }
+            catch (Exception ex)
+            {
+                _attachError = ex.Message;
+            }
+            if (_attachments.Count >= MaxImages) break;
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>Called from JS when images were pasted or dropped; pulls each blob over a stream reference.</summary>
+    [JSInvokable]
+    public async Task OnFilesPending()
+    {
+        _attachError = null;
+        try
+        {
+            var metas = await JS.InvokeAsync<PendingFile[]>("MentorAgent.attachTakeMeta");
+            for (var i = 0; i < metas.Length; i++)
+            {
+                if (_attachments.Count >= MaxImages)
+                {
+                    _attachError = string.Format(L.Get("attach.toomany"), MaxImages);
+                    break;
+                }
+                if (!Accept(metas[i].MimeType, metas[i].Size)) continue;
+
+                // Per-file try/catch: one unreadable blob must not drop the rest of the batch.
+                try
+                {
+                    var streamRef = await JS.InvokeAsync<IJSStreamReference>("MentorAgent.attachTakeData", i);
+                    await using var stream = await streamRef.OpenReadStreamAsync(MaxBytes);
+                    Add(await ToAttachmentAsync(stream, metas[i].MimeType, metas[i].FileName));
+                }
+                catch (Exception ex)
+                {
+                    _attachError = ex.Message;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _attachError = ex.Message;
+        }
+        finally
+        {
+            try { await JS.InvokeVoidAsync("MentorAgent.attachClearPending"); } catch { }
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Called from JS when an image is dragged in from another page (a URL, not a file).</summary>
+    [JSInvokable]
+    public Task OnUrlDropped(string url)
+    {
+        AddUrl(url);
+        return InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public Task OnDragStateChanged(bool dragging)
+    {
+        _dragOver = dragging;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private void ToggleUrlInput()
+    {
+        _urlOpen = !_urlOpen;
+        if (!_urlOpen) _urlText = string.Empty;
+    }
+
+    private void AddUrlAttachment()
+    {
+        AddUrl(_urlText);
+        _urlText = string.Empty;
+        _urlOpen = false;
+    }
+
+    private async Task OnUrlKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            AddUrlAttachment();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>Adds a remote image by URL. The extension picks the MIME type; the server re-validates it.</summary>
+    private void AddUrl(string? url)
+    {
+        _attachError = null;
+        url = url?.Trim();
+        if (string.IsNullOrEmpty(url)) return;
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            _attachError = L.Get("attach.url.placeholder");
+            return;
+        }
+        if (_attachments.Count >= MaxImages)
+        {
+            _attachError = string.Format(L.Get("attach.toomany"), MaxImages);
+            return;
+        }
+
+        var mime = MimeFromPath(uri.AbsolutePath);
+        if (!Accept(mime, 0)) return;
+
+        _attachments.Add(new MentorAttachment
+        {
+            MimeType = mime,
+            Url      = uri.ToString(),
+            FileName = System.IO.Path.GetFileName(uri.AbsolutePath)
+        });
+    }
+
+    private void RemoveAttachment(MentorAttachment a)
+    {
+        _attachments.Remove(a);
+        _attachError = null;
+    }
+
+    /// <summary>Client-side pre-checks mirroring the server allow-list, so the user gets an instant message.</summary>
+    private bool Accept(string? mimeType, long size) => AcceptType(mimeType) && AcceptSize(size);
+
+    private bool AcceptType(string? mimeType)
+    {
+        if (!string.IsNullOrEmpty(mimeType)
+            && Options.Value.AllowedImageTypes.Contains(mimeType, StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        _attachError = string.Format(L.Get("attach.badtype"), mimeType ?? "?");
+        return false;
+    }
+
+    private bool AcceptSize(long size)
+    {
+        if (size <= MaxBytes) return true;
+        _attachError = string.Format(L.Get("attach.toolarge"), (MaxBytes / (1024.0 * 1024.0)).ToString("0.#"));
+        return false;
+    }
+
+    private void Add(MentorAttachment? a)
+    {
+        if (a is not null && _attachments.Count < MaxImages)
+            _attachments.Add(a);
+    }
+
+    private async Task<MentorAttachment?> ToAttachmentAsync(Stream stream, string mimeType, string? fileName)
+    {
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        if (ms.Length == 0 || ms.Length > MaxBytes)
+        {
+            if (ms.Length > MaxBytes)
+                _attachError = string.Format(L.Get("attach.toolarge"), (MaxBytes / (1024.0 * 1024.0)).ToString("0.#"));
+            return null;
+        }
+        return new MentorAttachment
+        {
+            MimeType   = mimeType,
+            DataBase64 = Convert.ToBase64String(ms.ToArray()),
+            FileName   = fileName
+        };
+    }
+
+    private static string MimeFromPath(string path)
+        => System.IO.Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".png"          => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif"          => "image/gif",
+            ".webp"         => "image/webp",
+            ".bmp"          => "image/bmp",
+            ".svg"          => "image/svg+xml",
+            _               => "image/png",   // unknown extension → default; the server re-validates
+        };
+
+    private sealed record PendingFile(string MimeType, string? FileName, long Size);
+
+    // ── Send ──────────────────────────────────────────────────────────────────
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+            await Send();
+    }
+
+    private async Task Send()
+    {
+        if (!CanSend) return;
+
+        var msg = _text.Trim();
+        var files = _attachments.Count > 0 ? _attachments.ToArray() : null;
+
+        _text = string.Empty;
+        _attachments.Clear();
+        _attachError = null;
+        _urlOpen = false;
+        _urlText = string.Empty;
+
+        await OnSend.InvokeAsync(new MentorUserMessage(msg, files));
+
+        // Cosmetic (shrinks the auto-grown textarea back), and the one JS call on this path. It used to
+        // be unguarded: a surface composed without ChatWidget — which is what injects MentorAgent.js —
+        // threw a JSException on the first message, and on Blazor Server an exception in an event
+        // handler ends the circuit. Every other JS call in this component already tolerated it.
+        try { await JS.InvokeVoidAsync("MentorAgent.resetTextarea", _textarea); }
+        catch (JSException) { /* MentorAgent.js not loaded on this page */ }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_attachWired) await JS.InvokeVoidAsync("MentorAgent.attachDispose", _inputArea);
+            await JS.InvokeVoidAsync("MentorAgent.stopVoice");
+            // The synthesis queue lives on `window` and outlives the component: without this the
+            // assistant keeps talking after the page it belongs to is gone (#17).
+            await JS.InvokeVoidAsync("MentorAgent.stopSpeaking");
+        }
+        catch { /* circuit already gone */ }
+        _dotnetRef?.Dispose();
+    }
+}

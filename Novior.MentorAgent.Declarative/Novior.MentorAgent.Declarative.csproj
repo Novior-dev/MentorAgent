@@ -1,0 +1,48 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+
+    <!-- Package identity — Version, Authors, License, Symbols inherited from Directory.Build.props -->
+    <PackageId>Novior.MentorAgent.Declarative</PackageId>
+    <Title>Novior.MentorAgent.Declarative</Title>
+    <Description>Define MentorAgent Level-2 specialist agents in YAML instead of C#. Wraps the Agent Framework's declarative agent factory and plugs the resulting agents into MentorAgent's handoff graph, reusing the existing tools with their role checks and human-approval gates intact. Optional — install only if you want file-based agent definitions.</Description>
+    <PackageTags>ai;agent;yaml;declarative;configuration;agent-framework;mentor;dotnet;csharp</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>IconMA.png</PackageIcon>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="\" />
+    <None Include="..\Novior.MentorAgent\IconMA.png" Pack="true" PackagePath="IconMA.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pinned to the same 1.6.1 line as Microsoft.Agents.AI in the core package. The head of this
+         package is 1.17.0-rc1; taking it would drag the whole library onto a different Agent
+         Framework version for a design-time convenience. -->
+    <PackageReference Include="Microsoft.Agents.AI.Declarative" Version="1.18.0-rc1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.Extensions.Logging" />
+    <Using Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- DeclarativeAgentSource is internal by design: it is wiring behind AddMentorAgentDeclarative,
+         not API. The test project needs it because the file-scanning and configuration-scoping rules
+         have no other reachable surface, and a definition file is code — those rules are worth
+         asserting directly rather than through whatever the factory happens to build. -->
+    <InternalsVisibleTo Include="Novior.MentorAgent.Tests" />
+  </ItemGroup>
+
+</Project>

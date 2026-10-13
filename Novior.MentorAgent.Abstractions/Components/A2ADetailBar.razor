@@ -1,0 +1,37 @@
+@using Novior.MentorAgent.Abstractions.Models
+@inject IOptions<MentorWidgetOptions> Options
+
+@{
+    var agents = Options.Value.RemoteAgentDisplays;
+    if (agents.Count == 0) return;
+}
+
+@if (Visible)
+{
+    <div class="bm-a2a-detail">
+        <div class="bm-a2a-detail__inner">
+            <span class="bm-a2a-detail__label">A2A</span>
+            <div class="bm-a2a-detail__list">
+                @foreach (var agent in agents)
+                {
+                    <div class="bm-a2a-detail__item">
+                        <span class="bm-a2a-detail__dot"></span>
+                        <span class="bm-a2a-detail__name">@agent.Name</span>
+                        <span class="bm-a2a-detail__url">@agent.AgentCardUrl</span>
+                    </div>
+                }
+            </div>
+            <button class="bm-a2a-detail__close" @onclick="OnClose" title="Chiudi">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+                     width="12" height="12" aria-hidden="true">
+                    <path d="M3 3l10 10M13 3L3 13" />
+                </svg>
+            </button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+}

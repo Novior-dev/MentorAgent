@@ -1,0 +1,38 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+
+    <!-- Package identity — Version, Authors, License, Symbols inherited from Directory.Build.props -->
+    <PackageId>Novior.MentorAgent.Abstractions</PackageId>
+    <Title>Novior.MentorAgent.Abstractions</Title>
+    <Description>Shared interfaces, models, enums and UI components for the MentorAgent family. Automatically included as a transitive dependency — you do not need to install this package directly.</Description>
+    <PackageTags>blazor;blazor-wasm;blazor-server;wasm;ai;chatbot;chat-widget;components;razor;interfaces;abstractions;mentor;dotnet;csharp</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>IconMA.png</PackageIcon>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="\" />
+    <None Include="..\Novior.MentorAgent\IconMA.png" Pack="true" PackagePath="IconMA.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.3" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.7.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Presentation helpers such as TourProgress are internal on purpose — they are not API a host
+         should depend on — but their edge cases are user-visible and worth testing directly. -->
+    <InternalsVisibleTo Include="Novior.MentorAgent.Tests" />
+    <InternalsVisibleTo Include="Novior.MentorAgent" />
+    <InternalsVisibleTo Include="Novior.MentorAgent.Blazor" />
+  </ItemGroup>
+
+</Project>

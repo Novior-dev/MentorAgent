@@ -1,0 +1,392 @@
+@using System.Globalization
+@using System.Text
+@using Novior.MentorAgent.Abstractions.Core
+@using Novior.MentorAgent.Abstractions.Interfaces
+@using Novior.MentorAgent.Abstractions.Models
+@inject IServiceProvider Services
+
+@*
+    Admin token & cost dashboard (roadmap #9) — Azure-style: per-model breakdown, a model selector,
+    temporal charts (tokens / requests / latency) and a per-model cost table. Presentational — the HOST
+    is responsible for authorization (wrap in <AuthorizeView Roles="Admin"> or a protected page). Never
+    place it inside the end-user chat widget.
+
+    Data source:
+      • Blazor Server (in-process): resolves IMentorMetrics automatically — no parameters needed.
+      • WASM / headless: pass Snapshot fetched from GET /mentor/admin/metrics and handle OnRefresh.
+
+    Localization: uses MentorLocalizer from DI (Blazor Server picks up options.Language automatically).
+    In WASM there is no MentorAgent DI, so pass Language to translate — otherwise it falls back to English.
+
+    Charts are inline SVG (no JS, no external libs) so they render in Blazor Server and WASM under a
+    strict CSP, and are theme-aware via CSS variables.
+*@
+
+@if (_snapshot is null)
+{
+    <div class="bm-dash bm-dash--empty">@_loc.Get("dash.empty")</div>
+}
+else
+{
+    var v = CurrentView();
+    var times = v.Series.Select(p => p.Timestamp).ToArray();
+    var hasChart = times.Length >= 2;
+
+    <div class="bm-dash">
+        <div class="bm-dash__head">
+            <h3 class="bm-dash__title">@_loc.Get("dash.title")</h3>
+            <div class="bm-dash__controls">
+                <select class="bm-dash__select" @onchange="OnModelChanged">
+                    <option value="" selected="@(_selectedModel.Length == 0)">@_loc.Get("dash.allmodels")</option>
+                    @foreach (var m in _snapshot.Models)
+                    {
+                        <option value="@m.ModelId" selected="@Eq(m.ModelId, _selectedModel)">@m.ModelId (@KindLabel(m.Kind))</option>
+                    }
+                </select>
+                <button class="bm-btn bm-btn--ghost" @onclick="RefreshAsync">@_loc.Get("dash.refresh")</button>
+            </div>
+        </div>
+
+        @* ── Summary cards (scoped to the selected model, or all) ─────────────── *@
+        <h4 class="bm-dash__subtitle">@_loc.Get("dash.summary")</h4>
+        <div class="bm-dash__grid">
+            <div class="bm-dash__stat">
+                <span class="bm-dash__stat-val">@v.Requests.ToString("N0")</span>
+                <span class="bm-dash__stat-lbl">@_loc.Get("dash.requests")</span>
+            </div>
+            <div class="bm-dash__stat">
+                <span class="bm-dash__stat-val">@((v.In + v.Out).ToString("N0"))</span>
+                <span class="bm-dash__stat-lbl">@_loc.Get("dash.totaltokens") · @PerReq(v.In + v.Out, v.Requests)</span>
+            </div>
+            <div class="bm-dash__stat">
+                <span class="bm-dash__stat-val">@v.In.ToString("N0")</span>
+                <span class="bm-dash__stat-lbl">@_loc.Get("dash.inputtokens") · @PerReq(v.In, v.Requests)</span>
+            </div>
+            <div class="bm-dash__stat">
+                <span class="bm-dash__stat-val">@v.Out.ToString("N0")</span>
+                <span class="bm-dash__stat-lbl">@_loc.Get("dash.outputtokens") · @PerReq(v.Out, v.Requests)</span>
+            </div>
+            <div class="bm-dash__stat">
+                <span class="bm-dash__stat-val">@(v.Cost is { } sc ? $"{Currency}{sc:N4}" : _loc.Get("dash.na"))</span>
+                <span class="bm-dash__stat-lbl">@_loc.Get("dash.cost")</span>
+            </div>
+            <div class="bm-dash__stat">
+                <span class="bm-dash__stat-val">@(v.Lat is { } sl ? $"{sl:N0} ms" : _loc.Get("dash.na"))</span>
+                <span class="bm-dash__stat-lbl">@_loc.Get("dash.latency")</span>
+            </div>
+            @if (v.Ttfb is { } tt)
+            {
+                <div class="bm-dash__stat">
+                    <span class="bm-dash__stat-val">@($"{tt:N0} ms")</span>
+                    <span class="bm-dash__stat-lbl">@_loc.Get("dash.ttfb")</span>
+                </div>
+            }
+        </div>
+
+        @* Conversation-level metrics (model-independent) — only in the "all models" view. *@
+        @if (_selectedModel.Length == 0)
+        {
+            <div class="bm-dash__grid" style="margin-top:10px;">
+                <div class="bm-dash__stat">
+                    <span class="bm-dash__stat-val">@_snapshot.TurnCount.ToString("N0")</span>
+                    <span class="bm-dash__stat-lbl">@_loc.Get("dash.turns")</span>
+                </div>
+                <div class="bm-dash__stat">
+                    <span class="bm-dash__stat-val">@_snapshot.ServedCount.ToString("N0") (@_snapshot.DeflectionRate.ToString("P0"))</span>
+                    <span class="bm-dash__stat-lbl">@_loc.Get("dash.served")</span>
+                </div>
+                <div class="bm-dash__stat">
+                    <span class="bm-dash__stat-val">@_snapshot.ErrorCount.ToString("N0")</span>
+                    <span class="bm-dash__stat-lbl">@_loc.Get("dash.errors")</span>
+                </div>
+                <div class="bm-dash__stat">
+                    <span class="bm-dash__stat-val">@_snapshot.GuardrailBlockCount.ToString("N0")</span>
+                    <span class="bm-dash__stat-lbl">@_loc.Get("dash.guardrails")</span>
+                </div>
+            </div>
+        }
+
+        @* ── Temporal charts ─────────────────────────────────────────────────── *@
+        <h4 class="bm-dash__subtitle">@_loc.Get("dash.usage")</h4>
+        @if (!hasChart)
+        {
+            <p class="bm-dash__muted">@_loc.Get("dash.nochart")</p>
+        }
+        else
+        {
+            <div class="bm-dash__charts">
+                <div class="bm-dash__chartcard">
+                    <div class="bm-dash__chart-h">@_loc.Get("dash.chart.tokens")</div>
+                    @LineChart(times,
+                        [ ("var(--bm-chart-in)",    v.Series.Select(p => (double)p.InputTokens).ToArray()),
+                          ("var(--bm-chart-out)",   v.Series.Select(p => (double)p.OutputTokens).ToArray()),
+                          ("var(--bm-chart-total)", v.Series.Select(p => (double)p.TotalTokens).ToArray()) ],
+                        compact: true)
+                    <div class="bm-dash__legend">
+                        <span><i style="background:var(--bm-chart-in)"></i>@_loc.Get("dash.legendin")</span>
+                        <span><i style="background:var(--bm-chart-out)"></i>@_loc.Get("dash.legendout")</span>
+                        <span><i style="background:var(--bm-chart-total)"></i>@_loc.Get("dash.legendtotal")</span>
+                    </div>
+                </div>
+
+                <div class="bm-dash__chartcard">
+                    <div class="bm-dash__chart-h">@_loc.Get("dash.chart.requests")</div>
+                    @LineChart(times,
+                        [ ("var(--bm-chart-req)", v.Series.Select(p => (double)p.RequestCount).ToArray()) ],
+                        compact: false)
+                </div>
+
+                <div class="bm-dash__chartcard">
+                    <div class="bm-dash__chart-h">@_loc.Get("dash.chart.latency")</div>
+                    @LineChart(times,
+                        [ ("var(--bm-chart-lat)", v.Series.Select(p => p.AvgLatencyMs ?? 0).ToArray()) ],
+                        compact: false)
+                </div>
+            </div>
+        }
+
+        @* ── Cost by model ───────────────────────────────────────────────────── *@
+        <h4 class="bm-dash__subtitle">@_loc.Get("dash.costbymodel")</h4>
+        <div class="bm-dash__tablewrap">
+            <table class="bm-dash__table">
+                <thead>
+                    <tr>
+                        <th>@_loc.Get("dash.model")</th>
+                        <th>@_loc.Get("dash.type")</th>
+                        <th class="bm-dash__num">@_loc.Get("dash.requests")</th>
+                        <th class="bm-dash__num">@_loc.Get("dash.inputtokens")</th>
+                        <th class="bm-dash__num">@_loc.Get("dash.outputtokens")</th>
+                        <th class="bm-dash__num">@_loc.Get("dash.latency")</th>
+                        <th class="bm-dash__num">@_loc.Get("dash.cost")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var m in _snapshot.Models)
+                    {
+                        <tr>
+                            <td>@m.ModelId</td>
+                            <td><span class="bm-dash__badge bm-dash__badge--@m.Kind.ToString().ToLowerInvariant()">@KindLabel(m.Kind)</span></td>
+                            <td class="bm-dash__num">@m.RequestCount.ToString("N0")</td>
+                            <td class="bm-dash__num">@m.InputTokens.ToString("N0")</td>
+                            <td class="bm-dash__num">@m.OutputTokens.ToString("N0")</td>
+                            <td class="bm-dash__num">@(m.AvgLatencyMs is { } ml ? $"{ml:N0} ms" : "—")</td>
+                            <td class="bm-dash__num">@(m.TotalCost is { } mc ? $"{Currency}{mc:N4}" : _loc.Get("dash.na"))</td>
+                        </tr>
+                    }
+                    <tr class="bm-dash__total">
+                        <td>@_loc.Get("dash.legendtotal")</td>
+                        <td></td>
+                        <td class="bm-dash__num">@_snapshot.RequestCount.ToString("N0")</td>
+                        <td class="bm-dash__num">@_snapshot.TotalInputTokens.ToString("N0")</td>
+                        <td class="bm-dash__num">@_snapshot.TotalOutputTokens.ToString("N0")</td>
+                        <td class="bm-dash__num">—</td>
+                        <td class="bm-dash__num">@(_snapshot.TotalCost is { } tc ? $"{Currency}{tc:N4}" : _loc.Get("dash.na"))</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        @* ── Top actions ─────────────────────────────────────────────────────── *@
+        <h4 class="bm-dash__subtitle">@_loc.Get("dash.topactions")</h4>
+        @if (_snapshot.TopActions.Count == 0)
+        {
+            <p class="bm-dash__muted">@_loc.Get("dash.notools")</p>
+        }
+        else
+        {
+            <ul class="bm-dash__list">
+                @foreach (var action in _snapshot.TopActions)
+                {
+                    <li>
+                        <span class="bm-dash__action">@action.Action</span>
+                        <span class="bm-dash__bar" aria-hidden="true">
+                            <span class="bm-dash__bar-fill" style="width:@(Share(action.Count))%"></span>
+                        </span>
+                        <span class="bm-dash__count">@action.Count.ToString("N0")</span>
+                    </li>
+                }
+            </ul>
+        }
+
+        <p class="bm-dash__foot">
+            @string.Format(_loc.Get("dash.foot"),
+                _snapshot.ModelId ?? "—",
+                _snapshot.GeneratedAt.LocalDateTime.ToString("g"))
+        </p>
+    </div>
+}
+
+@code {
+    /// <summary>Externally supplied snapshot (WASM/headless). When null, the component reads IMentorMetrics in-process.</summary>
+    [Parameter] public MentorMetricsSnapshot? Snapshot { get; set; }
+
+    /// <summary>Invoked when the user clicks Refresh — use it to re-fetch the snapshot (WASM/headless).</summary>
+    [Parameter] public EventCallback OnRefresh { get; set; }
+
+    /// <summary>Currency symbol/prefix used for the estimated cost. Default "$".</summary>
+    [Parameter] public string Currency { get; set; } = "$";
+
+    /// <summary>
+    /// UI language. Leave null on Blazor Server — the component resolves <c>MentorLocalizer</c> from DI and
+    /// follows <c>options.Language</c>. In WASM (no MentorAgent DI) pass it explicitly; default is English.
+    /// </summary>
+    [Parameter] public MentorLanguage? Language { get; set; }
+
+    private IMentorMetrics? _metricsSvc;
+    private IMentorMetricsStore? _store;
+    private MentorMetricsSnapshot? _snapshot;
+    private MentorLocalizer _loc = new(MentorLanguage.English);
+    private string _selectedModel = ""; // "" = all models
+
+    protected override async Task OnInitializedAsync()
+    {
+        _metricsSvc = Services.GetService(typeof(IMentorMetrics)) as IMentorMetrics;
+        _store = Services.GetService(typeof(IMentorMetricsStore)) as IMentorMetricsStore;
+        // Explicit parameter wins (WASM), then DI (Blazor Server follows options.Language), then English.
+        _loc = Language is { } lang
+            ? new MentorLocalizer(lang)
+            : Services.GetService(typeof(MentorLocalizer)) as MentorLocalizer ?? _loc;
+        _snapshot = await ResolveAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (Snapshot is not null) _snapshot = Snapshot;
+    }
+
+    // In-process resolution order: an explicit Snapshot (WASM/headless) wins; otherwise an external
+    // IMentorMetricsStore (Prometheus/Azure) serves the aggregate; otherwise the live in-RAM snapshot.
+    private async Task<MentorMetricsSnapshot?> ResolveAsync()
+    {
+        if (Snapshot is not null) return Snapshot;
+        if (_store is not null && await _store.QueryAsync() is { } external) return external;
+        return _metricsSvc?.GetSnapshot();
+    }
+
+    private async Task RefreshAsync()
+    {
+        _snapshot = await ResolveAsync();
+        if (OnRefresh.HasDelegate) await OnRefresh.InvokeAsync();
+    }
+
+    // Controlled <select>: set the field on change (Blazor re-renders after the handler, so the
+    // summary cards + charts re-scope to the chosen model). Avoids the @bind/@bind:after combo.
+    private void OnModelChanged(ChangeEventArgs e) => _selectedModel = e.Value?.ToString() ?? "";
+
+    private static bool Eq(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Width (0–100) of an action's share bar, relative to the most-invoked action.</summary>
+    private int Share(long count)
+    {
+        var max = _snapshot?.TopActions.Count > 0 ? _snapshot.TopActions.Max(a => a.Count) : 0;
+        return max <= 0 ? 0 : (int)Math.Round(count * 100d / max);
+    }
+
+    private string KindLabel(MentorModelKind kind) => _loc.Get($"dash.kind.{kind.ToString().ToLowerInvariant()}");
+
+    private string PerReq(long total, long requests)
+        => requests <= 0 ? "—" : $"{(double)total / requests:N0} {_loc.Get("dash.avgreq")}";
+
+    // The scope currently shown: a single model, or the merged "all models" view.
+    private ViewData CurrentView()
+    {
+        var s = _snapshot!;
+        if (_selectedModel.Length > 0)
+        {
+            var m = s.Models.FirstOrDefault(x => string.Equals(x.ModelId, _selectedModel, StringComparison.OrdinalIgnoreCase));
+            if (m is not null)
+                return new ViewData(m.InputTokens, m.OutputTokens, m.RequestCount, m.AvgLatencyMs, m.AvgTimeToFirstByteMs, m.TotalCost, m.Series);
+        }
+
+        // Merge every model's series by timestamp for the "all models" view.
+        var merged = s.Models
+            .SelectMany(m => m.Series)
+            .GroupBy(p => p.Timestamp)
+            .OrderBy(g => g.Key)
+            .Select(g => new MentorUsagePoint
+            {
+                Timestamp    = g.Key,
+                InputTokens  = g.Sum(p => p.InputTokens),
+                OutputTokens = g.Sum(p => p.OutputTokens),
+                RequestCount = g.Sum(p => p.RequestCount),
+                AvgLatencyMs = WeightedAvg(g.Select(p => (p.AvgLatencyMs, p.RequestCount))),
+            })
+            .ToList();
+
+        double? lat  = WeightedAvg(s.Models.Select(m => (m.AvgLatencyMs, m.RequestCount)));
+        double? ttfb = WeightedAvg(s.Models.Select(m => (m.AvgTimeToFirstByteMs, m.RequestCount)));
+        return new ViewData(s.TotalInputTokens, s.TotalOutputTokens, s.RequestCount, lat, ttfb, s.TotalCost, merged);
+    }
+
+    private static double? WeightedAvg(IEnumerable<(double? Value, long Weight)> items)
+    {
+        double sum = 0; long w = 0;
+        foreach (var (value, weight) in items)
+            if (value is { } val && weight > 0) { sum += val * weight; w += weight; }
+        return w > 0 ? sum / w : null;
+    }
+
+    private readonly record struct ViewData(
+        long In, long Out, long Requests, double? Lat, double? Ttfb, decimal? Cost, IReadOnlyList<MentorUsagePoint> Series);
+
+    // ── Inline SVG line chart (no JS / no libs; theme-aware via CSS vars) ─────────
+    private MarkupString LineChart(DateTimeOffset[] times, (string Color, double[] Vals)[] lines, bool compact)
+    {
+        var ci = CultureInfo.InvariantCulture;
+        int n = times.Length;
+        const double W = 620, H = 200, padL = 52, padR = 14, padT = 12, padB = 30;
+
+        double max = 0;
+        foreach (var (_, vals) in lines)
+            foreach (var val in vals) if (val > max) max = val;
+        if (max <= 0) max = 1;
+
+        double plotW = W - padL - padR, plotH = H - padT - padB;
+        double X(int i) => padL + (n <= 1 ? 0 : plotW * i / (n - 1));
+        double Y(double val) => padT + plotH * (1 - val / max);
+
+        var sb = new StringBuilder(768);
+        sb.Append($"<svg viewBox=\"0 0 {D(W)} {D(H)}\" class=\"bm-chart\" role=\"img\">");
+
+        // Horizontal gridlines + y-axis labels at 0, 50%, 100% of max.
+        for (int g = 0; g <= 2; g++)
+        {
+            double val = max * g / 2.0;
+            double y = Y(val);
+            sb.Append($"<line class=\"bm-chart__grid\" x1=\"{D(padL)}\" y1=\"{D(y)}\" x2=\"{D(W - padR)}\" y2=\"{D(y)}\" />");
+            sb.Append($"<text class=\"bm-chart__ylab\" x=\"{D(padL - 6)}\" y=\"{D(y + 3)}\" text-anchor=\"end\">{YLabel(val, compact)}</text>");
+        }
+
+        // Series polylines (crisp stroke regardless of scaling).
+        foreach (var (color, vals) in lines)
+        {
+            var pts = string.Join(" ", vals.Select((val, i) => $"{X(i).ToString("0.#", ci)},{Y(val).ToString("0.#", ci)}"));
+            sb.Append($"<polyline class=\"bm-chart__line\" style=\"stroke:{color}\" points=\"{pts}\" />");
+        }
+
+        // X-axis labels: first, middle, last.
+        XLabel(sb, times, 0, X(0), "start");
+        if (n > 2) XLabel(sb, times, n / 2, X(n / 2), "middle");
+        XLabel(sb, times, n - 1, X(n - 1), "end");
+
+        sb.Append("</svg>");
+        return (MarkupString)sb.ToString();
+
+        static string D(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
+    }
+
+    private static void XLabel(StringBuilder sb, DateTimeOffset[] times, int i, double x, string anchor)
+    {
+        var label = times[i].LocalDateTime.ToString("dd/MM HH:mm");
+        sb.Append($"<text class=\"bm-chart__xlab\" x=\"{x.ToString("0.#", CultureInfo.InvariantCulture)}\" y=\"190\" text-anchor=\"{anchor}\">{label}</text>");
+    }
+
+    private static string YLabel(double v, bool compact)
+    {
+        var ci = CultureInfo.InvariantCulture;
+        if (!compact) return v.ToString("0", ci);
+        return v >= 1_000_000 ? (v / 1_000_000).ToString("0.#", ci) + "M"
+             : v >= 1_000     ? (v / 1_000).ToString("0.#", ci) + "k"
+             :                   v.ToString("0", ci);
+    }
+}

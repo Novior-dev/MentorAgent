@@ -1,0 +1,2554 @@
+﻿/* ═══════════════════════════════════════════════════════════════════════════
+   MentorAgent — UI Design System
+   Aesthetic: Luxury Dark Glassmorphism
+   Fonts: Sora (UI) + JetBrains Mono (code)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Fonts ─────────────────────────────────────────────────────────────────────
+   Sora and JetBrains Mono ship in this package (wwwroot/fonts), so the widget makes no request to a
+   third party. Variable fonts: one file per script covers every weight used below (300–700, and 650).
+   Latin and Latin Extended cover the widget's Latin-script languages; Japanese and Chinese, and any other
+   script, fall back to the next font in --bm-font / --bm-font-mono.
+   SIL Open Font License 1.1: the texts are beside the files (OFL-Sora.txt, OFL-JetBrainsMono.txt).
+   ─────────────────────────────────────────────────────────────────────────── */
+@font-face {
+    font-family: 'Sora';
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    src: url('../fonts/sora-latin-wght-normal.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: 'Sora';
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    src: url('../fonts/sora-latin-ext-wght-normal.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    src: url('../fonts/jetbrains-mono-latin-wght-normal.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    src: url('../fonts/jetbrains-mono-latin-ext-wght-normal.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── Variables ─────────────────────────────────────────────────────────────── */
+:root {
+    --bm-bg-base: #0a0e1a;
+    --bm-bg-panel: rgba(10, 14, 26, 0.55);
+    --bm-bg-surface: #141929;
+    --bm-bg-elevated: #1a2035;
+    --bm-bg-hover: #1e2540;
+    --bm-accent: #3b82f6;
+    --bm-accent-dark: #2563eb;
+    --bm-accent-bright: #60a5fa;
+    --bm-accent-cyan: #06b6d4;
+    --bm-accent-glow: rgba(59,130,246,.35);
+    --bm-text-primary: #f0f4ff;
+    --bm-text-secondary: #8b9cc8;
+    --bm-text-muted: #4a567a;
+    /* Text on the amber (hosted tools) and indigo (A2A) chips. These sit on a translucent tint of
+       their own colour, so the text has to move with the theme: the pale shades below are legible on
+       the dark surface and invisible on the light one. Overridden per theme in BuildThemeVars. */
+    --bm-hosted-text: #fcd34d;
+    --bm-hosted-text-strong: #fde68a;
+    --bm-a2a-text: #a5b4fc;
+    --bm-a2a-text-strong: #c7d2fe;
+    --bm-border: rgba(255,255,255,.07);
+    --bm-border-accent: rgba(59,130,246,.3);
+    --bm-radius-sm: 8px;
+    --bm-radius-md: 14px;
+    --bm-radius-lg: 20px;
+    --bm-radius-xl: 28px;
+    --bm-radius-full: 9999px;
+    --bm-shadow-panel: 0 32px 80px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06), inset 0 1px 0 rgba(255,255,255,.08);
+    --bm-shadow-fab: 0 8px 32px var(--bm-accent-glow), 0 2px 8px rgba(0,0,0,.5);
+    --bm-panel-w: 400px;
+    --bm-panel-h: 600px;
+    --bm-ease-spring: cubic-bezier(.34,1.56,.64,1);
+    --bm-ease-smooth: cubic-bezier(.4,0,.2,1);
+    --bm-font: 'Sora', system-ui, sans-serif;
+    --bm-font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ── Root ──────────────────────────────────────────────────────────────────── */
+.bm-root {
+    position: fixed;
+    z-index: 9999;
+    isolation: isolate;
+    font-family: var(--bm-font);
+    font-size: 14px;
+    color: var(--bm-text-primary);
+}
+
+/* ── Posizioni widget ──────────────────────────────────────────────────────── */
+
+/* BottomRight (default) */
+.bm-pos--bottom-right {
+    bottom: 28px !important;
+    right: 28px !important;
+    top: auto !important;
+    left: auto !important;
+}
+
+    .bm-pos--bottom-right .bm-panel {
+        bottom: 72px !important;
+        right: 0 !important;
+        top: auto !important;
+        left: auto !important;
+        transform-origin: bottom right;
+    }
+
+/* BottomLeft */
+.bm-pos--bottom-left {
+    bottom: 28px !important;
+    left: 28px !important;
+    right: auto !important;
+    top: auto !important;
+}
+
+    .bm-pos--bottom-left .bm-panel {
+        bottom: 72px !important;
+        left: 0 !important;
+        right: auto !important;
+        top: auto !important;
+        transform-origin: bottom left;
+    }
+
+/* TopRight */
+.bm-pos--top-right {
+    top: 28px !important;
+    right: 28px !important;
+    bottom: auto !important;
+    left: auto !important;
+}
+
+    .bm-pos--top-right .bm-panel {
+        top: 72px !important;
+        right: 0 !important;
+        bottom: auto !important;
+        left: auto !important;
+        transform-origin: top right;
+    }
+
+/* TopLeft */
+.bm-pos--top-left {
+    top: 28px !important;
+    left: 28px !important;
+    bottom: auto !important;
+    right: auto !important;
+}
+
+    .bm-pos--top-left .bm-panel {
+        top: 72px !important;
+        left: 0 !important;
+        bottom: auto !important;
+        right: auto !important;
+        transform-origin: top left;
+    }
+
+/* SideRight */
+.bm-pos--side-right {
+    bottom: 28px !important;
+    right: 0 !important;
+    left: auto !important;
+    top: auto !important;
+}
+
+    .bm-pos--side-right .bm-panel {
+        position: fixed !important;
+        top: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        left: auto !important;
+        width: var(--bm-panel-w) !important;
+        height: 100vh !important;
+        border-radius: 16px 0 0 16px !important;
+        transform-origin: right center;
+    }
+
+    .bm-pos--side-right.bm-open .bm-panel {
+        transform: none !important;
+    }
+
+/* SideLeft */
+.bm-pos--side-left {
+    bottom: 28px !important;
+    left: 0 !important;
+    right: auto !important;
+    top: auto !important;
+}
+
+    .bm-pos--side-left .bm-panel {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        bottom: 0 !important;
+        right: auto !important;
+        width: var(--bm-panel-w) !important;
+        height: 100vh !important;
+        border-radius: 0 16px 16px 0 !important;
+        transform-origin: left center;
+    }
+
+    .bm-pos--side-left.bm-open .bm-panel {
+        transform: none !important;
+    }
+
+
+
+
+/* ── Voice Input ───────────────────────────────────────────────────────────── */
+.bm-voice-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--bm-text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all .2s;
+    padding: 0;
+}
+
+    .bm-voice-btn svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    .bm-voice-btn:hover {
+        color: var(--bm-accent);
+        background: rgba(59,130,246,.08);
+    }
+
+.bm-voice-btn--active {
+    color: #ef4444;
+    background: rgba(239,68,68,.1);
+    animation: bm-pulse 1.2s ease-in-out infinite;
+}
+
+.bm-voice-btn:disabled {
+    opacity: .4;
+    cursor: not-allowed;
+}
+
+/* Textarea listening state */
+.bm-input--listening {
+    border-color: rgba(239,68,68,.4) !important;
+    background: rgba(239,68,68,.04) !important;
+}
+
+/* Voice output active button */
+.bm-icon-btn--active {
+    color: var(--bm-accent) !important;
+    background: rgba(59,130,246,.1) !important;
+}
+
+@keyframes bm-pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: .7;
+        transform: scale(1.1);
+    }
+}
+
+/* ── Backdrop ──────────────────────────────────────────────────────────────── */
+.bm-backdrop {
+    display: none;
+}
+
+/* ── FAB ───────────────────────────────────────────────────────────────────── */
+.bm-fab {
+    position: relative;
+    transform: translateZ(0);
+    will-change: transform;
+    isolation: isolate;
+    width: 60px;
+    height: 60px;
+    border-radius: var(--bm-radius-full);
+    border: none;
+    cursor: pointer;
+    background: linear-gradient(135deg, var(--bm-accent), var(--bm-accent-cyan));
+    box-shadow: var(--bm-shadow-fab);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform .3s var(--bm-ease-spring), box-shadow .3s var(--bm-ease-smooth), background .2s;
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+    .bm-fab:hover {
+        transform: scale(1.08) translateY(-2px);
+        box-shadow: 0 12px 40px var(--bm-accent-glow), 0 2px 8px rgba(0,0,0,.6);
+    }
+
+    .bm-fab:active {
+        transform: scale(.95);
+    }
+
+.bm-open .bm-fab {
+    background: linear-gradient(135deg, #374151, #1f2937);
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+}
+
+.bm-fab__icon {
+    overflow: hidden;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    transition: transform .2s var(--bm-ease-spring);
+}
+
+    .bm-fab__icon svg {
+        width: 100%;
+        height: 100%;
+    }
+
+.bm-open .bm-fab__icon {
+    overflow: hidden;
+    transform: rotate(180deg);
+}
+
+.bm-fab--busy .bm-fab__icon svg {
+    animation: bm-spin 1s linear infinite;
+}
+
+/* Avatar image fills entire FAB */
+.bm-fab__avatar-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+    display: block;
+}
+
+.bm-fab--avatar .bm-fab__icon {
+    display: none;
+}
+
+/* The bot's avatar in the header, the bubbles and the welcome panel. Sized here and not in a style
+   attribute: under a Content-Security-Policy without style-src 'unsafe-inline' the browser refuses
+   style attributes, and the image would lose its size. */
+.bm-avatar-img {
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.bm-header__avatar .bm-avatar-img {
+    width: 32px;
+    height: 32px;
+}
+
+.bm-bubble__avatar .bm-avatar-img {
+    width: 20px;
+    height: 20px;
+}
+
+.bm-welcome__orb .bm-avatar-img {
+    width: 80px;
+    height: 80px;
+}
+
+/* Badge */
+.bm-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: var(--bm-radius-full);
+    background: #ef4444;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid var(--bm-bg-base);
+    animation: bm-badge-in .3s var(--bm-ease-spring);
+}
+
+/* ── Panel ─────────────────────────────────────────────────────────────────── */
+.bm-panel {
+    position: absolute;
+    bottom: 72px;
+    right: 0; /* override per posizioni diverse nelle classi bm-pos--* */
+    width: var(--bm-panel-w);
+    height: var(--bm-panel-h);
+    /* The panel is anchored to the bottom, so a viewport shorter than the panel pushes its top
+       edge off-screen — the header scrolls out of reach and the tour renders above the fold.
+       Cap against the viewport instead of trusting --bm-panel-h to be smaller than the window.
+       dvh first (mobile browsers shrink the visual viewport when the URL bar shows); the vh
+       line stays as the fallback for engines without dvh. */
+    max-height: calc(100vh - 96px);
+    max-height: calc(100dvh - 96px);
+    max-width: calc(100vw - 32px);
+    /* Query container for everything inside the panel. It lives here rather than on .bm-header
+       because an element is never its own container: a query named on the header could style the
+       header's children but never the header itself, so `flex-wrap` on it silently did nothing.
+       The panel is the right anchor anyway — --bm-panel-w is configurable, so a viewport media
+       query would miss a narrow panel on a wide screen, which is the case that was reported. */
+    container-type: inline-size;
+    container-name: bmpanel;
+    background: var(--bm-bg-panel);
+    border-radius: var(--bm-radius-xl);
+    box-shadow: var(--bm-shadow-panel);
+    border: 1px solid var(--bm-border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    /* Glass effect */
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    /* Enter animation */
+    transform-origin: bottom right;
+    opacity: 0;
+    transform: scale(.92) translateY(16px);
+    pointer-events: none;
+    transition: opacity .35s var(--bm-ease-smooth), transform .4s var(--bm-ease-spring);
+}
+
+.bm-open .bm-panel {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    pointer-events: auto;
+}
+
+/* Accent top line — decorative only, must not intercept clicks */
+.bm-panel::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 20%;
+    right: 20%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--bm-accent), var(--bm-accent-cyan), transparent);
+    opacity: .7;
+    pointer-events: none;   /* FIX: prevent intercepting header button clicks */
+    z-index: 0;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+.bm-header {
+    background: transparent;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 16px 14px;
+    border-bottom: 1px solid var(--bm-border);
+    flex-shrink: 0;
+    min-width: 0;
+}
+
+.bm-header__avatar {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    filter: drop-shadow(0 0 8px var(--bm-accent-glow));
+}
+
+    .bm-header__avatar svg {
+        width: 100%;
+        height: 100%;
+    }
+
+.bm-header__info {
+    flex: 1 1 auto;
+    /* A floor, not 0. With min-width:0 this block absorbed every pixel the actions refused to
+       give up and collapsed to ~48px, which is what wrapped the bot name onto three lines and
+       slid it under the status pills. The widget's own name is not the part that gives way. */
+    min-width: 84px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+}
+
+.bm-header__name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--bm-text-primary);
+    letter-spacing: -.01em;
+    /* One line, truncated — never a three-line block that grows the header. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bm-header__status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    font-weight: 400;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.bm-header__status--online {
+    color: #34d399;
+}
+
+.bm-header__status--busy {
+    color: var(--bm-accent-bright);
+}
+
+.bm-status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.bm-header__status--online .bm-status-dot {
+    animation: bm-pulse-green 2s infinite;
+}
+
+.bm-header__status--busy .bm-status-dot {
+    animation: bm-pulse-blue 1s infinite;
+}
+
+.bm-header__actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    position: relative;   /* establish stacking context above panel::before */
+    z-index: 1;
+    /* Shrinkable as a block, but the shrinking is spent on the pills below — the icon buttons
+       are pinned. Before this the block was flex-shrink:0 and the title paid for everything. */
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+/* ── Status pills container — vertical stack ───────────────────────────────── */
+.bm-status-pills {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    align-items: stretch;  /* pills fill same width */
+    flex-shrink: 1;        /* the only part of the header that yields space */
+    min-width: 0;
+    max-width: 110px;      /* cap width so icons always stay visible */
+}
+
+/* Below this panel width the single row genuinely cannot hold avatar + name + pills + buttons,
+   so the pills take a row of their own rather than any of them truncating. Measured, not
+   guessed: at the default 400px panel the header content box is ~367px, against 36 avatar +
+   84 name floor + 110 pills + 140 buttons + gaps ≈ 394. 424px is that default plus the 24px of
+   panel padding the header does not get, so the default width wraps. */
+@container bmpanel (max-width: 560px) {
+    .bm-header {
+        flex-wrap: wrap;
+        row-gap: 8px;
+    }
+
+    /* Order, not source position: the buttons stay beside the title on row 1 and the pills are
+       pushed past them onto row 2, where 100% basis makes them claim the full width. */
+    .bm-header__actions {
+        order: 1;
+    }
+
+    .bm-status-pills {
+        order: 2;
+        /* shrink:0 is the load-bearing part. With the default shrink:1 a 100% basis just
+           compresses back onto row 1 and nothing wraps — which is exactly what it did. */
+        flex: 1 0 100%;
+        min-width: 100%;
+        max-width: none;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+        /* On their own row they size to content instead of stretching to the widest sibling.
+           width:auto is required: the pills carry width:100% so they fill the vertical stack,
+           and without clearing it each one still claims a full row here. Two classes, not
+           `> *` — the pill rules sit lower in this file, so at equal specificity they won. */
+        .bm-status-pills > .bm-mcp-pill,
+        .bm-status-pills > .bm-a2a-pill,
+        .bm-status-pills > .bm-hosted-pill {
+            flex: 0 1 auto;
+            width: auto;
+            max-width: 100%;
+        }
+}
+
+.bm-icon-btn {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;   /* controls stay tappable at every width; the pills give way instead */
+    border-radius: var(--bm-radius-sm);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--bm-text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color .15s, background .15s, border-color .15s, transform .1s;
+}
+
+    .bm-icon-btn svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    .bm-icon-btn:hover {
+        color: var(--bm-text-primary);
+        background: var(--bm-bg-elevated);
+        border-color: var(--bm-border);
+    }
+
+    .bm-icon-btn:active {
+        transform: scale(.93);
+    }
+
+/* ── MCP Status Pill ───────────────────────────────────────────────────────── */
+/* Clickable pill in the header toolbar.
+   States: connecting (pulsing blue) | online (green) | warn (amber) | offline (grey)
+   Shows: [circuit-icon] [server-name-or-count] [status-dot]                  */
+.bm-mcp-pill {
+    display: flex;           /* fill container width via bm-status-pills align-items:stretch */
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 8px 0 6px;
+    border-radius: var(--bm-radius-full);
+    border: 1px solid transparent;
+    font-size: 10.5px;
+    font-weight: 500;
+    font-family: var(--bm-font-mono);
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+    width: 100%;             /* fill .bm-status-pills width */
+    min-width: 0;
+    transition: transform .12s var(--bm-ease-smooth),
+                background .15s,
+                border-color .15s,
+                box-shadow .15s;
+}
+
+    .bm-mcp-pill:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 3px 8px rgba(0,0,0,.2);
+    }
+
+    .bm-mcp-pill:active {
+        transform: scale(.95);
+        box-shadow: none;
+    }
+
+/* Connecting — neutral blue pulsing dot while servers start up */
+.bm-mcp-pill--connecting {
+    color: var(--bm-accent-bright);
+    background: rgba(59,130,246,.1);
+    border-color: rgba(59,130,246,.25);
+}
+
+.bm-mcp-pill--online {
+    color: #4ade80;
+    background: rgba(34,197,94,.1);
+    border-color: rgba(34,197,94,.25);
+}
+
+.bm-mcp-pill--warn {
+    color: #fbbf24;
+    background: rgba(245,158,11,.1);
+    border-color: rgba(245,158,11,.25);
+}
+
+.bm-mcp-pill--offline {
+    color: var(--bm-text-secondary);
+    background: rgba(255,255,255,.05);
+    border-color: rgba(255,255,255,.12);
+}
+
+.bm-mcp-pill__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;   /* without this the label wraps inside the pill instead of truncating */
+    flex: 1;
+    min-width: 0;
+    line-height: 1;
+}
+
+.bm-mcp-pill__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.bm-mcp-pill--connecting .bm-mcp-pill__dot {
+    background: var(--bm-accent-bright);
+    animation: bm-pulse-blue 1.2s ease-in-out infinite;
+}
+
+.bm-mcp-pill--online .bm-mcp-pill__dot {
+    background: #22c55e;
+    box-shadow: 0 0 5px rgba(34,197,94,.8);
+    animation: bm-pulse-green 2s infinite;
+}
+
+.bm-mcp-pill--warn .bm-mcp-pill__dot {
+    background: #f59e0b;
+    box-shadow: 0 0 5px rgba(245,158,11,.8);
+}
+
+.bm-mcp-pill--offline .bm-mcp-pill__dot {
+    background: var(--bm-text-muted);
+}
+
+/* ── MCP Detail Bar ────────────────────────────────────────────────────────── */
+/* In-flow bar rendered between header and messages area.
+   Uses raw RGBA so it looks good on both dark and light (Minimal) themes.    */
+/* Detail bar rendered with @if (Visible) — DOM add/remove, no CSS transition needed.
+   Animation via bm-slide-down keyframes on element entrance.                     */
+.bm-mcp-detail {
+    background: rgba(59,130,246,.08);
+    border-top: 1px solid rgba(59,130,246,.2);
+    border-bottom: 1px solid rgba(59,130,246,.2);
+    flex-shrink: 0;
+    animation: bm-slide-down .18s ease;
+}
+
+.bm-mcp-detail__inner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    flex-wrap: wrap;
+}
+
+.bm-mcp-detail__label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--bm-accent-bright);
+    flex-shrink: 0;
+}
+
+.bm-mcp-detail__list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1;
+}
+
+.bm-mcp-detail__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px 3px 7px;
+    border-radius: var(--bm-radius-full);
+    border: 1px solid transparent;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: var(--bm-font-mono);
+}
+
+.bm-mcp-detail__item--connecting {
+    background: rgba(59,130,246,.1);
+    border-color: rgba(59,130,246,.25);
+    color: var(--bm-accent-bright);
+}
+
+.bm-mcp-detail__item--online {
+    background: rgba(34,197,94,.1);
+    border-color: rgba(34,197,94,.25);
+    color: #4ade80;
+}
+
+.bm-mcp-detail__item--offline {
+    background: rgba(239,68,68,.08);
+    border-color: rgba(239,68,68,.2);
+    color: #f87171;
+}
+
+.bm-mcp-detail__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.bm-mcp-detail__item--connecting .bm-mcp-detail__dot {
+    background: var(--bm-accent-bright);
+    animation: bm-pulse-blue 1.2s ease-in-out infinite;
+}
+
+.bm-mcp-detail__item--online .bm-mcp-detail__dot {
+    background: #22c55e;
+    box-shadow: 0 0 5px rgba(34,197,94,.7);
+}
+
+.bm-mcp-detail__item--offline .bm-mcp-detail__dot {
+    background: #f87171;
+}
+
+.bm-mcp-detail__name {
+    font-family: var(--bm-font-mono);
+    font-size: 11px;
+}
+
+.bm-mcp-detail__state {
+    font-size: 9.5px;
+    font-family: var(--bm-font-mono);
+    opacity: .65;
+    margin-left: 1px;
+}
+
+.bm-mcp-detail__close {
+    margin-left: auto;
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--bm-text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .12s, color .12s;
+}
+
+    .bm-mcp-detail__close:hover {
+        background: rgba(255,255,255,.1);
+        color: var(--bm-text-primary);
+    }
+
+/* ── A2A Status Pill ────────────────────────────────────────────────────────
+   Indigo/violet accent to distinguish from the green MCP pill.
+   [graph-icon] [agent-name-or-count] [pulsing-dot]                         */
+.bm-a2a-pill {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    width: 100%;
+    height: 22px;
+    min-width: 0;
+    padding: 0 9px 0 7px;
+    border-radius: var(--bm-radius-full);
+    border: 1px solid rgba(99,102,241,.35);
+    background: rgba(99,102,241,.1);
+    color: var(--bm-a2a-text);
+    font-size: 11px;
+    font-weight: 500;
+    font-family: var(--bm-font-mono);
+    cursor: pointer;
+    user-select: none;
+    transition: transform .12s var(--bm-ease-smooth),
+                background .15s,
+                border-color .15s,
+                box-shadow .15s;
+    white-space: nowrap;
+    box-sizing: border-box;
+}
+
+    .bm-a2a-pill:hover {
+        background: rgba(99,102,241,.2);
+        border-color: rgba(99,102,241,.6);
+        transform: translateY(-1px);
+        box-shadow: 0 3px 10px rgba(99,102,241,.25);
+    }
+
+    .bm-a2a-pill:active {
+        transform: scale(.94);
+        box-shadow: none;
+    }
+
+.bm-a2a-pill__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;   /* without this the label wraps inside the pill instead of truncating */
+    flex: 1;
+    min-width: 0;
+    line-height: 1;
+}
+
+.bm-a2a-pill__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #818cf8;
+    flex-shrink: 0;
+    box-shadow: 0 0 5px rgba(99,102,241,.7);
+    animation: bm-pulse-indigo 2.5s ease-in-out infinite;
+}
+
+/* ── A2A Detail Bar ─────────────────────────────────────────────────────────
+   In-flow bar — no absolute positioning.
+   Raw RGBA background works on both dark and Minimal (white) themes.        */
+/* Detail bar rendered with @if (Visible) — DOM add/remove, no CSS transition needed. */
+.bm-a2a-detail {
+    background: rgba(99,102,241,.08);
+    border-top: 1px solid rgba(99,102,241,.22);
+    border-bottom: 1px solid rgba(99,102,241,.22);
+    flex-shrink: 0;
+    animation: bm-slide-down .18s ease;
+}
+
+.bm-a2a-detail__inner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+    flex-wrap: wrap;
+}
+
+.bm-a2a-detail__label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--bm-a2a-text-strong);
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding-top: 2px;
+}
+
+.bm-a2a-detail__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+
+.bm-a2a-detail__item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 10px;
+    border-radius: var(--bm-radius-md);
+    background: rgba(99,102,241,.1);
+    border: 1px solid rgba(99,102,241,.22);
+}
+
+.bm-a2a-detail__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #818cf8;
+    flex-shrink: 0;
+    box-shadow: 0 0 5px rgba(99,102,241,.7);
+    animation: bm-pulse-indigo 2.5s ease-in-out infinite;
+}
+
+.bm-a2a-detail__name {
+    font-family: var(--bm-font-mono);
+    font-size: 11px;
+    color: var(--bm-a2a-text-strong);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.bm-a2a-detail__url {
+    font-size: 10px;
+    color: var(--bm-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+    opacity: .8;
+}
+
+.bm-a2a-detail__close {
+    margin-left: auto;
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: var(--bm-text-muted);
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .12s, color .12s;
+}
+
+    .bm-a2a-detail__close:hover {
+        background: rgba(255,255,255,.1);
+        color: var(--bm-text-primary);
+    }
+
+/* ── Hosted Tools Pill (#15) ────────────────────────────────────────────────
+   Amber accent — distinct from the green MCP pill and the indigo A2A pill.
+   These tools run on the AI provider, not here, so there is no connection state:
+   the pill just lists what the model is allowed to use.
+   [globe-icon] [tool-name-or-count] [pulsing-dot]                            */
+.bm-hosted-pill {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    width: 100%;
+    height: 22px;
+    min-width: 0;
+    padding: 0 9px 0 7px;
+    border-radius: var(--bm-radius-full);
+    border: 1px solid rgba(245,158,11,.35);
+    background: rgba(245,158,11,.1);
+    color: var(--bm-hosted-text);
+    font-size: 11px;
+    font-weight: 500;
+    font-family: var(--bm-font-mono);
+    cursor: pointer;
+    user-select: none;
+    transition: transform .12s var(--bm-ease-smooth),
+                background .15s,
+                border-color .15s,
+                box-shadow .15s;
+    white-space: nowrap;
+    box-sizing: border-box;
+}
+
+    .bm-hosted-pill:hover {
+        background: rgba(245,158,11,.2);
+        border-color: rgba(245,158,11,.6);
+        transform: translateY(-1px);
+        box-shadow: 0 3px 10px rgba(245,158,11,.25);
+    }
+
+    .bm-hosted-pill:active {
+        transform: scale(.94);
+        box-shadow: none;
+    }
+
+.bm-hosted-pill__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;   /* without this the label wraps inside the pill instead of truncating */
+    flex: 1;
+    min-width: 0;
+    line-height: 1;
+}
+
+.bm-hosted-pill__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #fbbf24;
+    flex-shrink: 0;
+    box-shadow: 0 0 5px rgba(245,158,11,.7);
+    animation: bm-pulse-amber 2.5s ease-in-out infinite;
+}
+
+/* ── Hosted Tools Detail Bar (#15) ──────────────────────────────────────────
+   In-flow bar — no absolute positioning, same pattern as the MCP/A2A bars.    */
+.bm-hosted-detail {
+    background: rgba(245,158,11,.08);
+    border-top: 1px solid rgba(245,158,11,.22);
+    border-bottom: 1px solid rgba(245,158,11,.22);
+    flex-shrink: 0;
+    animation: bm-slide-down .18s ease;
+}
+
+.bm-hosted-detail__inner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+    flex-wrap: wrap;
+}
+
+.bm-hosted-detail__label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--bm-hosted-text-strong);
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding-top: 2px;
+}
+
+.bm-hosted-detail__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+
+.bm-hosted-detail__item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 10px;
+    border-radius: var(--bm-radius-md);
+    background: rgba(245,158,11,.1);
+    border: 1px solid rgba(245,158,11,.22);
+}
+
+.bm-hosted-detail__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #fbbf24;
+    flex-shrink: 0;
+    box-shadow: 0 0 5px rgba(245,158,11,.7);
+    animation: bm-pulse-amber 2.5s ease-in-out infinite;
+}
+
+.bm-hosted-detail__name {
+    font-family: var(--bm-font-mono);
+    font-size: 11px;
+    color: var(--bm-hosted-text-strong);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.bm-hosted-detail__hint {
+    font-size: 10px;
+    color: var(--bm-text-muted);
+    opacity: .85;
+    flex-basis: 100%;
+    line-height: 1.4;
+}
+
+.bm-hosted-detail__close {
+    margin-left: auto;
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: var(--bm-text-muted);
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .12s, color .12s;
+}
+
+    .bm-hosted-detail__close:hover {
+        background: rgba(255,255,255,.1);
+        color: var(--bm-text-primary);
+    }
+
+/* ── Action Bar ────────────────────────────────────────────────────────────── */
+.bm-action-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: color-mix(in srgb, var(--bm-accent) 8%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--bm-accent) 15%, transparent);
+    font-size: 12px;
+    color: var(--bm-accent-bright);
+    flex-shrink: 0;
+}
+
+.bm-action-bar__pulse {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--bm-accent);
+    animation: bm-pulse-blue .8s infinite;
+    flex-shrink: 0;
+}
+
+.bm-action-bar__text {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── Stop Bar ──────────────────────────────────────────────────────────────── */
+.bm-stop-bar {
+    display: flex;
+    justify-content: center;
+    padding: 6px 16px;
+    flex-shrink: 0;
+}
+
+.bm-stop-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--bm-border-accent);
+    background: var(--bm-bg-elevated);
+    color: var(--bm-text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .15s;
+}
+
+    .bm-stop-btn:hover {
+        background: color-mix(in srgb, var(--bm-accent) 10%, var(--bm-bg-elevated));
+        border-color: var(--bm-accent);
+        color: var(--bm-accent-bright);
+    }
+
+    .bm-stop-btn:active {
+        transform: scale(.97);
+    }
+
+/* ── Messages ──────────────────────────────────────────────────────────────── */
+.bm-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    scroll-behavior: smooth;
+}
+
+    .bm-messages::-webkit-scrollbar {
+        width: 4px;
+    }
+
+    .bm-messages::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .bm-messages::-webkit-scrollbar-thumb {
+        background: var(--bm-bg-elevated);
+        border-radius: var(--bm-radius-full);
+    }
+
+        .bm-messages::-webkit-scrollbar-thumb:hover {
+            background: var(--bm-text-muted);
+        }
+
+/* ── Bubbles ───────────────────────────────────────────────────────────────── */
+.bm-bubble {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    animation: bm-bubble-in .25s var(--bm-ease-spring);
+    max-width: 90%;
+}
+
+.bm-bubble--user {
+    flex-direction: row-reverse;
+    align-self: flex-end;
+}
+
+.bm-bubble--assistant {
+    align-self: flex-start;
+}
+
+.bm-bubble__avatar {
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    filter: drop-shadow(0 0 6px var(--bm-accent-glow));
+}
+
+    .bm-bubble__avatar svg {
+        width: 100%;
+        height: 100%;
+    }
+
+.bm-bubble__body {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.bm-bubble__content {
+    padding: 10px 14px;
+    border-radius: var(--bm-radius-md);
+    line-height: 1.55;
+    font-size: 13.5px;
+    word-break: break-word;
+}
+
+.bm-bubble--user .bm-bubble__content {
+    background: linear-gradient(135deg, var(--bm-accent), var(--bm-accent-dark));
+    color: white;
+    border-bottom-right-radius: 4px;
+    box-shadow: 0 4px 16px var(--bm-accent-glow);
+}
+
+.bm-bubble--assistant .bm-bubble__content {
+    background: var(--bm-bg-elevated);
+    color: var(--bm-text-primary);
+    border: 1px solid var(--bm-border);
+    border-bottom-left-radius: 4px;
+}
+
+.bm-bubble--streaming .bm-bubble__content {
+    border-color: var(--bm-border-accent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--bm-accent) 10%, transparent);
+}
+
+.bm-bubble__time {
+    font-size: 10px;
+    color: var(--bm-text-muted);
+    padding: 0 2px;
+}
+
+.bm-bubble--user .bm-bubble__time {
+    text-align: right;
+}
+
+/* Cursor streaming */
+.bm-cursor {
+    display: inline-block;
+    color: var(--bm-accent-bright);
+    animation: bm-blink .7s infinite;
+    margin-left: 2px;
+    font-weight: 300;
+}
+
+/* ── Code ──────────────────────────────────────────────────────────────────── */
+.bm-code {
+    background: var(--bm-bg-base);
+    border: 1px solid var(--bm-border);
+    border-radius: var(--bm-radius-sm);
+    padding: 10px 12px;
+    margin: 6px 0;
+    overflow-x: auto;
+    font-family: var(--bm-font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    color: #a5d8ff;
+}
+
+.bm-inline-code {
+    background: rgba(59,130,246,.12);
+    border: 1px solid rgba(59,130,246,.2);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: var(--bm-font-mono);
+    font-size: 12px;
+    color: var(--bm-accent-bright);
+}
+
+/* ── Tables & lists (rich Markdown responses — Generative UI L1) ────────────── */
+.bm-table-wrap {
+    overflow-x: auto;                 /* responsive: horizontal scroll on narrow widgets */
+    margin: 8px 0;
+    border: 1px solid var(--bm-border);
+    border-radius: var(--bm-radius-sm);
+}
+
+.bm-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+.bm-table th,
+.bm-table td {
+    padding: 7px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--bm-border);
+}
+
+/* A Markdown column's alignment marker (:---: or ---:). */
+.bm-table .bm-align-center {
+    text-align: center;
+}
+
+.bm-table .bm-align-right {
+    text-align: right;
+}
+
+.bm-table thead th {
+    background: var(--bm-bg-base);
+    color: var(--bm-text-primary);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.bm-table tbody tr:nth-child(even) td {
+    background: color-mix(in srgb, var(--bm-bg-base) 45%, transparent);
+}
+
+.bm-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.bm-list {
+    margin: 6px 0;
+    padding-left: 20px;
+}
+
+.bm-list li {
+    margin: 3px 0;
+}
+
+/* ── Typing Indicator ──────────────────────────────────────────────────────── */
+.bm-typing-dots {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 14px !important;
+    min-width: 52px;
+}
+
+    .bm-typing-dots span {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--bm-text-muted);
+        animation: bm-bounce .9s infinite ease-in-out;
+    }
+
+        .bm-typing-dots span:nth-child(2) {
+            animation-delay: .15s;
+        }
+
+        .bm-typing-dots span:nth-child(3) {
+            animation-delay: .3s;
+        }
+
+/* ── Welcome ───────────────────────────────────────────────────────────────── */
+.bm-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    padding: 32px 24px;
+    text-align: center;
+    gap: 12px;
+}
+
+.bm-welcome__orb {
+    width: 80px;
+    height: 80px;
+    animation: bm-float 4s ease-in-out infinite;
+    filter: drop-shadow(0 0 20px var(--bm-accent-glow));
+}
+
+    .bm-welcome__orb svg {
+        width: 100%;
+        height: 100%;
+    }
+
+.bm-welcome__title {
+    margin: 4px 0 0;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--bm-text-primary);
+    letter-spacing: -.02em;
+}
+
+.bm-welcome__subtitle {
+    margin: 0;
+    font-size: 13px;
+    color: var(--bm-text-secondary);
+    line-height: 1.6;
+    font-weight: 300;
+}
+
+.bm-welcome__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    margin-top: 8px;
+}
+
+.bm-chip {
+    padding: 6px 12px;
+    border-radius: var(--bm-radius-full);
+    background: var(--bm-bg-elevated);
+    border: 1px solid var(--bm-border);
+    font-size: 12px;
+    color: var(--bm-text-secondary);
+    cursor: default;
+    transition: all .15s;
+}
+
+    .bm-chip:hover {
+        border-color: var(--bm-border-accent);
+        color: var(--bm-accent-bright);
+        background: color-mix(in srgb, var(--bm-accent) 6%, transparent);
+    }
+
+/* ── RAG Source Panel ───────────────────────────────────────────────────────── */
+.bm-rag-panel {
+    margin-top: 8px;
+}
+
+.bm-rag-panel__divider {
+    height: 1px;
+    background: var(--bm-border);
+    margin-bottom: 6px;
+    opacity: 0.6;
+}
+
+.bm-rag-panel__sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    align-items: center;
+}
+
+.bm-rag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px 3px 6px;
+    background: var(--bm-bg-elevated);
+    border: 1px solid var(--bm-border);
+    border-radius: var(--bm-radius-full);
+    text-decoration: none;
+    color: var(--bm-text-secondary);
+    font-size: 11px;
+    line-height: 1;
+    transition: border-color .15s, color .15s, background .15s;
+    max-width: 200px;
+    cursor: pointer;
+}
+
+    .bm-rag-chip:hover {
+        border-color: var(--bm-border-accent);
+        color: var(--bm-accent-bright);
+        background: color-mix(in srgb, var(--bm-accent) 8%, transparent);
+    }
+
+/* A source with nothing to open (a document inside a provider vector store, a code-interpreter
+   artifact). It keeps the chip shape but must not look or behave like a link. */
+.bm-rag-chip--plain {
+    cursor: default;
+}
+
+    .bm-rag-chip--plain:hover {
+        border-color: var(--bm-border);
+        color: var(--bm-text-secondary);
+        background: var(--bm-bg-elevated);
+    }
+
+.bm-rag-chip__icon {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.bm-rag-chip__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+.bm-rag-chip__ext {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    opacity: 0.5;
+}
+
+.bm-rag-chip--more {
+    background: transparent;
+    border-style: dashed;
+    font-size: 10px;
+    color: var(--bm-text-secondary);
+    cursor: pointer;
+    max-width: none;
+}
+
+    .bm-rag-chip--more:hover {
+        border-color: var(--bm-border-accent);
+        color: var(--bm-accent-bright);
+        background: transparent;
+    }
+
+/* ── Input ─────────────────────────────────────────────────────────────────── */
+.bm-input-area {
+    background: transparent;
+    padding: 12px 14px 10px;
+    border-top: 1px solid var(--bm-border);
+    flex-shrink: 0;
+}
+
+.bm-input-wrap {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    background: var(--bm-bg-elevated);
+    border: 1px solid var(--bm-border);
+    border-radius: var(--bm-radius-lg);
+    padding: 8px 8px 8px 14px;
+    transition: border-color .2s, box-shadow .2s;
+}
+
+    .bm-input-wrap:focus-within {
+        border-color: var(--bm-border-accent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--bm-accent) 10%, transparent);
+    }
+
+.bm-input-wrap--disabled {
+    opacity: .5;
+    pointer-events: none;
+}
+
+.bm-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--bm-text-primary);
+    font-family: var(--bm-font);
+    font-size: 13.5px;
+    line-height: 1.5;
+    resize: none;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+    .bm-input::placeholder {
+        color: var(--bm-text-muted);
+    }
+
+    .bm-input::-webkit-scrollbar {
+        width: 3px;
+    }
+
+    .bm-input::-webkit-scrollbar-thumb {
+        background: var(--bm-bg-hover);
+    }
+
+.bm-send-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--bm-radius-sm);
+    border: none;
+    background: var(--bm-bg-hover);
+    color: var(--bm-text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all .2s var(--bm-ease-spring);
+}
+
+    .bm-send-btn svg {
+        width: 15px;
+        height: 15px;
+    }
+
+.bm-send-btn--active {
+    background: linear-gradient(135deg, var(--bm-accent), var(--bm-accent-dark));
+    color: white;
+    box-shadow: 0 2px 12px var(--bm-accent-glow);
+    transform: scale(1.05);
+}
+
+    .bm-send-btn--active:hover {
+        transform: scale(1.1);
+    }
+
+.bm-send-btn:disabled {
+    opacity: .4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.bm-input-hint {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-size: 10.5px;
+    color: var(--bm-text-muted);
+    padding: 0 2px;
+}
+
+/* ── Image attachments (roadmap #13) ───────────────────────────────────────── */
+
+/* Hidden native file input — driven by the .bm-attach-btn <label>. */
+.bm-attach-file {
+    display: none;
+}
+
+.bm-attach-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--bm-text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all .2s;
+    padding: 0;
+}
+
+    .bm-attach-btn svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    .bm-attach-btn:hover {
+        color: var(--bm-accent);
+        background: color-mix(in srgb, var(--bm-accent) 8%, transparent);
+    }
+
+.bm-attach-btn--active {
+    color: var(--bm-accent);
+    background: color-mix(in srgb, var(--bm-accent) 12%, transparent);
+}
+
+.bm-attach-btn--disabled,
+.bm-attach-btn:disabled {
+    opacity: .4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* Drop target state on the whole input area */
+.bm-input-area--drag .bm-input-wrap {
+    border-color: var(--bm-border-accent);
+    background: color-mix(in srgb, var(--bm-accent) 6%, var(--bm-bg-elevated));
+}
+
+.bm-drop-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    padding: 8px;
+    border: 1px dashed var(--bm-border-accent);
+    border-radius: var(--bm-radius-sm);
+    color: var(--bm-accent);
+    font-size: 11.5px;
+    background: color-mix(in srgb, var(--bm-accent) 5%, transparent);
+}
+
+/* Thumbnail strip above the composer */
+.bm-attach-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.bm-attach-thumb {
+    position: relative;
+    width: 52px;
+    height: 52px;
+    border-radius: var(--bm-radius-sm);
+    overflow: hidden;
+    border: 1px solid var(--bm-border);
+    background: var(--bm-bg-elevated);
+    flex-shrink: 0;
+}
+
+    .bm-attach-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+    }
+
+.bm-attach-thumb__remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0,0,0,.6);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .15s;
+}
+
+    .bm-attach-thumb__remove:hover {
+        background: #ef4444;
+    }
+
+.bm-attach-error {
+    margin-bottom: 8px;
+    padding: 6px 10px;
+    border-radius: var(--bm-radius-sm);
+    background: rgba(239,68,68,.08);
+    border: 1px solid rgba(239,68,68,.25);
+    color: #ef4444;
+    font-size: 11.5px;
+}
+
+/* URL input row */
+.bm-attach-url {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.bm-attach-url__input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bm-bg-elevated);
+    border: 1px solid var(--bm-border);
+    border-radius: var(--bm-radius-sm);
+    padding: 6px 10px;
+    color: var(--bm-text-primary);
+    font-family: var(--bm-font);
+    font-size: 12px;
+    outline: none;
+}
+
+    .bm-attach-url__input:focus {
+        border-color: var(--bm-border-accent);
+    }
+
+.bm-attach-url__add {
+    border: none;
+    border-radius: var(--bm-radius-sm);
+    padding: 6px 12px;
+    background: var(--bm-accent);
+    color: #fff;
+    font-family: var(--bm-font);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+    .bm-attach-url__add:disabled {
+        opacity: .4;
+        cursor: not-allowed;
+    }
+
+/* Images inside a chat bubble */
+.bm-bubble__images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 6px;
+}
+
+.bm-bubble__image {
+    max-width: 160px;
+    max-height: 160px;
+    border-radius: var(--bm-radius-sm);
+    border: 1px solid var(--bm-border);
+    display: block;
+    object-fit: cover;
+}
+
+/* ── Confirmation Banner ───────────────────────────────────────────────────── */
+.bm-confirm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 10px 14px;
+    background: rgba(245,158,11,.06);
+    border-bottom: 1px solid rgba(245,158,11,.2);
+    flex-shrink: 0;
+}
+
+.bm-confirm__icon {
+    width: 20px;
+    height: 20px;
+    color: #f59e0b;
+    flex-shrink: 0;
+}
+
+    .bm-confirm__icon svg {
+        width: 100%;
+        height: 100%;
+    }
+
+.bm-confirm__body {
+    flex: 1 1 55%;
+    min-width: 0;
+}
+
+.bm-confirm__title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #fbbf24;
+    margin: 0 0 2px;
+}
+
+.bm-confirm__desc {
+    font-size: 11px;
+    color: var(--bm-text-secondary);
+    margin: 0;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    /* Show up to 2 lines, then ellipsis; the full text is always available via
+       the title tooltip (see ConfirmationBanner.razor). */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.bm-confirm__actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
+
+.bm-btn {
+    padding: 5px 12px;
+    border-radius: var(--bm-radius-sm);
+    border: 1px solid transparent;
+    font-family: var(--bm-font);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .15s;
+}
+
+.bm-btn--ghost {
+    background: transparent;
+    border-color: var(--bm-border);
+    color: var(--bm-text-secondary);
+}
+
+    .bm-btn--ghost:hover {
+        background: var(--bm-bg-elevated);
+        color: var(--bm-text-primary);
+    }
+
+.bm-btn--primary {
+    background: var(--bm-accent);
+    color: white;
+}
+
+    .bm-btn--primary:hover {
+        background: var(--bm-accent-bright);
+    }
+
+/* ── Animations ────────────────────────────────────────────────────────────── */
+@keyframes bm-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes bm-spin-ring {
+    to {
+        stroke-dashoffset: -60;
+    }
+}
+
+.bm-spin-ring {
+    stroke-dasharray: 40;
+    stroke-dashoffset: 0;
+    animation: bm-spin-ring .8s linear infinite;
+    stroke-linecap: round;
+}
+
+@keyframes bm-blink {
+    0%, 100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0;
+    }
+}
+
+@keyframes bm-bounce {
+    0%, 60%, 100% {
+        transform: translateY(0);
+    }
+
+    30% {
+        transform: translateY(-5px);
+    }
+}
+
+@keyframes bm-bubble-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px) scale(.97);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes bm-badge-in {
+    from {
+        transform: scale(0);
+    }
+
+    to {
+        transform: scale(1);
+    }
+}
+
+@keyframes bm-float {
+    0%, 100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-8px);
+    }
+}
+
+@keyframes bm-pulse-green {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(52,211,153,.4);
+    }
+
+    50% {
+        box-shadow: 0 0 0 4px rgba(52,211,153,0);
+    }
+}
+
+@keyframes bm-pulse-blue {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(59,130,246,.4);
+    }
+
+    50% {
+        box-shadow: 0 0 0 4px rgba(59,130,246,0);
+    }
+}
+
+@keyframes bm-pulse-indigo {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(99,102,241,.5);
+    }
+
+    50% {
+        box-shadow: 0 0 0 4px rgba(99,102,241,0);
+    }
+}
+
+@keyframes bm-pulse-amber {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(245,158,11,.5);
+    }
+
+    50% {
+        box-shadow: 0 0 0 4px rgba(245,158,11,0);
+    }
+}
+
+@keyframes bm-slide-down {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+    .bm-root {
+        bottom: 16px;
+        right: 16px;
+    }
+
+    .bm-panel {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        bottom: 0;
+        right: 0;
+        border-radius: 0;
+        border: none;
+    }
+}
+
+/* ── Admin dashboard (roadmap #9) — self-contained, theme-aware, used on admin pages ───────── */
+.bm-dash {
+    --bm-dash-bg:      #ffffff;
+    --bm-dash-panel:   #f6f7f9;
+    --bm-dash-border:  #e3e6ea;
+    --bm-dash-text:    #1a1d21;
+    --bm-dash-muted:   #6b7280;
+    --bm-dash-accent:  #2563eb;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--bm-dash-text);
+    background: var(--bm-dash-bg);
+    border: 1px solid var(--bm-dash-border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    max-width: 900px;
+}
+
+@media (prefers-color-scheme: dark) {
+    .bm-dash {
+        --bm-dash-bg:     #16181d;
+        --bm-dash-panel:  #1e2127;
+        --bm-dash-border: #2a2e36;
+        --bm-dash-text:   #e6e8eb;
+        --bm-dash-muted:  #9aa1ac;
+        --bm-dash-accent: #60a5fa;
+    }
+}
+
+.bm-dash--empty { color: var(--bm-dash-muted); }
+
+.bm-dash__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.bm-dash__title { font-size: 16px; font-weight: 700; margin: 0; }
+.bm-dash__subtitle { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+
+    .bm-dash .bm-btn {
+        padding: 5px 12px;
+        border-radius: 7px;
+        font-size: 12px;
+        cursor: pointer;
+        border: 1px solid var(--bm-dash-border);
+        background: var(--bm-dash-panel);
+        color: var(--bm-dash-text);
+    }
+
+        .bm-dash .bm-btn:hover { border-color: var(--bm-dash-accent); }
+
+.bm-dash__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+}
+
+.bm-dash__stat {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 12px 14px;
+    background: var(--bm-dash-panel);
+    border: 1px solid var(--bm-dash-border);
+    border-radius: 9px;
+}
+
+.bm-dash__stat-val { font-size: 18px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.bm-dash__stat-lbl { font-size: 11px; color: var(--bm-dash-muted); text-transform: uppercase; letter-spacing: .03em; }
+
+.bm-dash__list { list-style: none; margin: 0; padding: 0; }
+
+    .bm-dash__list li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 0;
+        font-size: 13px;
+        border-bottom: 1px solid var(--bm-dash-border);
+    }
+
+    .bm-dash__list li:last-child { border-bottom: none; }
+    .bm-dash__list li span:last-child { font-variant-numeric: tabular-nums; color: var(--bm-dash-muted); }
+
+.bm-dash__muted { color: var(--bm-dash-muted); font-size: 13px; margin: 4px 0; }
+.bm-dash__foot { color: var(--bm-dash-muted); font-size: 11px; margin: 14px 0 0; }
+
+/* Top-actions rows (roadmap #9): name · share bar · count. The bar makes the distribution
+   readable at a glance; it degrades to name+count if the bar cannot render. */
+.bm-dash__action {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bm-dash__bar {
+    flex: 1 1 auto;
+    min-width: 40px;
+    height: 6px;
+    margin: 0 10px;
+    border-radius: 999px;
+    background: var(--bm-dash-panel);
+    border: 1px solid var(--bm-dash-border);
+    overflow: hidden;
+}
+
+.bm-dash__bar-fill {
+    display: block;
+    height: 100%;
+    background: var(--bm-dash-accent);
+    opacity: .85;
+}
+
+.bm-dash__count {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    color: var(--bm-dash-muted);
+}
+
+/* ── Per-model / temporal dashboard (roadmap #9 Wave 4) ───────────────────────── */
+.bm-dash {
+    --bm-chart-in:    #2563eb;
+    --bm-chart-out:   #0d9488;
+    --bm-chart-total: #7c3aed;
+    --bm-chart-req:   #db2777;
+    --bm-chart-lat:   #9333ea;
+    --bm-chart-grid:  #e3e6ea;
+    --bm-chart-text:  #6b7280;
+}
+
+@media (prefers-color-scheme: dark) {
+    .bm-dash {
+        --bm-chart-in:    #60a5fa;
+        --bm-chart-out:   #2dd4bf;
+        --bm-chart-total: #a78bfa;
+        --bm-chart-req:   #f472b6;
+        --bm-chart-lat:   #c084fc;
+        --bm-chart-grid:  #2a2e36;
+        --bm-chart-text:  #9aa1ac;
+    }
+}
+
+.bm-dash__controls { display: flex; align-items: center; gap: 8px; }
+
+.bm-dash__select {
+    padding: 5px 10px;
+    border-radius: 7px;
+    font-size: 12px;
+    max-width: 260px;
+    cursor: pointer;
+    border: 1px solid var(--bm-dash-border);
+    background: var(--bm-dash-panel);
+    color: var(--bm-dash-text);
+}
+
+.bm-dash__charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.bm-dash__chartcard {
+    padding: 12px 14px;
+    background: var(--bm-dash-panel);
+    border: 1px solid var(--bm-dash-border);
+    border-radius: 9px;
+    min-width: 0;
+}
+
+.bm-dash__chart-h { font-size: 12px; font-weight: 600; margin-bottom: 6px; color: var(--bm-dash-text); }
+
+.bm-chart { width: 100%; height: auto; display: block; }
+.bm-chart__grid { stroke: var(--bm-chart-grid); stroke-width: 1; }
+.bm-chart__line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.bm-chart__ylab, .bm-chart__xlab { fill: var(--bm-chart-text); font-size: 10px; font-family: system-ui, sans-serif; }
+
+.bm-dash__legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 11px; color: var(--bm-dash-muted); }
+    .bm-dash__legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .bm-dash__legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+.bm-dash__tablewrap { overflow-x: auto; }
+
+.bm-dash__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .bm-dash__table th, .bm-dash__table td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--bm-dash-border); white-space: nowrap; }
+    .bm-dash__table th { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--bm-dash-muted); font-weight: 600; }
+    .bm-dash__num { text-align: right; font-variant-numeric: tabular-nums; }
+    .bm-dash__total td { font-weight: 700; border-top: 2px solid var(--bm-dash-border); border-bottom: none; }
+
+.bm-dash__badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+    .bm-dash__badge--cheap     { color: #0d9488; border-color: #0d948855; background: #0d948815; }
+    .bm-dash__badge--strong    { color: #7c3aed; border-color: #7c3aed55; background: #7c3aed15; }
+    .bm-dash__badge--embedding { color: #2563eb; border-color: #2563eb55; background: #2563eb15; }
+    .bm-dash__badge--other     { color: var(--bm-dash-muted); border-color: var(--bm-dash-border); background: var(--bm-dash-panel); }
+
+/* ── Onboarding tour (#18) ─────────────────────────────────────────────────── */
+/* Rendered inside the message area, in place of the welcome panel: the tour is part of the
+   conversation surface, not an overlay on top of the host application. */
+
+.bm-tour {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px 16px;
+    margin: 8px;
+    border: 1px solid var(--bm-border);
+    border-radius: var(--bm-radius-lg);
+    background: var(--bm-bg-surface);
+}
+
+.bm-tour__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.bm-tour__count {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--bm-text-muted);
+}
+
+.bm-tour__skip {
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: var(--bm-font);
+    font-size: 11px;
+    color: var(--bm-text-muted);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+    .bm-tour__skip:hover { color: var(--bm-text-secondary); }
+
+.bm-tour__body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bm-tour__title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 650;
+    color: var(--bm-text-primary);
+}
+
+.bm-tour__text {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--bm-text-secondary);
+}
+
+/* The suggested question is the primary affordance of a step, so it reads as something to press
+   rather than as another line of prose. */
+.bm-tour__ask {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--bm-border-accent);
+    border-radius: var(--bm-radius-sm);
+    background: var(--bm-bg-elevated);
+    font-family: var(--bm-font);
+    text-align: left;
+    cursor: pointer;
+    transition: all .15s;
+}
+
+    .bm-tour__ask:hover {
+        border-color: var(--bm-accent);
+        background: var(--bm-bg-hover);
+    }
+
+.bm-tour__ask-label {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--bm-accent);
+}
+
+.bm-tour__ask-text {
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--bm-text-primary);
+}
+
+.bm-tour__link {
+    align-self: flex-start;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: var(--bm-font);
+    font-size: 11.5px;
+    color: var(--bm-text-secondary);
+    cursor: pointer;
+}
+
+    .bm-tour__link:hover { color: var(--bm-accent); }
+
+.bm-tour__url {
+    font-family: var(--bm-font-mono, monospace);
+    font-size: 11px;
+    color: var(--bm-text-muted);
+}
+
+.bm-tour__dots {
+    display: flex;
+    gap: 5px;
+    justify-content: center;
+}
+
+.bm-tour__dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--bm-border-accent);
+    transition: all .2s;
+}
+
+.bm-tour__dot--on {
+    width: 14px;
+    border-radius: 3px;
+    background: var(--bm-accent);
+}
+
+.bm-tour__actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+    .bm-tour__actions .bm-btn:disabled {
+        opacity: .4;
+        cursor: default;
+    }
+
+/* ── Generative cards (#14 L2) ─────────────────────────────────────────────── */
+
+.bm-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 2px 0 10px 38px; /* aligned with the assistant bubble, clear of the avatar */
+}
+
+.bm-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 13px;
+    border: 1px solid var(--bm-border);
+    border-left: 3px solid var(--bm-accent);
+    border-radius: var(--bm-radius-md);
+    background: var(--bm-bg-surface);
+}
+
+.bm-card--success { border-left-color: #0d9488; }
+.bm-card--warning { border-left-color: #d97706; }
+.bm-card--danger  { border-left-color: #dc2626; }
+.bm-card--info    { border-left-color: #2563eb; }
+
+.bm-card__img {
+    width: 100%;
+    max-height: 160px;
+    object-fit: cover;
+    border-radius: var(--bm-radius-sm);
+}
+
+.bm-card__head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bm-card__title {
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 650;
+    color: var(--bm-text-primary);
+}
+
+.bm-card__subtitle {
+    margin: 0;
+    font-size: 11.5px;
+    color: var(--bm-text-muted);
+}
+
+.bm-card__fields {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+}
+
+.bm-card__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.bm-card__label {
+    flex-shrink: 0;
+    font-size: 11.5px;
+    color: var(--bm-text-muted);
+}
+
+.bm-card__value {
+    margin: 0;
+    font-size: 12.5px;
+    font-weight: 500;
+    text-align: right;
+    color: var(--bm-text-primary);
+    /* A field value is arbitrary application data — never let it push the panel sideways. */
+    overflow-wrap: anywhere;
+}
+
+.bm-card__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 2px;
+}

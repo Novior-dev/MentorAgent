@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The application under test.
+
+    MentorAgent discovers actions, agents, teams, pages and skills by scanning assemblies, so a test
+    needs a real surface to point ScanAssemblies at. Keeping that surface in its own assembly is not
+    tidiness: assembly-wide scanning means anything decorated inside Novior.MentorAgent.Tests is visible to
+    every test that scans it, so a fixture added for one suite silently changes the discovered set
+    another suite asserts on. That collision already happened once. This project makes the scan
+    boundary explicit and keeps it stable as the suite grows.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,33 @@
+﻿@using Novior.MentorAgent.Abstractions.Models
+@using Novior.MentorAgent.Abstractions.Core
+@inject IOptions<MentorWidgetOptions> Options
+@inject MentorLocalizer L
+
+@{
+    var opt = Options.Value;
+    if (!opt.ShowA2AStatus || !opt.HasRemoteAgents) return;
+
+    var agents = opt.RemoteAgentDisplays;
+    var label  = agents.Count == 1 ? agents[0].Name : string.Format(L.Get("a2a.agents"), agents.Count);
+}
+
+<button class="bm-a2a-pill"
+        @onclick="Toggle"
+        title="@L.Get("a2a.pill")"
+        aria-label="@L.Get("a2a.pill")">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+         width="11" height="11" aria-hidden="true">
+        <circle cx="4"  cy="8" r="2.5" />
+        <circle cx="12" cy="4" r="2.5" />
+        <circle cx="12" cy="12" r="2.5" />
+        <path d="M6.5 7L9.5 5M6.5 9L9.5 11" />
+    </svg>
+    <span class="bm-a2a-pill__name">@label</span>
+    <span class="bm-a2a-pill__dot"></span>
+</button>
+
+@code {
+    [Parameter] public EventCallback OnToggle { get; set; }
+
+    private Task Toggle() => OnToggle.InvokeAsync();
+}

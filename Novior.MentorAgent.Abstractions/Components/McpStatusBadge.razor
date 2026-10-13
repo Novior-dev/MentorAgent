@@ -1,0 +1,60 @@
+@using Novior.MentorAgent.Abstractions.Models
+@using Novior.MentorAgent.Abstractions.Core
+@inject IOptions<MentorWidgetOptions> Options
+@inject MentorLocalizer L
+
+@{
+    var opt = Options.Value;
+    if (!opt.ShowMcpStatus || !opt.HasMcpServers || _status.Count == 0)
+        return;
+
+    var total      = _status.Count;
+    var online     = _status.Count(kv => kv.Value == true);
+    var connecting = _status.Count(kv => kv.Value == null);
+    var allOk      = online == total;
+    var anyOk      = online > 0;
+    var isConn     = connecting > 0 && online == 0;
+
+    var stateClass = isConn  ? "bm-mcp-pill--connecting"
+                   : allOk  ? "bm-mcp-pill--online"
+                   : anyOk  ? "bm-mcp-pill--warn"
+                             : "bm-mcp-pill--offline";
+
+    var label = total == 1 ? _status.Keys.First() : $"{online}/{total}";
+
+    var title = isConn  ? L.Get("mcp.connecting")
+              : allOk  ? L.Get("mcp.allOnline")
+              : anyOk  ? string.Format(L.Get("mcp.someOnline"), online, total)
+                        : L.Get("mcp.offline");
+}
+
+<button class="bm-mcp-pill @stateClass"
+        @onclick="Toggle"
+        title="@title"
+        aria-label="@title">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+         width="11" height="11" aria-hidden="true">
+        <rect x="1" y="1" width="4" height="4" rx="1" />
+        <rect x="11" y="1" width="4" height="4" rx="1" />
+        <rect x="1" y="11" width="4" height="4" rx="1" />
+        <path d="M3 5.5v2a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 13 7.5v-2" />
+        <path d="M13 11v-2" />
+    </svg>
+    <span class="bm-mcp-pill__name">@label</span>
+    <span class="bm-mcp-pill__dot"></span>
+</button>
+
+@code {
+    [Parameter] public IReadOnlyDictionary<string, bool?>? ServerStatus { get; set; }
+    [Parameter] public EventCallback OnToggle { get; set; }
+
+    private Dictionary<string, bool?> _status = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override void OnParametersSet()
+    {
+        if (ServerStatus is not null)
+            _status = new Dictionary<string, bool?>(ServerStatus, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private Task Toggle() => OnToggle.InvokeAsync();
+}

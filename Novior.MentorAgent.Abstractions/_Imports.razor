@@ -1,0 +1,6 @@
+@* Project-wide Razor imports for Novior.MentorAgent.Abstractions components.
+   Microsoft.AspNetCore.Components.Web is REQUIRED for the event-handler directives
+   (@onclick, @onchange, @bind, …) to resolve — without it they silently compile as
+   literal HTML attributes and no handler ever fires. Keep it here so every component
+   in this RCL gets it (previously only a few declared it per-file). *@
+@using Microsoft.AspNetCore.Components.Web

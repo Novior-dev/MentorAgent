@@ -1,0 +1,70 @@
+﻿@using Novior.MentorAgent.Abstractions.Models
+@inject IOptions<MentorWidgetOptions> Options
+
+@{
+    if (!Options.Value.ShowRagSources || Sources is not { Count: > 0 })
+        return;
+
+    var visible = _expanded ? Sources : Sources.Take(3).ToList();
+    var hasMore = Sources.Count > 3;
+}
+
+<div class="bm-rag-panel">
+    <div class="bm-rag-panel__divider"></div>
+    <div class="bm-rag-panel__sources">
+        @foreach (var src in visible)
+        {
+            @* Not every source has somewhere to go: a document matched inside a provider-hosted vector
+               store, or a file produced by the code interpreter, is named but not addressable. Leaving
+               href unset (Blazor omits a null attribute) keeps it a chip without making it a link that
+               lands on "#" — which looks like a broken download rather than a citation. *@
+            var link = string.IsNullOrWhiteSpace(src.SourceUrl) ? null : src.SourceUrl;
+
+            <a class="bm-rag-chip @(link is null ? "bm-rag-chip--plain" : "")"
+               href="@link"
+               target="@(link is null ? null : "_blank")"
+               rel="@(link is null ? null : "noopener noreferrer")"
+               title="@(src.Title ?? link ?? src.Content[..Math.Min(src.Content.Length, 80)])">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="bm-rag-chip__icon">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                </svg>
+                <span class="bm-rag-chip__label">@(src.Title ?? TruncateUrl(link) ?? "Source")</span>
+                @if (link is not null)
+                {
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="bm-rag-chip__ext">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                        <polyline points="15 3 21 3 21 9" />
+                        <line x1="10" y1="14" x2="21" y2="3" />
+                    </svg>
+                }
+            </a>
+        }
+        @if (hasMore && !_expanded)
+        {
+            <button class="bm-rag-chip bm-rag-chip--more" type="button" @onclick="Expand">
+                +@(Sources.Count - 3) more
+            </button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<MentorRagResult>? Sources { get; set; }
+
+    private bool _expanded = false;
+    private void Expand() => _expanded = true;
+
+    private static string? TruncateUrl(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return null;
+        try
+        {
+            var uri  = new Uri(url);
+            var host = uri.Host.Replace("www.", "");
+            var last = System.IO.Path.GetFileName(uri.AbsolutePath.TrimEnd('/'));
+            return last.Length > 0 ? $"{host}/…/{last}" : host;
+        }
+        catch { return url.Length > 40 ? url[..40] + "…" : url; }
+    }
+}

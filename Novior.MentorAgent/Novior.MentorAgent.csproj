@@ -1,0 +1,72 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+
+    <!-- Package identity — Version, Authors, License, Symbols inherited from Directory.Build.props -->
+    <PackageId>Novior.MentorAgent</PackageId>
+    <Title>Novior.MentorAgent</Title>
+    <Description>A Blazor Razor Class Library that adds an AI-powered floating chat assistant to any Blazor application, built on Microsoft Agent Framework. Supports multi-level agent orchestration (tools, handoff, group chat), page navigation, UI actions, contextual memory, streaming, voice, and security — all with zero boilerplate.</Description>
+    <PackageTags>blazor;blazor-server;blazor-auto;ai;chatbot;chat-widget;assistant;agent;multi-agent;handoff;group-chat;microsoft-agent-framework;openai;azure-openai;ollama;rag;retrieval-augmented-generation;mcp;model-context-protocol;a2a;agent-to-agent;signalr;voice;memory;skills;streaming;wasm;mentor;dotnet;csharp</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>IconMA.png</PackageIcon>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+
+    <!-- This package ships no browser assets: the widget's stylesheet, script and icons all live in
+         Novior.MentorAgent.Abstractions and are referenced as _content/Novior.MentorAgent.Abstractions/…. Without
+         this, the Razor SDK requires a wwwroot folder and publishes it under a second _content path
+         that nothing links to — which is how the copies removed in BUG-023 came to drift. -->
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+  </PropertyGroup>
+
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="\" />
+    <None Include="IconMA.png" Pack="true" PackagePath="IconMA.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Novior.MentorAgent.Abstractions\Novior.MentorAgent.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The hosted-tool cost controls (ToolFilterChatClient, HostedToolBudget, HostedToolDomainGate)
+         are internal on purpose — they are wiring, not public API. The test project drives them
+         directly rather than through a live provider, so their decisions can be asserted offline. -->
+    <InternalsVisibleTo Include="Novior.MentorAgent.Tests" />
+    <!-- NSubstitute proxies internal interfaces (IApprovalStore) through Castle DynamicProxy, which
+         emits into this assembly. Without it the mocks fail at runtime, not at compile time. -->
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+    <!-- Story 105: the MCP and A2A server endpoints live in Novior.MentorAgent.Server, which keeps this package
+         free of ASP.NET Core. They still drive the core's own handlers (tool collection, call handler,
+         A2A handler, discovery), which are wiring rather than public API. -->
+    <InternalsVisibleTo Include="Novior.MentorAgent.Server" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Story 105: the client halves of A2A and MCP only. Their ASP.NET Core server packages
+         (A2A.AspNetCore through Microsoft.Agents.AI.Hosting.A2A.AspNetCore, ModelContextProtocol.AspNetCore)
+         require Microsoft.AspNetCore.App, which does not exist for Android, iOS or Mac Catalyst — so they
+         belong to Novior.MentorAgent.Server, and a MAUI app can reference this package on every target. -->
+    <PackageReference Include="A2A" Version="1.0.0-preview2" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.18.0" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.18.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="10.0.3" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.7.0" />
+    <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
+    <!-- Story 141: Azure.AI.OpenAI, Azure.Identity and Microsoft.Extensions.AI.OpenAI are no longer
+         dependencies — the library never used them; the host picks its provider package and version.
+         They used to bring this one in: ProviderStatus reads the HTTP status of the provider SDKs'
+         ClientResultException (OpenAI, Azure). Same version they resolved. -->
+    <PackageReference Include="System.ClientModel" Version="1.10.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Utility\" />
+  </ItemGroup>
+
+</Project>

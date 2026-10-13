@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.0" />
+    <PackageReference Include="FluentAssertions" Version="7.2.0" />
+    <PackageReference Include="NSubstitute" Version="5.3.0" />
+    <!-- 10.0.10, not 10.0.3: bUnit pulls Components.Web 10.0.10, which requires it. Test-project
+         only, so it does not affect what the packages ship. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <!-- Hosts Novior.MentorAgent.Server in-memory: TestServer gives a real hub + real endpoints without
+         a socket, which is the only way to test the transport layer deterministically. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.3" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.3" />
+    <!-- Renders the .razor components without a browser. Nothing else can reach a component's
+         markup, and the components carry real logic: the bubble's Markdown renderer is the
+         XSS boundary, and the badges encode three-valued state in CSS classes. -->
+    <PackageReference Include="bunit" Version="2.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
+    <ProjectReference Include="..\Novior.MentorAgent.Declarative\Novior.MentorAgent.Declarative.csproj" />
+    <ProjectReference Include="..\Novior.MentorAgent.Tests.App\Novior.MentorAgent.Tests.App.csproj" />
+    <ProjectReference Include="..\Novior.MentorAgent.Server\Novior.MentorAgent.Server.csproj" />
+    <ProjectReference Include="..\Novior.MentorAgent.Blazor\Novior.MentorAgent.Blazor.csproj" />
+  </ItemGroup>
+
+</Project>

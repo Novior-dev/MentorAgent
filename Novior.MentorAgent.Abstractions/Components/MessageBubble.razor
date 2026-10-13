@@ -1,0 +1,234 @@
+@using System.Linq
+@using System.Net
+@using System.Text
+@using System.Text.RegularExpressions
+@using Novior.MentorAgent.Abstractions.Models
+@inject IOptions<MentorWidgetOptions> Options
+
+<div class="bm-bubble @(IsUser ? "bm-bubble--user" : "bm-bubble--assistant") @(IsStreaming ? "bm-bubble--streaming" : "")">
+
+    @if (!IsUser)
+    {
+        var avatarUrl = string.IsNullOrWhiteSpace(Options.Value.AvatarUrl)
+            ? "_content/Novior.MentorAgent.Abstractions/IconMA.png"
+            : Options.Value.AvatarUrl;
+        <div class="bm-bubble__avatar">
+            <img src="@avatarUrl" alt="AI" class="bm-avatar-img" />
+        </div>
+    }
+
+    <div class="bm-bubble__body">
+        @* Attached images (#13) — rendered from the message's own content parts *@
+        @if (Images.Count > 0)
+        {
+            <div class="bm-bubble__images">
+                @foreach (var src in Images)
+                {
+                    <img class="bm-bubble__image" src="@src" alt="" loading="lazy" />
+                }
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(Message.Text) || IsStreaming || Images.Count == 0)
+        {
+            <div class="bm-bubble__content">
+                @((MarkupString)RenderMarkdown(Message.Text ?? string.Empty))
+                @if (IsStreaming)
+                {
+                    <span class="bm-cursor">▋</span>
+                }
+            </div>
+        }
+        <div class="bm-bubble__time">@(SentAt?.ToString("HH:mm") ?? string.Empty)</div>
+        @if (!IsUser && Sources is { Count: > 0 })
+        {
+            <RagSourcePanel Sources="Sources" />
+        }
+    </div>
+
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ChatMessage                    Message    { get; set; } = default!;
+    [Parameter]                 public bool                           IsStreaming { get; set; }
+    [Parameter]                 public DateTime?                      SentAt     { get; set; }
+    [Parameter]                 public IReadOnlyList<MentorRagResult>? Sources    { get; set; }
+
+    private bool IsUser => Message.Role == ChatRole.User;
+
+    // ── Attached images (#13) ────────────────────────────────────────────────────
+    // Reads the message's own content parts, so the bubble mirrors exactly what was sent
+    // to the model: DataContent.Uri is already a data: URI, UriContent is a remote link.
+    private IReadOnlyList<string> Images
+    {
+        get
+        {
+            var list = new List<string>();
+            foreach (var c in Message.Contents)
+            {
+                switch (c)
+                {
+                    case DataContent d when IsImage(d.MediaType):
+                        list.Add(d.Uri);
+                        break;
+                    case UriContent u when IsImage(u.MediaType):
+                        list.Add(u.Uri.ToString());
+                        break;
+                }
+            }
+            return list;
+        }
+    }
+
+    private static bool IsImage(string? mediaType)
+        => mediaType is not null && mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    // ── Safe minimal Markdown → HTML (Generative UI, Level 1) ────────────────────
+    // Renders GitHub-flavoured Markdown tables, bullet/numbered lists, fenced/inline
+    // code and bold/italic. EVERY piece of model text is HTML-encoded before any tag
+    // is emitted (see RenderInline / the code-block extraction), so the model can only
+    // supply DATA, never markup — no raw HTML reaches the DOM (XSS-safe by construction).
+    private static string RenderMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+
+        // 1) Pull fenced code blocks out first so their content is never parsed as a
+        //    table/list/inline. Restore them at the very end. The placeholder uses only
+        //    characters HtmlEncode leaves untouched.
+        var codeBlocks = new List<string>();
+        text = Regex.Replace(text, @"```(?:\w+)?\r?\n?([\s\S]*?)```", m =>
+        {
+            var body = WebUtility.HtmlEncode(m.Groups[1].Value.Trim());
+            codeBlocks.Add($"<pre class=\"bm-code\"><code>{body}</code></pre>");
+            return $"@@BMCODE{codeBlocks.Count - 1}@@";
+        });
+
+        // 2) Line-based block parsing (tables and lists); inline formatting per line.
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        var sb = new StringBuilder();
+        var i = 0;
+        while (i < lines.Length)
+        {
+            var line = lines[i];
+
+            // Table = a row containing '|' immediately followed by a separator row (| --- | --- |).
+            if (line.Contains('|') && i + 1 < lines.Length && IsTableSeparator(lines[i + 1]))
+            {
+                i = AppendTable(sb, lines, i);
+                continue;
+            }
+
+            // List = a run of consecutive bullet (-, *, +) or ordered (1.) items.
+            if (IsListItem(line))
+            {
+                i = AppendList(sb, lines, i);
+                continue;
+            }
+
+            // Normal line.
+            var placeholderOnly = Regex.IsMatch(line.Trim(), @"^@@BMCODE\d+@@$");
+            sb.Append(RenderInline(line));
+            if (!placeholderOnly && i < lines.Length - 1)
+                sb.Append("<br/>");
+            i++;
+        }
+
+        var html = sb.ToString();
+
+        // 3) Restore code blocks.
+        html = Regex.Replace(html, @"@@BMCODE(\d+)@@", m => codeBlocks[int.Parse(m.Groups[1].Value)]);
+        return html;
+    }
+
+    // A separator row is made only of '|', '-', ':' and spaces, and has at least one '|' and '-'.
+    private static bool IsTableSeparator(string line)
+    {
+        var t = line.Trim();
+        return t.Length > 0 && t.Contains('|') && t.Contains('-')
+            && t.All(ch => ch is '|' or '-' or ':' or ' ');
+    }
+
+    private static bool IsListItem(string line) => Regex.IsMatch(line, @"^\s*([-*+]|\d+\.)\s+\S");
+    private static bool IsOrdered(string line)  => Regex.IsMatch(line, @"^\s*\d+\.\s+");
+
+    private static string[] SplitCells(string row)
+    {
+        var t = row.Trim();
+        if (t.StartsWith("|")) t = t[1..];
+        if (t.EndsWith("|"))   t = t[..^1];
+        return t.Split('|').Select(c => c.Trim()).ToArray();
+    }
+
+    private static string[] ParseAligns(string separator, int count)
+    {
+        var cells = SplitCells(separator);
+        var aligns = new string[count];
+        for (var c = 0; c < count; c++)
+        {
+            var spec = c < cells.Length ? cells[c].Trim() : string.Empty;
+            var left = spec.StartsWith(":");
+            var right = spec.EndsWith(":");
+            aligns[c] = (left, right) switch
+            {
+                // Classes, not style attributes: a page whose CSP has no style-src 'unsafe-inline'
+                // refuses those, and a model's table would log an error and lose its alignment.
+                (true, true)  => " class=\"bm-align-center\"",
+                (false, true) => " class=\"bm-align-right\"",
+                _             => string.Empty,
+            };
+        }
+        return aligns;
+    }
+
+    private static int AppendTable(StringBuilder sb, string[] lines, int start)
+    {
+        var headers = SplitCells(lines[start]);
+        var aligns = ParseAligns(lines[start + 1], headers.Length);
+
+        sb.Append("<div class=\"bm-table-wrap\"><table class=\"bm-table\"><thead><tr>");
+        for (var c = 0; c < headers.Length; c++)
+            sb.Append($"<th{aligns[c]}>{RenderInline(headers[c])}</th>");
+        sb.Append("</tr></thead><tbody>");
+
+        var i = start + 2;
+        for (; i < lines.Length; i++)
+        {
+            var row = lines[i];
+            if (string.IsNullOrWhiteSpace(row) || !row.Contains('|')) break;
+            var cells = SplitCells(row);
+            sb.Append("<tr>");
+            for (var c = 0; c < headers.Length; c++)
+            {
+                var val = c < cells.Length ? cells[c] : string.Empty;
+                sb.Append($"<td{aligns[c]}>{RenderInline(val)}</td>");
+            }
+            sb.Append("</tr>");
+        }
+        sb.Append("</tbody></table></div>");
+        return i;
+    }
+
+    private static int AppendList(StringBuilder sb, string[] lines, int start)
+    {
+        var ordered = IsOrdered(lines[start]);
+        sb.Append(ordered ? "<ol class=\"bm-list\">" : "<ul class=\"bm-list\">");
+        var i = start;
+        for (; i < lines.Length && IsListItem(lines[i]); i++)
+        {
+            var content = Regex.Replace(lines[i], @"^\s*([-*+]|\d+\.)\s+", string.Empty);
+            sb.Append($"<li>{RenderInline(content)}</li>");
+        }
+        sb.Append(ordered ? "</ol>" : "</ul>");
+        return i;
+    }
+
+    // Inline formatting for a single text run. HTML-encodes first (XSS-safe), then applies
+    // inline code, bold and italic. Code-block placeholders pass through untouched.
+    private static string RenderInline(string text)
+    {
+        text = WebUtility.HtmlEncode(text);
+        text = Regex.Replace(text, @"`([^`]+)`", "<code class=\"bm-inline-code\">$1</code>");
+        text = Regex.Replace(text, @"\*\*(.+?)\*\*|__(.+?)__", m => $"<strong>{m.Groups[1].Value}{m.Groups[2].Value}</strong>");
+        text = Regex.Replace(text, @"\*(.+?)\*|_(.+?)_", m => $"<em>{m.Groups[1].Value}{m.Groups[2].Value}</em>");
+        return text;
+    }
+}

@@ -1,0 +1,44 @@
+﻿@using Novior.MentorAgent.Abstractions.Core
+@using Novior.MentorAgent.Abstractions.Models
+@inject MentorLocalizer L
+@inject IOptions<MentorWidgetOptions> Options
+
+<div class="bm-welcome">
+    <div class="bm-welcome__orb">
+        @{
+            var avatarUrl = string.IsNullOrWhiteSpace(Options.Value.AvatarUrl)
+                ? "_content/Novior.MentorAgent.Abstractions/IconMA.png"
+                : Options.Value.AvatarUrl;
+        }
+        <img src="@avatarUrl" alt="@BotName" class="bm-avatar-img" />
+    </div>
+    <h3 class="bm-welcome__title">@BotName</h3>
+    <p class="bm-welcome__subtitle">
+        @if (!string.IsNullOrWhiteSpace(WelcomeMessage))
+        {
+            @((MarkupString)WelcomeMessage)
+        }
+        else
+        {
+            @((MarkupString)L.Get("welcome.subtitle"))
+        }
+    </p>
+    @if (EnableSuggestions && OnChipClick.HasDelegate)
+    {
+        var chipWhat  = L.Get("welcome.chip.what");
+        var chipStart = L.Get("welcome.chip.start");
+        var chipHow   = L.Get("welcome.chip.how");
+        <div class="bm-welcome__chips">
+            <button class="bm-chip" type="button" @onclick="() => OnChipClick.InvokeAsync(chipWhat)">@chipWhat</button>
+            <button class="bm-chip" type="button" @onclick="() => OnChipClick.InvokeAsync(chipStart)">@chipStart</button>
+            <button class="bm-chip" type="button" @onclick="() => OnChipClick.InvokeAsync(chipHow)">@chipHow</button>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string BotName { get; set; } = "Mentor AI";
+    [Parameter] public string? WelcomeMessage { get; set; }
+    [Parameter] public bool EnableSuggestions { get; set; } = true;
+    [Parameter] public EventCallback<string> OnChipClick { get; set; }
+}

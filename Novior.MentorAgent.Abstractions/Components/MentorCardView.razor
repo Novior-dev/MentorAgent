@@ -1,0 +1,91 @@
+@using Novior.MentorAgent.Abstractions.Models
+
+@*
+    Built-in renderer for a MentorCard (roadmap #14, generative UI L2).
+
+    XSS-safe by construction, like MessageBubble: every value goes through Razor's `@` interpolation,
+    which HTML-encodes. There is deliberately no MarkupString anywhere in this file — a card holds
+    data, never markup, and the moment that stops being true a tool result becomes an injection
+    vector.
+
+    Presentational: it raises callbacks and knows nothing about the orchestrator, so the same
+    component serves Blazor Server and WebAssembly.
+*@
+
+<div class="bm-card bm-card--@Accent">
+
+    @if (!string.IsNullOrWhiteSpace(Card.ImageUrl))
+    {
+        <img class="bm-card__img" src="@Card.ImageUrl" alt="@(Card.Title ?? Card.Kind)" loading="lazy" />
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Card.Title) || !string.IsNullOrWhiteSpace(Card.Subtitle))
+    {
+        <div class="bm-card__head">
+            @if (!string.IsNullOrWhiteSpace(Card.Title))
+            {
+                <p class="bm-card__title">@Card.Title</p>
+            }
+            @if (!string.IsNullOrWhiteSpace(Card.Subtitle))
+            {
+                <p class="bm-card__subtitle">@Card.Subtitle</p>
+            }
+        </div>
+    }
+
+    @if (Card.Fields is { Count: > 0 })
+    {
+        <dl class="bm-card__fields">
+            @foreach (var f in Card.Fields)
+            {
+                <div class="bm-card__row">
+                    <dt class="bm-card__label">@f.Label</dt>
+                    <dd class="bm-card__value">@f.Value</dd>
+                </div>
+            }
+        </dl>
+    }
+
+    @if (Card.Actions is { Count: > 0 })
+    {
+        <div class="bm-card__actions">
+            @foreach (var a in Card.Actions)
+            {
+                <button class="bm-btn bm-btn--ghost" type="button"
+                        @onclick="() => Dispatch(a)">@a.Label</button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public MentorCard Card { get; set; } = default!;
+
+    /// <summary>
+    /// Raised with the pressed action. The host decides what each kind means. Left unset inside a
+    /// <see cref="ChatWidget"/>'s <c>CardTemplate</c>, the widget's own dispatcher handles the button.
+    /// </summary>
+    [Parameter] public EventCallback<MentorCardAction> OnAction { get; set; }
+
+    /// <summary>Name of the dispatcher <see cref="ChatWidget"/> cascades around the cards it renders.</summary>
+    internal const string WidgetDispatchName = "MentorAgent.CardDispatch";
+
+    // ChatWidget cascades its own handler around every card, so a CardTemplate that falls back to
+    // <MentorCardView Card="card" /> keeps working buttons: the handler is private to the widget, and
+    // before this a templated card rendered its buttons and did nothing when they were pressed.
+    [CascadingParameter(Name = WidgetDispatchName)] private Func<MentorCardAction, Task>? WidgetDispatch { get; set; }
+
+    private Task Dispatch(MentorCardAction action)
+        => OnAction.HasDelegate ? OnAction.InvokeAsync(action)
+         : WidgetDispatch is { } dispatch ? dispatch(action)
+         : Task.CompletedTask;
+
+    private string Accent => Card.Accent switch
+    {
+        MentorCardAccent.Success => "success",
+        MentorCardAccent.Warning => "warning",
+        MentorCardAccent.Danger  => "danger",
+        MentorCardAccent.Info    => "info",
+        _                        => "default",
+    };
+}

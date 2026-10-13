@@ -1,0 +1,109 @@
+<Project>
+
+  <!--
+    CHANGELOG.md is the single source of every package's release notes (since 1.0.0-rc.13).
+
+    Before, <PackageReleaseNotes> was written by hand in all five .csproj files: about 30 KB each, the
+    same text five times, trimmed by hand whenever a package neared nuget.org's 35,000-character cap.
+    Now each package's notes are the CHANGELOG section for its version, and the whole CHANGELOG ships
+    inside every package.
+
+    - The section is "## [<PackageVersion>]". While a version is being prepared it has none yet, so the
+      notes come from "## [Unreleased]" (every build packs: GeneratePackageOnBuild). At release, rename
+      [Unreleased] to the version with its date and open a new empty [Unreleased].
+    - MENTORCL001: neither section exists, or it is empty. MENTORCL002: the notes exceed 35,000 chars.
+  -->
+  <PropertyGroup>
+    <MentorChangelogPath>$(MSBuildThisFileDirectory)CHANGELOG.md</MentorChangelogPath>
+    <MentorThirdPartyNoticesPath>$(MSBuildThisFileDirectory)THIRD-PARTY-NOTICES.md</MentorThirdPartyNoticesPath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MentorChangelogPath)" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MentorThirdPartyNoticesPath)" Pack="true" PackagePath="\" Visible="false"
+          Condition="Exists('$(MentorThirdPartyNoticesPath)')" />
+  </ItemGroup>
+
+  <UsingTask TaskName="MentorExtractChangelogSection"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <ChangelogPath ParameterType="System.String" Required="true" />
+      <Version ParameterType="System.String" Required="true" />
+      <MaxLength ParameterType="System.Int32" Required="true" />
+      <Notes ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Text.RegularExpressions" />
+      <Using Namespace="Microsoft.Build.Framework" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        if (!File.Exists(ChangelogPath))
+        {
+            Log.LogError(null, "MENTORCL001", null, ChangelogPath, 0, 0, 0, 0, "CHANGELOG.md was not found.");
+            return false;
+        }
+
+        var text = File.ReadAllText(ChangelogPath).Replace("\r\n", "\n");
+        Func<string, Match> section = heading => Regex.Match(text,
+            @"^## \[" + Regex.Escape(heading) + @"\](?<date>[^\n]*)\n(?<body>.*?)(?=^## |^\[[^\]\n]+\]:\s|\z)",
+            RegexOptions.Multiline | RegexOptions.Singleline);
+
+        var match = section(Version);
+        if (!match.Success)
+        {
+            match = section("Unreleased");
+            Log.LogMessage(MessageImportance.Normal,
+                "CHANGELOG.md has no section for " + Version + "; the release notes come from [Unreleased].");
+        }
+
+        var body = match.Success
+            ? Regex.Replace(match.Groups["body"].Value, @"<!--.*?-->", "", RegexOptions.Singleline).Trim()
+            : "";
+        if (body.Length == 0)
+        {
+            Log.LogError(null, "MENTORCL001", null, ChangelogPath, 0, 0, 0, 0,
+                "CHANGELOG.md has no non-empty section for " + Version + ", nor an [Unreleased] one.");
+            return false;
+        }
+
+        var date = match.Groups["date"].Value.Trim();
+        Notes = Version + (date.Length > 0 ? " " + date : "") + "\n\n" + body +
+                "\n\nThe full history is in CHANGELOG.md, inside this package.";
+
+        if (Notes.Length > MaxLength)
+        {
+            Log.LogError(null, "MENTORCL002", null, ChangelogPath, 0, 0, 0, 0,
+                "The release notes for " + Version + " are " + Notes.Length + " characters; nuget.org accepts " + MaxLength + ".");
+            return false;
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="MentorReleaseNotesFromChangelog"
+          BeforeTargets="GenerateNuspec"
+          Condition="'$(IsPackable)' == 'true'">
+    <MentorExtractChangelogSection ChangelogPath="$(MentorChangelogPath)"
+                                   Version="$(PackageVersion)"
+                                   MaxLength="35000">
+      <Output TaskParameter="Notes" PropertyName="PackageReleaseNotes" />
+    </MentorExtractChangelogSection>
+  </Target>
+
+  <!-- The five packages depend on each other at their exact version: [1.0.0], not >= 1.0.0. They share
+       internals (InternalsVisibleTo from Abstractions to the core and Blazor, from the core to Server),
+       so a host that updated one of them alone would fail at run time, not at build time. Pack writes a
+       ProjectReference as >= its version; this rewrites the version pack reads into an exact range. -->
+  <Target Name="MentorExactProjectReferenceVersions"
+          AfterTargets="_GetProjectReferenceVersions"
+          Condition="'$(IsPackable)' == 'true'">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Condition="'%(_ProjectReferencesWithVersions.ProjectVersion)' != ''">
+        <ProjectVersion>[%(_ProjectReferencesWithVersions.ProjectVersion)]</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+    </ItemGroup>
+  </Target>
+
+</Project>

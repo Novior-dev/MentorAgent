@@ -1,0 +1,38 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+
+    <!-- Package identity — Version, Authors, License, Symbols inherited from Directory.Build.props -->
+    <PackageId>Novior.MentorAgent.Blazor</PackageId>
+    <Title>Novior.MentorAgent.Blazor</Title>
+    <Description>Blazor WebAssembly client for MentorAgent. Install in your Blazor WASM / Blazor Auto client project. Connects to a Novior.MentorAgent.Server hub via SignalR and provides the same ChatWidget experience as Blazor Server.</Description>
+    <PackageTags>blazor;blazor-wasm;blazor-auto;webassembly;wasm;ai;chatbot;chat-widget;assistant;agent;signalr;streaming;voice;rag;memory;skills;mentor;dotnet;csharp</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>IconMA.png</PackageIcon>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="\" />
+    <None Include="..\Novior.MentorAgent\IconMA.png" Pack="true" PackagePath="IconMA.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Novior.MentorAgent.Abstractions\Novior.MentorAgent.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The WASM services are internal by design: they are wiring, not API. The test project needs
+         to reach them because nothing else can — this package has no UI surface of its own. -->
+    <InternalsVisibleTo Include="Novior.MentorAgent.Tests" />
+  </ItemGroup>
+
+</Project>
