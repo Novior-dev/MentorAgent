@@ -171,12 +171,22 @@
             {
                 // Classes, not style attributes: a page whose CSP has no style-src 'unsafe-inline'
                 // refuses those, and a model's table would log an error and lose its alignment.
-                (true, true)  => " class=\"bm-align-center\"",
-                (false, true) => " class=\"bm-align-right\"",
+                (true, true)  => "bm-align-center",
+                (false, true) => "bm-align-right",
                 _             => string.Empty,
             };
         }
         return aligns;
+    }
+
+    // A cell holding only a number, an amount, a date or a time: digits and no letters. It stays on one line, since a
+    // browser breaks "2026-10-16" after a hyphen when the column is narrow (BUG-193).
+    private static readonly Regex NumberCell = new(@"^(?=.*\d)[^\p{L}]{1,32}$", RegexOptions.Compiled);
+
+    private static string ClassAttribute(params string[] classes)
+    {
+        var names = string.Join(' ', classes.Where(c => c.Length > 0));
+        return names.Length == 0 ? string.Empty : $" class=\"{names}\"";
     }
 
     private static int AppendTable(StringBuilder sb, string[] lines, int start)
@@ -186,7 +196,7 @@
 
         sb.Append("<div class=\"bm-table-wrap\"><table class=\"bm-table\"><thead><tr>");
         for (var c = 0; c < headers.Length; c++)
-            sb.Append($"<th{aligns[c]}>{RenderInline(headers[c])}</th>");
+            sb.Append($"<th{ClassAttribute(aligns[c])}>{RenderInline(headers[c])}</th>");
         sb.Append("</tr></thead><tbody>");
 
         var i = start + 2;
@@ -199,7 +209,8 @@
             for (var c = 0; c < headers.Length; c++)
             {
                 var val = c < cells.Length ? cells[c] : string.Empty;
-                sb.Append($"<td{aligns[c]}>{RenderInline(val)}</td>");
+                var number = NumberCell.IsMatch(val) ? "bm-num" : string.Empty;
+                sb.Append($"<td{ClassAttribute(aligns[c], number)}>{RenderInline(val)}</td>");
             }
             sb.Append("</tr>");
         }

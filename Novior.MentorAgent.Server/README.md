@@ -75,7 +75,7 @@ Expose a fully-featured AI assistant backend from **any ASP.NET Core application
 | `/mentor-hub` | **SignalR** | Blazor WASM, MAUI, console .NET, any SignalR client |
 | `/mentor/chat` | **SSE streaming** | React, Vue, Angular, fetch API, curl — no library needed. `GET` for text, `POST` for [text + images](#multimodal-image-input) |
 | `/mentor/approve` | **HTTP POST** | All clients — HITL confirmation/rejection (see [HITL note](#hitl--confirming-actions)) |
-| `/mentor/cancel` | **HTTP POST** | All SignalR clients — stops the in-flight turn (`?connectionId=...`). HTTP, not a hub method: SignalR cannot dispatch one while `SendMessage` is streaming. Returns **404** when that connection has no live scope — a normal race if Stop is pressed just as the turn ends, so do not treat it as an error |
+| `/mentor/cancel` | **HTTP POST** | All SignalR clients — stops the in-flight turn (`?connectionId=...`). HTTP, not a hub method: SignalR cannot dispatch one while `SendMessage` is streaming. Returns **200** when the connection exists, even if no turn is running, and **404** when the connection is closed or the id is unknown: the connection's turn stopped when it closed, so reconnect before sending again |
 | `/mentor/tour` | **HTTP GET** | All clients — [onboarding tour](#onboarding-tour) steps as JSON |
 | `/mentor/session` | **HTTP GET / POST** | All SignalR clients: saves and restores the connection's conversation (`?connectionId=...`). `GET` returns the snapshot — opaque, protected with ASP.NET Core Data Protection and bound to the connection's user (`204` when there is nothing to save yet). `POST` with that snapshot as JSON body restores it (`400` if it is not one this server issued for this user, was edited, cannot be used by this host, or does not parse; `415` unless the request's content type is JSON). Owner-checked like approve/cancel, before the body is read. A `404` right after connecting means the connection's scope is not registered yet: restore after the first hub call, or retry once |
 | `/mentor/admin/metrics` | **HTTP GET** | Operator dashboards — [token & cost snapshot](#token--cost-dashboard), role-gated. Never expose to end users |
@@ -628,7 +628,8 @@ export function useMentorHub(hubUrl: string, getToken?: () => string | Promise<s
     // Cancel over HTTP, not the hub — a hub call cannot run while SendMessage is streaming.
     const cancel  = async () => {
         const r = await http(`/mentor/cancel?connectionId=${connRef.current?.connectionId}`, { method: 'POST' });
-        if (!r?.ok && r?.status !== 404) showError(`Stop did not reach the server (${r ? `HTTP ${r.status}` : 'no response'}).`);  // 404: the turn had already ended
+        if (r?.status === 404) showError('The connection was closed, and its turn stopped with it: reconnect to go on.');  // 404: the connection is gone
+        else if (!r?.ok) showError(`Stop did not reach the server (${r ? `HTTP ${r.status}` : 'no response'}).`);
     };
     const reset   = () => { setMessages([]); connRef.current?.invoke('ResetSession'); };
 
@@ -856,7 +857,8 @@ export class MentorHubService implements OnDestroy {
     // Cancel over HTTP, not the hub — a hub call cannot run while SendMessage is streaming.
     cancel  = async () => {
         const r = await this.http(`/mentor/cancel?connectionId=${this.connection.connectionId}`, { method: 'POST' });
-        if (!r?.ok && r?.status !== 404) this.showError(`Stop did not reach the server (${r ? `HTTP ${r.status}` : 'no response'}).`);  // 404: the turn had already ended
+        if (r?.status === 404) this.showError('The connection was closed, and its turn stopped with it: reconnect to go on.');  // 404: the connection is gone
+        else if (!r?.ok) this.showError(`Stop did not reach the server (${r ? `HTTP ${r.status}` : 'no response'}).`);
     };
     reset   = () => { this.messages.set([]); this.connection.invoke('ResetSession'); };
 
@@ -1058,7 +1060,8 @@ export function useMentorHub(hubUrl: string, getToken?: () => string | Promise<s
     // Cancel over HTTP, not the hub — a hub call cannot run while SendMessage is streaming.
     const cancel = async () => {
         const r = await http(`/mentor/cancel?connectionId=${connection.connectionId}`, { method: 'POST' });
-        if (!r?.ok && r?.status !== 404) showError(`Stop did not reach the server (${r ? `HTTP ${r.status}` : 'no response'}).`);  // 404: the turn had already ended
+        if (r?.status === 404) showError('The connection was closed, and its turn stopped with it: reconnect to go on.');  // 404: the connection is gone
+        else if (!r?.ok) showError(`Stop did not reach the server (${r ? `HTTP ${r.status}` : 'no response'}).`);
     };
     const reset  = () => { messages.value = []; connection.invoke('ResetSession'); };
 
@@ -1324,6 +1327,11 @@ Every attachment is **re-validated server-side** against the allow-list, the siz
 ### React
 
 ```tsx
+import { useState, type ClipboardEvent } from 'react';
+import type { HubConnection } from '@microsoft/signalr';
+
+type Attachment = { mimeType: string; dataBase64?: string; url?: string; fileName?: string };  // the wire format above
+
 const fileToAttachment = (file: File) => new Promise<Attachment>((resolve) => {
   const reader = new FileReader();
   reader.onload = () => {
@@ -1334,17 +1342,31 @@ const fileToAttachment = (file: File) => new Promise<Attachment>((resolve) => {
 });
 
 // upload · paste · drag & drop · URL — all produce the same Attachment[]
-<textarea
-  onPaste={async e => {
+export function Composer({ connection }: { connection: HubConnection }) {
+  const [text, setText] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  const onPaste = async (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = [...e.clipboardData.items]
       .filter(i => i.kind === 'file')
       .map(i => i.getAsFile())
       .filter((f): f is File => !!f && f.type.startsWith('image/'));
     if (files.length) setAttachments(await Promise.all(files.map(fileToAttachment)));
-  }}
-/>
+  };
 
-await connection.invoke('SendMessage', text, attachments);
+  const send = async () => {
+    await connection.invoke('SendMessage', text, attachments.length ? attachments : null);
+    setText('');
+    setAttachments([]);
+  };
+
+  return (
+    <>
+      <textarea value={text} onChange={e => setText(e.target.value)} onPaste={onPaste} />
+      <button onClick={send}>Send</button>
+    </>
+  );
+}
 ```
 
 ### Angular
@@ -1725,7 +1747,7 @@ are the reason the assistant can navigate, delegate and remember without you wir
 | `navigate_to` | Always (useful only with at least one `[MentorPage]`) | The assistant asks the client to change page. Over SignalR this surfaces as the **`NavigationRequested`** event, over SSE as a **`navigation`** frame — *your* client decides how to route (React Router, Angular Router, MAUI Shell) |
 | `route_to_specialist` | At least one `[MentorAgent]`, agent-source agent (e.g. `Novior.MentorAgent.Declarative`) or `RemoteAgents` entry | `route_to_specialist(request, specialist?)`: hands the turn to a Level-2 specialist or a remote A2A agent through the handoff workflow and returns the specialist's words, or `NOT DELEGATED` / `DELEGATION FAILED`. On a host with `RemoteAgents` the answer opens with a note saying whether it is this application's data or the remote system's |
 | `{action_name}` | A client registered UI actions for the current page | One tool per registered action, injected per call, visible only while that page is active |
-| `remember` / `forget_all` | `UseMemoryContext = true` | Saves a durable fact about the user, or clears their memory on request. With `MemoryAutoCapture` the writer runs after the turn instead and `remember` is omitted |
+| `remember` / `forget_all` | `UseMemoryContext = true` | Saves a durable fact about the user, or clears their memory on request. With `MemoryAutoCapture` the writer runs after the turn instead and `remember` is omitted — except on Path B without a `ClassifierChatClient`, where `remember` is the writer |
 | `load_skill` | `EnableSkills = true` | Loads the full instructions of a skill on demand, instead of paying for them on every turn |
 | `read_skill_resource` | `EnableSkills = true` + a skill has resource files | Reads one resource file attached to a skill |
 
@@ -1848,7 +1870,7 @@ builder.Services.AddMentorAgent(options =>
 options.HitlMode = MentorHitlMode.Native;   // default: MentorHitlMode.Blocking
 ```
 
-`Blocking` (default) parks the turn on a `TaskCompletionSource` — one model round-trip, streaming stays alive. `Native` uses the AF standard instead (`ApprovalRequiredAIFunction` → `ToolApprovalRequestContent` → `ToolApprovalResponseContent`), which costs one extra round-trip per approved call but makes the flow interoperable with AF workflows and AF-native hosts.
+`Blocking` (default) parks the turn on a `TaskCompletionSource` — one agent run, streaming stays alive. `Native` uses the AF standard instead (`ApprovalRequiredAIFunction` → `ToolApprovalRequestContent` → `ToolApprovalResponseContent`): the model calls are the same, but each round of confirmations adds one agent run and the reply arrives in two segments, before and after the banner. In exchange the flow is interoperable with AF workflows and AF-native hosts.
 
 **Your clients need no changes.** Both modes emit the same `ConfirmationRequired(actionId, toolName, message)` event and accept the same `POST /mentor/approve` reply, so React/Angular/Vue/WASM code written for one mode works unchanged with the other.
 
@@ -1876,7 +1898,7 @@ public class OrdersPage { }
 
 [MentorPage(Url = "/products", Name = "Products",
     Description = "Product catalog with stock and pricing",
-    HasUIActions = true,     // waited on only inside a Blazor Server circuit — never for hub/SSE/A2A turns
+    HasUIActions = true,     // waited on only on Blazor Server or in MAUI Blazor Hybrid — never for hub/SSE/A2A turns
     ReadyTimeout = 3000)]    // ms — default is 2000
 public class ProductsPage { }
 
@@ -1889,7 +1911,7 @@ public class FullDemoPage { }
 
 The AI calls `navigate_to("/orders")` automatically after relevant actions, or when the user asks to go to a page by name.
 
-> **`HasUIActions` on a headless server.** `navigate_to` waits for `PageContext.SignalReady()` only when the turn runs inside an interactive Blazor Server circuit. A turn that arrives over the SignalR hub (WebAssembly, React, MAUI…), SSE or A2A has no circuit, so nothing on the server could ever signal "ready": `navigate_to` does not wait (a Debug log records it) and returns at once. The new page's UI actions reach the model with the client's next `UpdatePageContext` snapshot — that is, on the user's next message. Setting `HasUIActions` costs nothing here, so one `[MentorPage]` class can serve both a Blazor Server host and headless clients.
+> **`HasUIActions` on a headless server.** `navigate_to` waits for `PageContext.SignalReady()` only when the page runs in the same process as the turn — a Blazor Server circuit or a MAUI Blazor Hybrid app. A turn that arrives over the SignalR hub (WebAssembly, React, a MAUI app with its own native UI…), SSE or A2A has no page there, so nothing on the server could ever signal "ready": `navigate_to` does not wait (a Debug log records it) and returns at once. The new page's UI actions reach the model with the client's next `UpdatePageContext` snapshot — that is, on the user's next message. Setting `HasUIActions` costs nothing here, so one `[MentorPage]` class can serve both a Blazor Server host and headless clients.
 
 ---
 
@@ -1907,7 +1929,7 @@ options.MemoryAutoCapture       = true;
 options.MemoryRelevanceFiltering = true;
 ```
 
-**How capture works** — on Path A (a `ChatClient` is configured) `MemoryAutoCapture` is the writer: after each user message a small extraction call saves facts reliably, even for phrasings like *"Ciao, mi chiamo Antonio"*. The redundant `remember` tool is dropped on this path; `forget_all` stays. On Path B (a pre-built `Agent`, no `ChatClient`) it falls back to the `remember` tool. Verify in the logs: `[MentorAgent:Memory] Auto-capture saved 1 fact(s): user_name`.
+**How capture works** — on Path A (a `ChatClient` is configured), and on Path B with a `ClassifierChatClient`, `MemoryAutoCapture` is the writer: after each user message a small extraction call saves facts reliably, even for phrasings like *"Ciao, mi chiamo Antonio"*. The redundant `remember` tool is dropped then; `forget_all` stays. On Path B without a classifier it falls back to the `remember` tool, and the startup log says which of the two writes. Verify in the logs: `[MentorAgent:Memory] Auto-capture saved 1 fact(s): user_name`.
 
 > ⚠️ The default store is **in-memory** (lost on restart, not shared across instances). For production register a persistent store **before** `AddMentorAgent()`:
 ```csharp
@@ -2066,7 +2088,12 @@ payloads and unwanted personal data actually cost you tokens. `OnException` maps
 onto something a user can read. `ConfigureChatClientPipeline` is the escape hatch: any
 `DelegatingChatClient` or Agent Framework middleware of your own, inserted outermost. The pipeline
 is built with the host's `IServiceProvider`, so middleware that resolves services (`UseLogging()`
-takes its `ILoggerFactory` from DI) works without extra wiring. The built-in output check, like the
+takes its `ILoggerFactory` from DI) works without extra wiring. It is built once per coordinator, so
+once per SignalR connection here: a limit or a counter meant for the whole process belongs in a
+singleton you inject. Only the coordinator's own calls go through it: the auxiliary calls
+(classifier, safety checks, out-of-scope refusal, memory extraction, the lookup and action checks)
+use `ClassifierChatClient ?? ChatClient`, and specialists, team members and the handoff router use
+`ChatClient`. The built-in output check, like the
 input check, runs on `ClassifierChatClient` and is metered; `SafetyCheckTimeout` and
 `SafetyCheckFailure` apply to both.
 
@@ -2471,7 +2498,7 @@ The agent card is always served at `/.well-known/agent-card.json`, whatever the 
 
 What a peer gets — the caller is a program, not a person:
 
-- **A card it can follow.** It advertises the `JSONRPC` binding at `A2AServerUrl`, which is why that must be the endpoint's full URL. It also lists your **ungated** `[MentorAction]`s as skills (actions with `RequiredRoles`, a confirmation or `RequiresApproval` are left out), the input/output modes and streaming.
+- **A card it can follow.** It advertises the `JSONRPC` binding at `A2AServerUrl`, which is why that must be the endpoint's full URL. It also lists your **ungated** `[MentorAction]`s of classes registered in DI as skills, one per tool name (actions with `RequiredRoles`, a confirmation or `RequiresApproval` are left out, and so is a name that one of them shares), the input/output modes and streaming.
 - **An answer from tools, or a refusal.** A served turn is told that no human is present: call the tool first, state only what a tool returned in this turn, and ask no follow-up questions. If it still ends without calling a tool that returns data (a navigation, a UI action, a memory write and a skill do not count), the reply is thrown away and the same request runs once more with a tool call **required**. If that second attempt returns no data either and the classifier model decides the reply states something about the application's records — a figure, or that an entry does not exist — the peer receives `NOT GROUNDED: …` instead. A policy read from a skill is returned as it is. There are never more than two attempts.
 - **Its name for you, as data.** A MentorAgent caller sends the name it uses for this host as message metadata (`mentoragent.addressedAs`), so a request like "how many products does InventoryAgent have?" is understood to be about this host. Only a single token of letters, digits and `- _ .` (64 characters at most) is accepted.
 - **No onward delegation.** A turn that arrives over A2A is not offered this host's own `RemoteAgents` (they are left out of its handoff workflow, its prompt and the `route_to_specialist` description). Your local specialists, declarative agents, teams and tools still serve it. Two hosts can therefore be each other's remote agent without looping, but **chaining A → B → C through a MentorAgent host is not supported in 1.0**. Point A at C directly.
@@ -2550,10 +2577,10 @@ builder.Services.AddMentorAgentBlazor(options =>
 
 With an absolute `HubUrl` like this one, the WASM client also sends confirmations and Stop (`POST /mentor/approve`, `POST /mentor/cancel`) to the **hub's origin** with `Authorization: Bearer <token>` from the same `AccessTokenProvider`, so a signed-in user's answers pass the owner check. With a relative `HubUrl` (client served by the same host) they go to the host `HttpClient`'s `BaseAddress`; either way the WASM app must register an `HttpClient`: the standalone WebAssembly template registers one, the client project of a Blazor Web App does not.
 
-> **A WebSocket handshake cannot send an `Authorization` header**, so SignalR appends the token as
-> `?access_token=…`. With JWT bearer on the server, forward it in `OnMessageReceived` or the hub
-> sees an anonymous caller and every gated action fails closed — correctly, and indistinguishably
-> from a bug:
+> **A browser cannot send an `Authorization` header on a WebSocket or Server-Sent Events connection**,
+> so SignalR appends the token as `?access_token=…`. With JWT bearer on the server, forward it in
+> `OnMessageReceived` or the hub sees an anonymous caller and every gated action fails closed —
+> correctly, and indistinguishably from a bug:
 >
 > ```csharp
 > options.Events = new JwtBearerEvents
@@ -2578,9 +2605,11 @@ With an absolute `HubUrl` like this one, the WASM client also sends confirmation
 
 | Parameter | Description |
 |---|---|
-| `Description` | Natural language description used as the AI tool description |
+| `Description` | **Required.** Natural language description used as the AI tool description |
 | `Category` | Published only as the skill's tag on the A2A agent card. Not used for any grouping |
 | `RequiresConfirmation` | Shows a confirmation banner before executing. Use for destructive or irreversible operations |
+| `RequiresConfirmationDeclared` | Read-only, not set in the attribute: `true` when the attribute writes `RequiresConfirmation`, true or false. It tells an action that declares nothing, which asks with `RequireConfirmationForWrites` on, from one that declares `RequiresConfirmation = false`, which does not: `RequiresConfirmation` reads `false` for both |
+| `ReadOnly` | Declares that the action only reads — it changes no data. MentorAgent takes your word for it: the action is published to MCP clients with `readOnlyHint`, which some clients take as leave to skip their own confirmation — so a write declared `ReadOnly` by mistake runs from them with nobody asked — and with `RequireLookupForRecordQuestions` on it is one the assistant may be required to call before answering a question about a value of your records. Ignored when the action also needs confirmation. Declare `[Description]` methods by name with `options.IsReadOnlyAction` |
 | `RequiredRoles` | ASP.NET Core identity roles: the caller needs **any one** of them (not all), must be authenticated. On the hub, `/mentor/chat` and A2A the user is the request's caller; in a Blazor circuit, the one the host's `AuthenticationStateProvider` reports. Empty = no role check |
 | `ProactiveHint` | Appended to the tool's description as `Guidance: <hint>` for the assistant's own tools (coordinator, specialists, team members) — not on the MCP server surface, and not used by semantic tool filtering |
 | `NavigateTo` | URL the AI navigates to automatically after successful execution |
@@ -2619,8 +2648,8 @@ With an absolute `HubUrl` like this one, the WASM client also sends confirmation
 | `Url` | ✅ | Page URL (e.g. `"/orders"`) |
 | `Name` | ✅ | Human-readable page name injected into the system prompt |
 | `Description` | — | Optional feature description shown to the AI |
-| `HasUIActions` | — | If `true`, `navigate_to` waits for `PageContext.SignalReady()` — only inside an interactive Blazor Server circuit; hub, SSE and A2A turns never wait (see [Page navigation](#page-navigation)). Default: `false` |
-| `ReadyTimeout` | — | Timeout in ms for `SignalReady()` (Blazor Server circuits only). Default: `2000` |
+| `HasUIActions` | — | If `true`, `navigate_to` waits for `PageContext.SignalReady()` — only where the page runs in the turn's process (a Blazor Server circuit or a MAUI Blazor Hybrid app); hub, SSE and A2A turns never wait (see [Page navigation](#page-navigation)). Default: `false` |
+| `ReadyTimeout` | — | Timeout in ms for `SignalReady()` (Blazor Server circuits and MAUI Blazor Hybrid only). Default: `2000` |
 
 ### `[MentorSkill]` parameters
 
@@ -2777,20 +2806,21 @@ first connection.
 | `ScanAssemblies` | `Assembly[]` | *(required)* | Assemblies to scan for agents, actions, pages |
 | `Language` | `MentorLanguage` | `English` | Language for AI responses |
 | `MentorshipLevel` | `MentorshipLevel` | `Standard` | AI proactivity: Minimal / Standard / Proactive |
-| `EnableSuggestions` | `bool` | `true` | Shows the starter suggestion chips in the **Blazor widget's** welcome panel. Nothing is generated or sent to headless clients — no hub event or SSE frame carries suggestions — so it has no effect on a React/Angular/Vue/MAUI client |
+| `EnableSuggestions` | `bool` | `true` | Shows the starter suggestion chips in the **Blazor widget's** welcome panel. Nothing is generated or sent to headless clients — no hub event or SSE frame carries suggestions — so it has no effect on a React/Angular/Vue client or on a MAUI app with its own native UI. A MAUI Blazor Hybrid app runs the Blazor widget, and shows them |
 | `EnableActionFeedback` | `bool` | `true` | Emit `ActionExecuting` / `ActionCompleted` (hub events) while one of your function tools runs; `false` removes those. Hosted-tool lines such as "Searching the web…" are controlled separately by `ShowHostedToolActivity` |
 | `EnableVoiceInput` | `bool` | `false` | Declares that voice input is expected. A headless client implements capture itself (Web Speech API, MAUI speech-to-text) and sends the transcript as an ordinary message |
 | `EnableVoiceOutput` | `bool` | `false` | Declares that replies are meant to be spoken. Synthesis happens on the client — the server streams the same text either way |
 | `EnableOnboardingTour` | `bool` | `false` | Tells the Blazor widget to show the [onboarding tour](#onboarding-tour). `GET /mentor/tour` is mapped by `MapMentorAgentServer()` **regardless of this flag** — a headless client that fetches it gets the steps (generated once per process, one model call on the first request; `[]` when no `[MentorPage]` exists), so decide in the client whether to show them |
 | `EnableGenerativeCards` | `bool` | `true` | Forward `MentorCard`s returned by a tool to clients as [cards](#generative-ui--cards-level-2). `false` sends the data to the model as text instead |
+| `EnableRichResponses` | `bool` | `true` | Instructs the coordinator to format answers as Markdown: tables for comparative data, lists for enumerations (generative UI Level 1). The Blazor widget renders Markdown safely; a client of your own receives it as text and renders it itself. `false` asks for terse plain text |
 
 > **Not listed here on purpose.** `MentorOptions` also carries `Theme`, `Position`, `PrimaryColor`,
 > `BotName`, `WelcomeMessage`, `InputPlaceholder`, `AvatarUrl` and the playback options
 > `VoiceStreaming`, `VoiceBargeIn`, `VoiceHandsFree`, `VoiceRate`. They style or drive the **Blazor
-> widget** and have no effect on a headless backend — your React/Angular/Vue/MAUI client renders its
-> own UI and, for the voice ones, does its own Web Speech API work. Set them only if you also serve
-> `<ChatWidget />` from a Blazor project; for `Novior.MentorAgent.Blazor` clients they live in
-> `MentorAgentBlazorOptions` on the client side instead.
+> widget** and have no effect on a headless backend — a React/Angular/Vue client, or a MAUI app with its
+> own native UI, renders its own UI and, for the voice ones, does its own speech work. Set them only if
+> you also serve `<ChatWidget />` from a Blazor project; for `Novior.MentorAgent.Blazor` clients they
+> live in `MentorAgentBlazorOptions` on the client side instead.
 
 ### Multimodal image input
 
@@ -2828,6 +2858,8 @@ first connection.
 | `ToolFilterMaxTools` | `int` | `12` | Max matched business tools (core tools always kept) |
 | `ToolFilterMinTools` | `int` | `0` | Once one action clears `ToolFilterMinScore`, at least this many best-ranked actions are sent, whatever their score (up to `ToolFilterMaxTools`). `0` = the threshold alone. A trade-off, not a fix: it can hand the model a read action it needed, or a wrong one it picks instead |
 | `ToolFilterMinScore` | `float` | `0.35` | Minimum cosine similarity (0–1) for a tool to be relevant |
+| `RequireLookupForRecordQuestions` | `bool` | `false` | Opt-in. When a classifier says a message asks for a value of your records, the first model call must call a declared read-only action the filter selected (or hand over to a specialist). One classifier call per turn whose selection holds a read. Needs `EnableToolFiltering`, an `EmbeddingGenerator` and declared reads. See [Semantic tool filtering](#semantic-tool-filtering) |
+| `RequireActionForChangeRequests` | `bool` | `false` | Opt-in. When a classifier says a message asks to carry out one of your confirmation-gated actions and gives every input it needs, the first model call must call one of those actions the filter selected (or hand over to a specialist), so the banner comes first; when it asks for a page, `navigate_to`. A request that leaves an input out is not forced. One classifier call per turn, shared with `RequireLookupForRecordQuestions`. Needs `EnableToolFiltering`, an `EmbeddingGenerator`, and `RequireConfirmation` for actions. See [Semantic tool filtering](#semantic-tool-filtering) |
 | `EnableCompaction` | `bool` | `false` | Compact long conversation history before each call — what is sent, never what is stored (BUG-104). Locally kept history only (Path A); not installed with `UseServiceManagedHistory` |
 | `CompactionTokenThreshold` | `int` | `4000` | Token budget that triggers compaction |
 | `CompactionMaxTurns` | `int` | `8` | Recent turns kept intact |
@@ -2844,7 +2876,7 @@ first connection.
 | `OutputGuardrail` | `Func<string,CancellationToken,Task<bool>>?` | `null` | Moderate the completed reply (`true` = safe); buffers the reply then reveals it (no live streaming that turn) |
 | `OnToolResult` | `Func<string,object?,object?>?` | `null` | Transform/redact a tool result before it returns to the model. A hook that throws withholds the result: the model is told the action ran and not to run it again |
 | `OnException` | `Func<Exception,string?>?` | `null` | Map an exception to a user-facing message (`null` → default). For a tool that throws, the chat never shows the exception's own text while the hook is set: `null` shows the localized "The action could not be completed." The model gets the hook's message, else the exception's, and may repeat it in its reply: return a message for any exception whose text must not reach the user |
-| `ConfigureChatClientPipeline` | `Func<ChatClientBuilder,ChatClientBuilder>?` | `null` | Insert custom middleware into the Path A pipeline |
+| `ConfigureChatClientPipeline` | `Func<ChatClientBuilder,ChatClientBuilder>?` | `null` | Insert custom middleware into the Path A pipeline (outermost). Built once per coordinator, so once per SignalR connection; only the coordinator's own calls go through it — see [Middleware & extensibility](#middleware--extensibility) |
 | `EnableObservability` | `bool` | `false` | Emit OpenTelemetry traces/metrics + MentorAgent spans/counters |
 | `ObservabilityIncludeSensitiveData` | `bool` | `false` | Include prompt/response content — **Development only** |
 | `ObservabilitySourceName` | `string` | `"MentorAgent"` | ActivitySource/Meter name to `.AddSource()/.AddMeter()` |
@@ -2859,7 +2891,7 @@ first connection.
 | `RoutingComplexExemplars` | `IReadOnlyList<string>?` | `null` | `Semantic`: example "complex" turns (null → built-in set) |
 | `RoutingThreshold` | `float` | `0.35` | `Semantic`: cosine floor to escalate |
 | `RoutingClassifierClient` | `IChatClient?` | `null` | `Classifier`/`Cascade`: dedicated judge client (defaults to cheap `ChatClient`) |
-| `ClassifierChatClient` | `IChatClient?` | `null` | Client for MentorAgent's own one-word decisions (input and output safety, hosted-tool scope, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, fact extraction). A small deployment here cuts the wait before every reply; defaults to `ChatClient` |
+| `ClassifierChatClient` | `IChatClient?` | `null` | Client for MentorAgent's own one-word decisions (input and output safety, hosted-tool scope, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, fact extraction). A small deployment here cuts the wait before every reply; defaults to `ChatClient`. On Path B (a pre-built `Agent`) it is the only client MentorAgent can call on its own: without it the safety checks are skipped |
 
 > Also available as **services** (resolve from DI): `IMentorStructured` — typed `GenerateAsync<T>`, see [Structured outputs](#structured-outputs) — `MentorEvaluator`, the token/quality regression harness, see [Evaluation & regression testing](#evaluation--regression-testing) — and `IMentorTour`, the [onboarding tour](#onboarding-tour) source, which you can replace with your own registration to script the tour by hand.
 
@@ -2871,7 +2903,7 @@ first connection.
 | `AnonymousIdentity` | `MentorAnonymousIdentity` | `PerSession` | Who a signed-out caller is: `PerSession` = one key per hub connection and one per `/mentor/chat` request (no memory or rate-limit sharing between anonymous callers, and none carried from one SSE request to the next); `Shared` = the previous single `"anonymous"` key, for single-user hosts |
 | `MemoryContextCount` | `int` | `10` | Max memories injected into the prompt on each call (last N, or the most relevant N with `MemoryRelevanceFiltering`) |
 | `MemoryRelevanceFiltering` | `bool` | `false` | Inject only the memories **semantically** relevant to the current message (embedding cosine; identity/preference facts always kept) instead of the last N — saves tokens. Requires `EmbeddingGenerator`; without it, falls back to last-N |
-| `MemoryAutoCapture` | `bool` | `true` | The reliable memory writer: a post-turn extraction saves durable user facts instead of relying on the model to call `remember`. On Path A (a `ChatClient` is set) it is the **only** writer — the redundant `remember` tool + prompt are dropped (saves tokens); on Path B it falls back to the `remember` tool. `forget_all` always kept. One small model call per user message; set `false` to opt out |
+| `MemoryAutoCapture` | `bool` | `true` | The reliable memory writer: a post-turn extraction saves durable user facts instead of relying on the model to call `remember`. With a `ChatClient`, or on Path B with a `ClassifierChatClient`, it is the **only** writer — the redundant `remember` tool + prompt are dropped (saves tokens); on Path B without a classifier it falls back to the `remember` tool. `forget_all` always kept. One small model call per user message; set `false` to opt out |
 
 ### Agent Skills
 
@@ -2903,6 +2935,7 @@ first connection.
 | `MentorMcpServer.Shared` | `bool?` | `null` | One connection per process (`true`) or per session (`false`). Unset: URL servers shared, command servers per session |
 | `McpServerEnabled` | `bool` | `false` | Expose as MCP server. Also call `app.MapMentorAgentMcp()`; `AddMentorAgentServer()` registers the server (without it: `AddMentorAgentMcp()`) |
 | `McpServerPath` | `string` | `"/mcp"` | Path `app.MapMentorAgentMcp()` maps when called without a path; a path passed to the method wins |
+| `McpCallerPrincipal` | `Func<ClaimsPrincipal?>?` | `null` | Resolves who is calling the MCP server, so **role**-gated actions can be published to callers entitled to them. Default `null` withholds every gated action — the safe default. A null principal, an unauthenticated one, or a resolver that throws all withhold too. **Confirmation gates are never satisfied by it**: `RequiresConfirmation` and `RequiresApproval` mean "ask a human", and there is none on the far end of an MCP call |
 | `ShowMcpStatus` | `bool` | `false` | Show MCP status badge in widget |
 
 ### A2A
@@ -2920,7 +2953,8 @@ first connection.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `EnableSafetyCheck` | `bool` | `false` | AI-based prompt injection detection |
+| `EnableSafetyCheck` | `bool` | `false` | AI-based prompt injection detection. Runs on `ClassifierChatClient`, or on `ChatClient` when it is not set: on Path B without one it is skipped, with a warning when the coordinator is built. A custom `InputGuardrail` replaces it |
+| `EnableOutputSafetyCheck` | `bool` | `false` | Built-in LLM check on the **reply**: blocks one that leaks system instructions or secrets, discloses someone's personal data, or contains harmful content. Buffers the reply for that turn (no live streaming). Runs on `ClassifierChatClient`, or on `ChatClient` when it is not set, is bounded by `SafetyCheckTimeout` / `SafetyCheckFailure`, and a custom `OutputGuardrail` takes precedence. Requires a `ChatClient` or a `ClassifierChatClient`: on Path B without one it is skipped, with a warning when the coordinator is built |
 | `SafetyCheckTimeout` | `TimeSpan` | `00:00:15` | Time limit for the input/output safety checks (built-in or custom); `Zero` = no limit, Stop still cancels |
 | `SafetyCheckFailure` | `MentorSafetyCheckFailure` | `Allow` | A check with no verdict (timeout, error): `Allow` = fail open with a warning, `Block` = refuse the message / withhold the reply |
 | `RefuseOutOfScope` | `bool` | `false` | Refuse a message that plainly has nothing to do with the application instead of answering it; defaults to answering when unsure (BUG-105). With the safety check on it rides in the same classifier call (a longer prompt: the question and the scope); alone it costs one small call per turn, and a turn that is about to declare a hosted tool still asks the tool gate its own question. Counted in `GuardrailBlockCount` |
@@ -2931,10 +2965,11 @@ first connection.
 | `RequireConfirmation` | `bool` | `true` | On/off for the confirmation dialogs of your actions, MCP-client servers and `RequiresApproval`. A hosted MCP server's approvals (`RequireApproval`, `AlwaysRequireApprovalTools`) still show the banner |
 | `RequireConfirmationForWrites` | `bool` | `true` | A `[MentorAction]` declaring neither `ReadOnly = true` nor `RequiresConfirmation` asks for confirmation, so it is also withheld from `/mcp` and the A2A card. `[Description]`-only methods are not covered. `false` = the rc.14 behaviour |
 | `HitlMode` | `MentorHitlMode` | `Blocking` | `Blocking` (MentorAgent's flow) or `Native` (AF `ApprovalRequiredAIFunction`). Same client protocol either way — see [HITL](#hitl--confirming-actions) |
+| `IsReadOnlyAction` | `Func<string, bool>?` | `null` | Declares by tool name the actions that only read — same as `[MentorAction(ReadOnly = true)]`, for `[Description]` methods or central declaration. Published to MCP clients as `readOnlyHint`, which some clients take as leave to skip their own confirmation; the actions `RequireLookupForRecordQuestions` may require. A confirmation-gated tool is never read-only |
 | `RequiresApproval` | `Func<string, bool>?` | `null` | Forces approval for a tool **by name** — the way to gate MCP tools and skills you don't own |
 | `AutoApprovalRules` | `IList<Func<ToolAutoApprovalRuleContext, ValueTask<bool>>>` | empty | `Native` mode only. Approves a call before any banner appears, and enables "don't ask again". **Waives the prompt, never `RequiredRoles`** |
 | `MaxAutoApprovalIterations` | `int?` | `null` | Cap on re-runs caused by auto-approval. Each one is a fresh billable model call and a per-request limit cannot bound it |
-| `IncludeWorkflowExceptionDetails` | `bool` | `false` | Include stack traces in responses. **Never enable in production** |
+| `IncludeWorkflowExceptionDetails` | `bool` | `false` | Put the exception message of a failing Level-2 / Level-3 workflow agent (handoff, group chat) into the reply the user reads. **Development only, never in production** |
 
 ### Session & History
 
@@ -2957,6 +2992,7 @@ first connection.
 ## Requirements
 
 - .NET 10.0+
+- ASP.NET Core runtime 10.0.13 or later: the hub runs on the runtime's SignalR, and earlier 10.0 runtimes carry CVE-2026-70159
 - `Novior.MentorAgent` package (required dependency — installed automatically)
 - An AI provider (Azure OpenAI, OpenAI, Ollama, etc.)
 

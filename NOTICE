@@ -1,2 +1,10 @@
 MentorAgent
 Copyright 2026 Emanuele Longo and Antonio Macrì
+
+"MentorAgent" and the MentorAgent logo are trademarks of Antonio Macrì and Emanuele Longo
+(EU trade mark application No. 019429886), to be assigned to Novior. The Apache License,
+Version 2.0, does not grant permission to use them (section 6, Trademarks), except as needed
+to describe the origin of the work and to reproduce this NOTICE file. The trademark policy,
+TRADEMARKS.md at https://github.com/Novior-dev/MentorAgent, says how they can be used. The
+logo files in the demo/ folder are included only so that the demo looks as published; an
+application built from the demo must not use them as its own.

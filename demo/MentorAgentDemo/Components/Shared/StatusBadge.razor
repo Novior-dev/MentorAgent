@@ -1,0 +1,7 @@
+@inherits DemoComponent
+
+<span class="badge badge--@Status.ToString().ToLowerInvariant()">@DemoText.Status(Status, Italian)</span>
+
+@code {
+    [Parameter, EditorRequired] public ExpenseStatus Status { get; set; }
+}

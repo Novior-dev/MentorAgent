@@ -1,0 +1,73 @@
+@page "/expenses"
+@attribute [MentorPage(Url = "/expenses", Name = "Expenses",
+    Description = "The table of every expense claim of the team, with its status", HasUIActions = true)]
+@inherits DemoPage
+@inject ExpenseStore Store
+
+<PageTitle>@L["expenses.title"] · MentorAgent Demo</PageTitle>
+
+<header class="page-header">
+    <h1>@L["expenses.title"]</h1>
+    <a class="button" href="expenses/new">@L["nav.new"]</a>
+    <p class="muted">@L["expenses.lead"]</p>
+</header>
+
+<div class="card card--flush">
+    <div class="table-scroll">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th scope="col">@L["expenses.id"]</th>
+                    <th scope="col">@L["expenses.employee"]</th>
+                    <th scope="col">@L["expenses.category"]</th>
+                    <th scope="col">@L["expenses.date"]</th>
+                    <th scope="col" class="num">@L["expenses.amount"]</th>
+                    <th scope="col">@L["expenses.status"]</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var e in Store.All())
+                {
+                    <tr data-expense-id="@e.Id" class="@(e.Id == _highlighted ? "is-highlighted" : null)">
+                        <td><a href="expenses/@e.Id">@e.Id</a></td>
+                        <td>@e.Employee</td>
+                        <td>@DemoText.Category(e.Category, Italian)</td>
+                        <td>@Day(e.Date)</td>
+                        <td class="num">@Money(e.Amount)</td>
+                        <td><StatusBadge Status="e.Status" /></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private int? _highlighted;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        Store.Changed += OnStoreChanged;
+
+        // What the assistant can do on this page while it is open: each registered action is a tool for this turn.
+        PageContext?
+            .SetPageName("Expenses")
+            .Set("ClaimsShown", Store.All().Count)
+            .RegisterUIAction<int>("highlight_expense", "Highlights one claim's row in the table of this page, by its number",
+                id => { _highlighted = id; _ = InvokeAsync(StateHasChanged); });
+
+        // Last line: MentorAgent waits for it before it uses the page's actions.
+        PageContext?.SignalReady();
+    }
+
+    private void OnStoreChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public override void Dispose()
+    {
+        Store.Changed -= OnStoreChanged;
+        // By name: Blazor disposes this page after it has initialized the next one, whose actions must stay.
+        PageContext?.Clear("Expenses");
+        base.Dispose();
+    }
+}

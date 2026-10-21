@@ -17,9 +17,10 @@ namespace Novior.MentorAgent.Tests.Memory;
 /// <para>
 /// Memory has two possible writers and the library picks one for you. On Path A a dedicated
 /// post-turn extraction call harvests durable facts, so the <c>remember</c> tool is <i>omitted</i> —
-/// its schema is per-call tokens on every single request, and a reliable writer already ran. On
-/// Path B, and whenever auto-capture is off, there is no extraction call and <c>remember</c> is the
-/// only writer there is, so it must come back. Getting that switch wrong in either direction is
+/// its schema is per-call tokens on every single request, and a reliable writer already ran. So on
+/// Path B with a <c>ClassifierChatClient</c>, which makes the extraction call. On Path B without one,
+/// and whenever auto-capture is off, there is no extraction call and <c>remember</c> is the only
+/// writer there is, so it must come back. Getting that switch wrong in either direction is
 /// invisible: too many tools is a slow token leak, too few is a mentor that never remembers anything.
 /// </para>
 ///
@@ -126,6 +127,48 @@ public sealed class MemoryToolsTests
 
         var tools = string.Join(",", inner.Calls.SelectMany(c => c.ToolNames).Distinct());
         tools.Should().Contain("remember").And.Contain("forget_all");
+    }
+
+    [Theory]
+    [InlineData(false, false, "auto-capture active (post-turn extraction")]                 // Path A
+    [InlineData(true, false, "remember-tool fallback")]                                      // Path B
+    [InlineData(true, true, "auto-capture active on Path B through the ClassifierChatClient")] // BUG-174
+    public async Task Memory_has_exactly_one_writer_and_the_build_log_names_it(bool pathB, bool classifier, string logged)
+    {
+        // BUG-174. The extraction runs wherever MentorAgent has a client of its own, and on Path B a
+        // ClassifierChatClient is one; the remember tool, though, was dropped only when ChatClient was
+        // set. A pre-built agent with a classifier had both writers — one extra model call per message
+        // and the tool schema on every request — while the log said the tool was the only one. Tool,
+        // extraction, prompt and log now decide on one condition.
+        var aux = classifier ? new FakeChatClient() : null;
+        MentorHostFixture host;
+        FakeChatClient model;   // the client behind the coordinator: the fixture's on Path A, the agent's on Path B
+        if (pathB)
+            (host, model) = PathB(o => { o.MemoryAutoCapture = true; o.ClassifierChatClient = aux; });
+        else
+        {
+            host = MentorHostFixture.Create(o => { o.UseMemoryContext = true; o.MemoryAutoCapture = true; });
+            model = host.Chat!;
+        }
+        await using var _ = host;
+        ScriptExtraction(aux ?? model, """{"facts":[{"key":"user_name","value":"Antonio"}]}""");
+
+        await host.RunTurnAsync("ciao, sono Antonio");
+
+        var toolOffered = model.Calls.Any(c => c.ToolNames.Contains("remember"));
+        var extractions = model.Calls.Concat(aux?.Calls ?? [])
+            .Count(c => c.Messages.Any(m => m.Text?.Contains("Extract durable facts", StringComparison.Ordinal) == true));
+        ((toolOffered ? 1 : 0) + extractions).Should().Be(1,
+            $"memory has one writer: remember offered = {toolOffered}, extraction calls = {extractions}");
+        toolOffered.Should().Be(pathB && !classifier, "only a pre-built agent with no classifier has nothing to extract with");
+        if (aux is not null)
+            aux.Calls.Should().ContainSingle("the classifier makes the extraction, and only that call here");
+        if (!toolOffered)
+            (await host.Get<IMentorMemoryStore>().GetAsync(Anon(host), "user_name")).Should().Be("Antonio");
+
+        host.Logs.Records.Should().Contain(r => r.Message.Contains(logged, StringComparison.Ordinal),
+            "the build log names the writer. Records:{0}{1}", Environment.NewLine,
+            string.Join(Environment.NewLine, host.Logs.Records.Select(r => $"[{r.Level}] {r.Message}")));
     }
 
     [Fact]

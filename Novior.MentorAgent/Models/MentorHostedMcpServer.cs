@@ -50,8 +50,9 @@ public sealed class MentorHostedMcpServer
     public string? Description { get; set; }
 
     /// <summary>
-    /// If not null, only these tool names may be used. Null (default) allows every tool the server
-    /// exposes — prefer an explicit list for a server you do not control.
+    /// If it lists names, only these tools may be used. Null (default) or an empty list allows every
+    /// tool the server exposes — an empty list is not "none" — so prefer an explicit list for a server
+    /// you do not control.
     /// </summary>
     public IList<string>? AllowedTools { get; set; }
 

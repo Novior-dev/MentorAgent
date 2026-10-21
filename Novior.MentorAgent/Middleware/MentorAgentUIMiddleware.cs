@@ -52,8 +52,10 @@ internal sealed class MentorAgentUIMiddleware
         Observability.MentorTelemetry? telemetry = null,
         RagContextProvider? rag = null,
         MentorTokenUsage? tokenUsage = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IServiceProvider? services = null)
     {
+        _services      = services;
         _rag           = rag;
         _tokenUsage    = tokenUsage;
         _loggerFactory = loggerFactory;
@@ -81,12 +83,15 @@ internal sealed class MentorAgentUIMiddleware
     // reach the dashboard under the classifier's own model id. Optional for the same reason as _rag.
     private readonly MentorTokenUsage? _tokenUsage;
     private readonly ILoggerFactory? _loggerFactory;
+
+    /// <summary>The scope's services, for the host's ConfirmationMessage (BUG-186).</summary>
+    private readonly IServiceProvider? _services;
     private IChatClient? _classifierClient;
 
     private IChatClient? ClassifierClient()
     {
         if (_classifierClient is not null) return _classifierClient;
-        if ((_options.ClassifierChatClient ?? _options.ChatClient) is not { } raw) return null;
+        if (_options.AuxiliaryChatClient is not { } raw) return null;
 
         return _classifierClient = _tokenUsage is null
             ? raw
@@ -246,8 +251,10 @@ internal sealed class MentorAgentUIMiddleware
     /// <summary>
     /// Built-in LLM moderation of the assistant's completed reply — the output counterpart of the
     /// input safety check (<see cref="MentorOptions.EnableSafetyCheck"/>). Returns <see langword="true"/>
-    /// when the reply is safe to show; Path B (no ChatClient) has nothing to moderate with and shows
-    /// it. Failures are thrown to <see cref="ModerateAndEmitAsync"/>, which applies the policy.
+    /// when the reply is safe to show. It runs on <see cref="MentorOptions.ClassifierChatClient"/>, or on
+    /// <see cref="MentorOptions.ChatClient"/> when none is set; Path B without a classifier has nothing
+    /// to moderate with and shows the reply (warned once when the coordinator is built). Failures are
+    /// thrown to <see cref="ModerateAndEmitAsync"/>, which applies the policy.
     /// </summary>
     private async Task<bool> CheckReplySafetyAsync(string reply, CancellationToken ct)
     {
@@ -256,7 +263,11 @@ internal sealed class MentorAgentUIMiddleware
         // The same client as MentorAgent's other yes/no decisions (MentorOptions.ClassifierChatClient):
         // a host that points the input check at a small, fast deployment means this one too — and,
         // like them, metered.
-        if (ClassifierClient() is not { } chatClient) return true;
+        if (ClassifierClient() is not { } chatClient)
+        {
+            _logger.LogDebug("[MentorAgent] Output safety check skipped — no ChatClient or ClassifierChatClient (Path B).");
+            return true;
+        }
 
         var response = await chatClient.GetResponseAsync(
         [
@@ -295,7 +306,8 @@ internal sealed class MentorAgentUIMiddleware
                context.Function.Name,
                context.Arguments,
                ct => next(context, ct),
-               cancellationToken);
+               cancellationToken,
+               method: context.Function.UnderlyingMethod);
 
     /// <summary>
     /// The gate every tool call goes through: role check → HITL confirmation → action feedback →
@@ -320,12 +332,18 @@ internal sealed class MentorAgentUIMiddleware
     /// <param name="arguments">The arguments it called the tool with.</param>
     /// <param name="invoke">Runs the tool; called only once every gate has passed.</param>
     /// <param name="cancellationToken">Cancels the wait for a confirmation and the tool itself.</param>
+    /// <param name="method">
+    /// The method the called function was built from. Its roles, confirmation, text and page are the ones
+    /// applied; two methods can share a tool name, and up to 1.0.0 the first one found decided for both
+    /// (BUG-188). Without it, or for a method discovery does not know, the tool is looked up by name.
+    /// </param>
     public async ValueTask<object?> InvokeGatedAsync(
         string toolName,
         IEnumerable<KeyValuePair<string, object?>>? arguments,
         Func<CancellationToken, ValueTask<object?>> invoke,
         CancellationToken cancellationToken,
-        bool alwaysBlockForApproval = false)
+        bool alwaysBlockForApproval = false,
+        MethodInfo? method = null)
     {
         _logger.LogDebug("[MentorAgent] Tool call: {Name}", toolName);
         _metrics.RecordToolCall(toolName);   // Wave 3 #9 — top-actions metric
@@ -334,7 +352,7 @@ internal sealed class MentorAgentUIMiddleware
         using var toolActivity = _telemetry?.StartActivity($"mentor.tool.{toolName}");                   // #8
 
         // -- 1. Auth check (RequiredRoles) -------------------------------------
-        var authError = await CheckRolesAsync(toolName, cancellationToken);
+        var authError = await CheckRolesAsync(toolName, cancellationToken, method);
         if (authError is not null)
         {
             _logger.LogWarning("[MentorAgent] Tool '{Name}' blocked: {Reason}", toolName, authError);
@@ -344,7 +362,8 @@ internal sealed class MentorAgentUIMiddleware
         // -- 2. Confirmation check (HITL, MentorHitlMode.Blocking) -------------
         // We block the AI background thread here until the user clicks Confirm or Cancel, which
         // keeps the streaming run alive (busy = true, Stop button visible) and executes the tool
-        // directly on approval — one model round-trip for the whole turn.
+        // directly on approval — one agent run for the whole turn (the model calls are the same in
+        // both modes).
         //
         // In MentorHitlMode.Native (roadmap #16) the coordinator's gated tools are wrapped in
         // ApprovalRequiredAIFunction instead: the framework's function-invoking chat client stops
@@ -353,7 +372,7 @@ internal sealed class MentorAgentUIMiddleware
         // block here is what keeps the two modes from asking the user twice — except for nested
         // agents (alwaysBlockForApproval), where the native protocol cannot surface.
         if ((_options.HitlMode == MentorHitlMode.Blocking || alwaysBlockForApproval)
-            && _confirmations.RequiresApproval(toolName))
+            && _confirmations.RequiresApproval(toolName, method))
         {
             // A task from another agent has nobody to confirm anything: waiting here held the task until
             // the calling agent gave up. Refuse at once, and say why.
@@ -370,7 +389,7 @@ internal sealed class MentorAgentUIMiddleware
             {
                 ActionId = actionId,
                 ToolName = toolName,
-                Message  = _confirmations.BuildMessage(toolName, arguments),
+                Message  = _confirmations.BuildMessage(toolName, arguments, _services, method),
             };
 
             _logger.LogDebug("[MentorAgent] Confirmation required for tool '{Name}' (ActionId={Id})", toolName, actionId);
@@ -403,7 +422,7 @@ internal sealed class MentorAgentUIMiddleware
             // A role taken away meanwhile must stop the action here, as it does in Native mode, where the
             // approved call comes back through step 1. Without this the Confirm ran an action the user
             // was no longer allowed to run (BUG-143).
-            authError = await CheckRolesAsync(toolName, cancellationToken);
+            authError = await CheckRolesAsync(toolName, cancellationToken, method);
             if (authError is not null)
             {
                 _logger.LogWarning("[MentorAgent] Tool '{Name}' blocked after confirmation: {Reason}", toolName, authError);
@@ -415,7 +434,7 @@ internal sealed class MentorAgentUIMiddleware
 
         // -- 3. Action feedback ------------------------------------------------
         if (_options.EnableActionFeedback)
-            _state.NotifyActionExecuting(toolName, GetActionDisplayName(toolName));
+            _state.NotifyActionExecuting(toolName, GetActionDisplayName(toolName, method));
 
         // -- 4. Execution ------------------------------------------------------
         // Only the tool itself is a failure of the action. The catch used to cover everything below as
@@ -473,7 +492,7 @@ internal sealed class MentorAgentUIMiddleware
             // scope with no circuit, whose NavigationManager throws on Uri. That read used to sit here
             // unguarded: over A2A on MentorAgentNuget, update_stock ran twice and the caller was told
             // it had failed (BUG-098).
-            var navUrl = Origin?.FromAnotherAgent == true ? null : GetNavigationUrl(toolName);
+            var navUrl = Origin?.FromAnotherAgent == true ? null : GetNavigationUrl(toolName, method);
             if (navUrl is not null)
             {
                 string? currentUri;
@@ -601,10 +620,14 @@ internal sealed class MentorAgentUIMiddleware
     /// and a user without the role would otherwise be asked to approve an action they can never run
     /// (BUG-063). The check at invocation stays — it is what actually refuses the call.
     /// </para>
+    /// <para>
+    /// With the called function's <paramref name="method"/>, that method's roles: a method with the same name and
+    /// no roles no longer opens it to everybody (BUG-188). The check before the banner has only the name.
+    /// </para>
     /// </summary>
-    internal async ValueTask<string?> CheckRolesAsync(string toolName, CancellationToken ct)
+    internal async ValueTask<string?> CheckRolesAsync(string toolName, CancellationToken ct, MethodInfo? method = null)
     {
-        var requiredRoles = GetRequiredRoles(toolName);
+        var requiredRoles = GetRequiredRoles(toolName, method);
 
         // No roles required -> open access
         if (requiredRoles.Length == 0) return null;
@@ -665,37 +688,21 @@ internal sealed class MentorAgentUIMiddleware
     }
 
     /// <summary>
-    /// Retrieves the RequiredRoles from the cached discovery result for the specified tool.
+    /// Retrieves the RequiredRoles from the cached discovery result for the specified tool: the called method's
+    /// when it is known, else the first copy with that name (BUG-188).
     /// </summary>
-    private string[] GetRequiredRoles(string toolName)
+    private string[] GetRequiredRoles(string toolName, MethodInfo? method)
     {
         _discoveryCache ??= _discovery.Discover();
 
-        // Search in L1
-        var l1 = _discoveryCache.Level1Methods
-            .FirstOrDefault(m => m.ToolName == toolName);
-        if (l1 is not null) return l1.RequiredRoles;
-
-        // Search in L2 (agent methods)
-        var l2Method = _discoveryCache.Level2Agents
-            .SelectMany(a => a.Methods)
-            .FirstOrDefault(m => m.ToolName == toolName);
-        if (l2Method is not null) return l2Method.RequiredRoles;
-
-        // Search in L3 (team member tools)
-        var l3Method = _discoveryCache.Level3Teams
-            .SelectMany(t => t.Members)
-            .SelectMany(m => m.Tools)
-            .FirstOrDefault(m => m.ToolName == toolName);
-        if (l3Method is not null) return l3Method.RequiredRoles;
-
-        return []; // Tool not found -> no roles required
+        return _discoveryCache.Called(toolName, method)?.RequiredRoles
+               ?? []; // Tool not found -> no roles required
     }
 
     /// <summary>
     /// Returns the localized display name shown in the action feedback bar.
     /// </summary>
-    private string GetActionDisplayName(string toolName)
+    private string GetActionDisplayName(string toolName, MethodInfo? method)
     {
         // System routing tool
         if (toolName == "route_to_specialist")
@@ -709,28 +716,17 @@ internal sealed class MentorAgentUIMiddleware
             return _localizer.Get("action.team.analyzing");
 
         // User-defined tools — use description from discovery, fall back to friendly name
-        return _confirmations.GetToolDescription(toolName);
+        return _confirmations.GetToolDescription(toolName, method);
     }
 
     /// <summary>
-    /// Retrieves the automatic navigation URL for the specified tool.
+    /// Retrieves the automatic navigation URL for the specified tool: the called method's when it is known, else
+    /// the first copy's with that name (BUG-188).
     /// </summary>
-    private string? GetNavigationUrl(string toolName)
+    private string? GetNavigationUrl(string toolName, MethodInfo? method)
     {
         _discoveryCache ??= _discovery.Discover();
 
-        var l1 = _discoveryCache.Level1Methods
-            .FirstOrDefault(m => m.ToolName == toolName);
-        if (l1 is not null) return l1.NavigateTo;
-
-        var l2Method = _discoveryCache.Level2Agents
-            .SelectMany(a => a.Methods)
-            .FirstOrDefault(m => m.ToolName == toolName);
-        if (l2Method is not null) return l2Method.NavigateTo;
-
-        var l3 = _discoveryCache.Level3Teams
-            .SelectMany(t => t.Members).SelectMany(m => m.Tools)
-            .FirstOrDefault(m => m.ToolName == toolName);
-        return l3?.NavigateTo;
+        return _discoveryCache.Called(toolName, method)?.NavigateTo;
     }
 }

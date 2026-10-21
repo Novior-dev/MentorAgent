@@ -87,8 +87,10 @@ internal sealed class MentorPromptBuilder
         if (_options.UseMemoryContext)
         {
             sb.AppendLine();
-            // Auto-capture is the writer only when it can actually run: Path A (ChatClient present).
-            if (_options.MemoryAutoCapture && _options.ChatClient is not null)
+            // Auto-capture is the writer only when it can actually run, on the condition the tool
+            // list and the extraction use. This prompt is Path A's: on Path B the agent's
+            // instructions are the host's.
+            if (_options.MemoryAutoCaptureRuns)
             {
                 // Facts are captured reliably post-turn (MemoryAutoCapture) — no need to push the
                 // model to call remember() (that forceful directive also competed with the RAG
@@ -269,8 +271,12 @@ internal sealed class MentorPromptBuilder
         sb.AppendLine("## Team Decision Protocol");
         sb.AppendLine("When you are delivering the FINAL verdict or conclusion of this team discussion:");
         sb.AppendLine("- If the proposal/plan is APPROVED to proceed: your message MUST contain exactly `[TEAM:APPROVED]`");
-        sb.AppendLine("- If the proposal/plan is REJECTED or needs rework: your message MUST contain exactly `[TEAM:REJECTED]`");
+        sb.AppendLine("- If the proposal/plan is REJECTED for good and must not go ahead: your message MUST contain exactly `[TEAM:REJECTED]`");
+        sb.AppendLine("- If it only needs changes, say what to change and write neither token: the discussion goes on.");
         sb.AppendLine("Only include one of these tokens in the single final decision message, not during intermediate discussion.");
+        // BUG-175: the verdict is read message by message, and a REJECTED anywhere vetoes the plan, so
+        // the token is kept for a definitive no; asking for rework with it would block the plan for good.
+        sb.AppendLine("The team approves only if the final message contains `[TEAM:APPROVED]` and no member wrote `[TEAM:REJECTED]`.");
 
         return sb.ToString();
     }

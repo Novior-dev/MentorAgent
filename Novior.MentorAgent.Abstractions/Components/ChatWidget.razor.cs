@@ -359,7 +359,8 @@ public partial class ChatWidget : IDisposable
             {
                 Logger.LogWarning(
                     "[MentorAgent:UI] Replay tour: the tour has no steps. In a headless/WASM host check that "
-                    + "the server also sets EnableOnboardingTour and that GET /mentor/tour answers.");
+                    + "GET /mentor/tour answers and that the server has [MentorPage] pages; the server "
+                    + "serves the tour whether or not it sets EnableOnboardingTour.");
                 return;
             }
             var saved = await LoadTourIndexAsync();

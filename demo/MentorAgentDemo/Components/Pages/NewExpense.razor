@@ -1,0 +1,99 @@
+@page "/expenses/new"
+@attribute [MentorPage(Url = "/expenses/new", Name = "New expense",
+    Description = "The form to submit a new expense claim: category, amount, date and description", HasUIActions = true)]
+@inherits DemoPage
+@inject ExpenseStore Store
+@inject NavigationManager Navigation
+
+<PageTitle>@L["nav.new"] · MentorAgent Demo</PageTitle>
+
+<p><a class="back-link" href="expenses">← @L["expenses.back"]</a></p>
+
+<header class="page-header">
+    <h1>@L["nav.new"]</h1>
+    <p class="muted">@L["new.lead"]</p>
+</header>
+
+<div class="card">
+    <form class="form" @onsubmit="Submit" @onsubmit:preventDefault>
+        <label class="field">
+            <span class="field__label">@L["expenses.category"]</span>
+            <select class="field__input" @bind="_category">
+                @foreach (var c in Enum.GetValues<ExpenseCategory>())
+                {
+                    <option value="@c">@DemoText.Category(c, Italian)</option>
+                }
+            </select>
+        </label>
+        <label class="field">
+            <span class="field__label">@L["expenses.amount"] (€)</span>
+            <input class="field__input" type="number" min="0.01" step="0.01" @bind="_amount" required />
+        </label>
+        <label class="field">
+            <span class="field__label">@L["expenses.date"]</span>
+            <input class="field__input" type="date" @bind="_date" required />
+        </label>
+        <label class="field field--wide">
+            <span class="field__label">@L["expenses.description"]</span>
+            <input class="field__input" type="text" maxlength="160" @bind="_description" required />
+        </label>
+        @if (_filled)
+        {
+            <p class="form__hint field--wide">@L["new.filled"]</p>
+        }
+        <div class="actions field--wide">
+            <button type="submit" class="button button--primary">@L["new.submit"]</button>
+        </div>
+    </form>
+</div>
+
+@code {
+    private ExpenseCategory _category = ExpenseCategory.Travel;
+    private decimal _amount;
+    private DateOnly _date = DateOnly.FromDateTime(DateTime.Today);
+    private string _description = "";
+    private bool _filled;
+
+    /// <summary>What the assistant writes in the form; the person still presses Submit.</summary>
+    public sealed record ExpenseDraft(string? Category, decimal? Amount, string? Date, string? Description);
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+
+        PageContext?
+            .SetPageName("New expense")
+            .RegisterUIAction<ExpenseDraft>("fill_expense_form",
+                "Fills the new-expense form of this page: category (Travel, Lodging, Meals, Supplies or Training), " +
+                "amount in euro, date as yyyy-MM-dd, description. The user then reviews it and presses Submit.",
+                Fill);
+
+        // Last line: MentorAgent waits for it before it uses the page's actions.
+        PageContext?.SignalReady();
+    }
+
+    public override void Dispose()
+    {
+        // By name: Blazor disposes this page after it has initialized the next one, whose actions must stay.
+        PageContext?.Clear("New expense");
+        base.Dispose();
+    }
+
+    private void Fill(ExpenseDraft draft)
+    {
+        if (Enum.TryParse<ExpenseCategory>(draft.Category, ignoreCase: true, out var category)) _category = category;
+        if (draft.Amount is > 0) _amount = decimal.Round(draft.Amount.Value, 2);
+        if (DateOnly.TryParseExact(draft.Date, "yyyy-MM-dd", out var date)) _date = date;
+        if (!string.IsNullOrWhiteSpace(draft.Description)) _description = draft.Description.Trim();
+        _filled = true;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void Submit()
+    {
+        if (_amount <= 0 || string.IsNullOrWhiteSpace(_description)) return;
+        var expense = Store.Submit(CurrentUser.Name, _category, _amount, _date, _description.Trim());
+        Navigation.NavigateTo($"expenses/{expense.Id}");
+    }
+
+}

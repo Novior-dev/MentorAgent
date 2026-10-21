@@ -1,0 +1,83 @@
+name: Bug report
+description: Something in MentorAgent does not work as its README says.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting it. A question on how to use MentorAgent goes to
+        [Discussions](https://github.com/Novior-dev/MentorAgent/discussions). A vulnerability never goes in an issue:
+        report it privately, as the [security policy](https://github.com/Novior-dev/MentorAgent/security/policy) says.
+  - type: input
+    id: version
+    attributes:
+      label: MentorAgent version
+      description: The version of the Novior.MentorAgent packages. They are released together, with one version.
+      placeholder: "1.1.0"
+    validations:
+      required: true
+  - type: input
+    id: dotnet
+    attributes:
+      label: .NET version
+      description: The output of `dotnet --version`, and the target framework if it is not net10.0.
+      placeholder: "10.0.100"
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Where the assistant runs
+      description: How the conversation reaches MentorAgent. Choose more than one if it happens on several.
+      multiple: true
+      options:
+        - Blazor Server
+        - Blazor WebAssembly
+        - .NET MAUI
+        - The hub (/mentor-hub) from another client, such as React
+        - SSE (/mentor/chat)
+        - MCP (/mcp)
+        - A2A (/a2a)
+        - Other, or not sure
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Provider and model
+      description: What answers the turns, when the problem may depend on it.
+      placeholder: "Azure OpenAI, gpt-4.1-mini"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest code and configuration that show the problem, and what you did.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >-
+        The log lines around the problem; MentorAgent's start with [MentorAgent. Take out keys, tokens and
+        connection strings first, and personal data such as names, e-mail addresses and what your users wrote.
+      render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before you send it
+      options:
+        - label: There are no secrets (keys, tokens, connection strings) and no personal data in this issue.
+          required: true

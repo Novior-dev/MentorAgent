@@ -1,0 +1,21 @@
+@page "/policy"
+@attribute [MentorPage(Url = "/policy", Name = "Expense policy",
+    Description = "The expense policy: travel, lodging, meals, supplies and training, receipts and approval")]
+@inherits DemoPage
+
+<PageTitle>@L["policy.title"] · MentorAgent Demo</PageTitle>
+
+<header class="page-header">
+    <h1>@L["policy.title"]</h1>
+    <p class="muted">@L["policy.lead"]</p>
+</header>
+
+<div class="grid">
+    @foreach (var section in PolicyHandbook.Sections)
+    {
+        <article class="card policy" id="@section.Anchor">
+            <h2 class="card__title">@section.Title(Italian)</h2>
+            <p>@section.Text(Italian)</p>
+        </article>
+    }
+</div>

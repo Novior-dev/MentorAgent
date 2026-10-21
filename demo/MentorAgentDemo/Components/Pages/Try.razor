@@ -1,0 +1,57 @@
+@page "/try"
+@attribute [MentorPage(Url = "/try", Name = "What to try",
+    Description = "Every feature of the demo: what it does, a question to try, and the code that turns it on")]
+@inherits DemoPage
+@inject IJSRuntime JS
+
+<PageTitle>@L["try.title"] · MentorAgent Demo</PageTitle>
+
+<header class="page-header">
+    <h1>@L["try.title"]</h1>
+</header>
+<p class="hero__lead">@L["try.lead"]</p>
+<p class="notice notice--info">@L["try.language"]</p>
+
+<div class="try-list">
+    @foreach (var feature in TryCatalog.Features)
+    {
+        <article class="card try" id="@feature.Id">
+            <h2 class="card__title">@feature.Title.In(Italian)</h2>
+            <p>@feature.What.In(Italian)</p>
+
+            @if (feature.Ask is { } ask)
+            {
+                var question = ask.In(Italian);
+                <div class="try__ask">
+                    <span class="try__label">@L["try.ask"]</span>
+                    <code class="try__question">@question</code>
+                    <button type="button" class="button" @onclick="() => CopyAsync(feature.Id, question)">
+                        @(_copied == feature.Id ? L["try.copied"] : L["try.copy"])
+                    </button>
+                </div>
+            }
+
+            @if (feature.Page is { } link)
+            {
+                <a class="try__page" href="@link.TrimStart('/')">@L["try.open"]</a>
+            }
+
+            @foreach (var block in feature.Code)
+            {
+                <p class="try__file">@block.File</p>
+                <pre class="code"><code>@string.Join("\n", block.Lines)</code></pre>
+            }
+        </article>
+    }
+</div>
+
+@code {
+    private string? _copied;
+
+    private async Task CopyAsync(string id, string question)
+    {
+        // The clipboard can be refused (an insecure origin, a denied permission): then the button keeps its label.
+        if (await JS.InvokeAsync<bool>("mentorDemo.copy", question))
+            _copied = id;
+    }
+}

@@ -1,0 +1,144 @@
+# publiccode.yml: describes this software for its reuse, following the standard at https://github.com/publiccodeyml/publiccode.yml
+publiccodeYmlVersion: "0.7"
+
+name: Novior.MentorAgent
+url: "https://github.com/Novior-dev/MentorAgent"
+landingURL: "https://mentoragent.net/"
+softwareVersion: "1.0.0"
+releaseDate: "2026-10-13"
+
+platforms:
+  - web
+  - windows
+  - linux
+  - mac
+
+categories:
+  - application-development
+  - it-development
+  - customer-service-and-support
+
+developmentStatus: stable
+softwareType: library
+
+organisation:
+  uri: "https://novior.it/"
+  name: Novior
+
+description:
+  en:
+    localisedName: MentorAgent
+    shortDescription: >-
+      A .NET library that embeds an AI assistant in Blazor and ASP.NET Core apps: a chat widget, tools taken from
+      your code, and multi-agent orchestration.
+    longDescription: |
+      MentorAgent adds an AI assistant to a .NET web application. One call, `AddMentorAgent()`, registers it, and a
+      floating chat widget shows it in the application's pages.
+
+      The assistant works with the application's own code. C# methods marked as tools become actions it can call,
+      pages marked with `[MentorPage]` become places it can take the user to, and page-level UI actions let it fill
+      a form or open a dialog. An action that changes data can ask the user for confirmation first, and can be
+      limited to some roles of the signed-in user.
+
+      It is built on Microsoft Agent Framework and works with any provider that offers an `IChatClient` or an
+      `AIAgent`: Azure OpenAI, OpenAI, Azure AI Foundry, Anthropic, Ollama and others. Beyond a single assistant, it
+      can hand a request to specialist agents or to a team of agents, answer from the application's own documents
+      (retrieval-augmented generation), remember what each user told it, call MCP servers and A2A agents, and
+      expose the application's actions as an MCP server or an A2A agent.
+
+      Five NuGet packages make it up:
+
+      - `Novior.MentorAgent`, for Blazor Server;
+      - `Novior.MentorAgent.Server`, for Web APIs and clients that are not Blazor Server (a SignalR hub, an SSE
+        endpoint, the MCP server and the A2A agent);
+      - `Novior.MentorAgent.Blazor`, for Blazor WebAssembly and Auto clients;
+      - `Novior.MentorAgent.Declarative`, for specialist agents defined in YAML;
+      - `Novior.MentorAgent.Abstractions`, shared by the others.
+    documentation: "https://github.com/Novior-dev/MentorAgent#readme"
+    features:
+      - A chat widget for Blazor, with themes, voice input and output, and image input
+      - C# methods as AI tools, with a confirmation before actions that change data
+      - Actions limited to the roles of the signed-in user
+      - Navigation between pages and page-level UI actions
+      - Specialist agents and agent teams, on Microsoft Agent Framework
+      - Retrieval-augmented generation from the application's own documents, through a source you plug in
+      - Memory of each user across sessions
+      - MCP client and MCP server
+      - A2A client and A2A server
+      - A SignalR hub and an SSE endpoint for WebAssembly, React and mobile clients
+      - Guardrails, prompt-injection check, output moderation and rate limiting
+      - OpenTelemetry traces and metrics, and a token and cost dashboard
+      - Ten languages for the widget and the replies
+      - Any AI provider with an IChatClient or an AIAgent
+  it:
+    localisedName: MentorAgent
+    shortDescription: >-
+      Libreria .NET che integra un assistente AI nelle app Blazor e ASP.NET Core: widget di chat, strumenti presi dal
+      codice e orchestrazione multi-agente.
+    longDescription: |
+      MentorAgent aggiunge un assistente AI a un'applicazione web .NET. Lo registra una sola chiamata,
+      `AddMentorAgent()`, e un widget di chat flottante lo mostra nelle pagine dell'applicazione.
+
+      L'assistente lavora con il codice dell'applicazione. I metodi C# segnati come strumenti diventano azioni che
+      può chiamare, le pagine segnate con `[MentorPage]` diventano posti dove può portare l'utente, e le azioni di
+      pagina gli permettono di compilare un modulo o aprire una finestra. Un'azione che cambia dei dati può chiedere
+      prima la conferma all'utente, e può essere riservata ad alcuni ruoli dell'utente collegato.
+
+      È costruita su Microsoft Agent Framework e funziona con qualunque fornitore che offra un `IChatClient` o un
+      `AIAgent`: Azure OpenAI, OpenAI, Azure AI Foundry, Anthropic, Ollama e altri. Oltre al singolo assistente, può
+      passare una richiesta ad agenti specialisti o a una squadra di agenti, rispondere dai documenti
+      dell'applicazione (retrieval-augmented generation), ricordare quello che ogni utente le ha detto, chiamare
+      server MCP e agenti A2A, ed esporre le azioni dell'applicazione come server MCP o come agente A2A.
+
+      È fatta di cinque pacchetti NuGet:
+
+      - `Novior.MentorAgent`, per Blazor Server;
+      - `Novior.MentorAgent.Server`, per le Web API e i client che non sono Blazor Server (hub SignalR, endpoint
+        SSE, server MCP e agente A2A);
+      - `Novior.MentorAgent.Blazor`, per i client Blazor WebAssembly e Auto;
+      - `Novior.MentorAgent.Declarative`, per gli agenti specialisti definiti in YAML;
+      - `Novior.MentorAgent.Abstractions`, comune agli altri.
+    documentation: "https://github.com/Novior-dev/MentorAgent#readme"
+    features:
+      - Widget di chat per Blazor, con temi, voce in ingresso e in uscita e immagini in ingresso
+      - Metodi C# come strumenti AI, con una conferma prima delle azioni che cambiano dati
+      - Azioni riservate ai ruoli dell'utente collegato
+      - Navigazione fra le pagine e azioni di pagina
+      - Agenti specialisti e squadre di agenti, su Microsoft Agent Framework
+      - Retrieval-augmented generation dai documenti dell'applicazione, attraverso una sorgente che si collega
+      - Memoria di ogni utente fra una sessione e l'altra
+      - Client e server MCP
+      - Client e server A2A
+      - Hub SignalR ed endpoint SSE per client WebAssembly, React e mobili
+      - Guardrail, controllo del prompt injection, moderazione delle risposte e limite dei messaggi
+      - Tracce e metriche OpenTelemetry, e una dashboard di token e costi
+      - Dieci lingue per il widget e le risposte
+      - Qualunque fornitore AI con un IChatClient o un AIAgent
+
+legal:
+  license: Apache-2.0
+  mainCopyrightOwner: Emanuele Longo and Antonio Macrì
+
+maintenance:
+  type: internal
+  contacts:
+    - name: Antonio Macrì
+      email: security@mentoragent.net
+      affiliation: Novior
+    - name: Emanuele Longo
+      email: security@mentoragent.net
+      affiliation: Novior
+
+localisation:
+  localisationReady: true
+  availableLanguages:
+    - en
+    - it
+    - fr
+    - de
+    - es
+    - pt
+    - nl
+    - pl
+    - ja
+    - zh

@@ -1,0 +1,31 @@
+@page "/usage"
+@inherits DemoPage
+@inject DemoModel Model
+
+<PageTitle>@L["usage.title"] · MentorAgent Demo</PageTitle>
+
+<header class="page-header">
+    <h1>@L["usage.title"]</h1>
+    <p class="muted">@L["usage.lead"]</p>
+</header>
+
+@* MentorDashboard checks no role itself: the page decides who sees it. *@
+<AuthorizeView Roles="@DemoRoles.Administrator">
+    <Authorized>
+        @if (Model.IsConfigured)
+        {
+            <div class="card">
+                <MentorDashboard Currency="$" />
+            </div>
+        }
+        else
+        {
+            <p class="muted">@L["usage.noModel"]</p>
+        }
+    </Authorized>
+    <NotAuthorized>
+        <div class="card">
+            <p>@L["usage.onlyAdmin"]</p>
+        </div>
+    </NotAuthorized>
+</AuthorizeView>

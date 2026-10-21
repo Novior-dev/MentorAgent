@@ -35,6 +35,12 @@ public static class EndpointRouteBuilderExtensions
     /// <c>https://yourapp/mcp</c> and discover all available tools.
     ///
     /// <para>
+    /// Gated actions are withheld, and a warning written here, when the endpoint is mapped, names them. The
+    /// tools themselves are built by the first MCP request, and which of them a caller sees is decided per
+    /// request.
+    /// </para>
+    ///
+    /// <para>
     /// The tool instances are resolved once, from a scope that lives as long as the application, so a
     /// <c>[MentorAction]</c> class is one shared instance for every MCP call, whatever lifetime it is
     /// registered with — transient included. Keep such classes stateless: inject
@@ -82,6 +88,10 @@ public static class EndpointRouteBuilderExtensions
         }
         if (opts is not null && sp.GetService<MentorMcpServerRegistered>() is null)
             throw new InvalidOperationException(NotRegistered("MCP", "AddMentorAgentMcp", "MapMentorAgentMcp"));
+
+        // The withheld actions are named now, at startup, as the README promises, not with the first MCP
+        // request (BUG-178). Only the warning: which tools a caller sees is still decided per request.
+        sp.GetService<MentorAgentMcpToolCollection>()?.ReportWithheld();
 
         // No RequireCors here (BUG-108). CORS metadata on an endpoint makes ASP.NET Core refuse the request
         // with a 500 unless the CORS middleware ran — and whether the host added it cannot be read at map
@@ -193,7 +203,7 @@ public static class EndpointRouteBuilderExtensions
                 // [MentorAction]s — the ungated ones only, by the same rule that withholds gated
                 // actions from the MCP surface (BUG-021): the card is the same for every caller,
                 // signed in or not, and nobody answers a confirmation, so advertising a gated action
-                // would be advertising a refusal.
+                // would be advertising a refusal. Only actions a turn can run, once per name (BUG-177).
                 Skills = BuildAgentSkills(sp, o),
 
                 // Text in, text out; images too when the host accepts them. An empty list is not
@@ -222,8 +232,9 @@ public static class EndpointRouteBuilderExtensions
         "Novior.MentorAgent.Server package, not by AddMentorAgent().";
 
     /// <summary>
-    /// The application's ungated actions, as A2A skills. Gated ones (roles, confirmation, or the
-    /// <c>RequiresApproval</c> predicate) are left out for the reason BUG-021 established for MCP.
+    /// The application's ungated actions of classes registered in DI, as A2A skills, one per tool name.
+    /// Gated ones (roles, confirmation, or the <c>RequiresApproval</c> predicate) are left out for the
+    /// reason BUG-021 established for MCP, and so is a name shared with a gated one.
     /// An A2A task runs as the request's user: signed in when the host authenticates the endpoint,
     /// anonymous otherwise — and then, with the default <c>AnonymousIdentity</c> (PerSession), each task
     /// gets its own user key, so <c>RateLimitPerUser</c> does not hold across tasks. Either way the card is one for every caller and no human answers a
@@ -235,12 +246,25 @@ public static class EndpointRouteBuilderExtensions
         var discovery = sp.GetService<Core.MentorDiscoveryService>();
         if (discovery is null) return [];
 
-        var skills = new List<A2A.AgentSkill>();
-        foreach (var m in discovery.Discover().Level1Methods)
-        {
-            if (m.RequiredRoles.Length > 0 || m.RequiresConfirmation) continue;
-            if (o.RequiresApproval?.Invoke(m.ToolName) == true) continue;
+        // Only what a turn can run (BUG-177). The coordinator and the MCP server skip, with a warning, an
+        // action whose class the container cannot resolve, so the card listed skills no task could use.
+        // A container without IServiceProviderIsService filters nothing, as before.
+        var isService = sp.GetService<IServiceProviderIsService>();
+        var runnable = discovery.Discover().Level1Methods
+            .Where(m => isService?.IsService(m.DeclaringType) != false);
 
+        // One skill per id. Two actions can share a tool name (the coordinator warns about it), and the card
+        // repeated the id for each. The name is left out when ANY action carrying it is gated — the rule the
+        // tool filter applies on a turn that matched nothing: which copy a turn runs is not the card's to
+        // promise, and a gated copy would be a refusal.
+        var skills = new List<A2A.AgentSkill>();
+        foreach (var copies in runnable.GroupBy(m => m.ToolName, StringComparer.OrdinalIgnoreCase))
+        {
+            if (copies.Any(c => c.RequiredRoles.Length > 0 || c.RequiresConfirmation
+                                || o.RequiresApproval?.Invoke(c.ToolName) == true))
+                continue;
+
+            var m = copies.First();
             skills.Add(new A2A.AgentSkill
             {
                 Id          = m.ToolName,

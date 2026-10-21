@@ -129,9 +129,10 @@ public sealed class MentorAgentBlazorOptions
     /// Supplies the bearer token for the hub connection, called on every connect and reconnect.
     ///
     /// <b>Without this the hub sees an anonymous caller</b>, whatever your application has signed
-    /// the user in as — which means every <c>RequiredRoles</c> action is blocked, every user shares
-    /// the single memory key <c>"anonymous"</c>, and <c>RateLimitPerUser</c> becomes one global
-    /// limit. This is the WASM equivalent of the JavaScript client's <c>accessTokenFactory</c>, and
+    /// the user in as — which means every <c>RequiredRoles</c> action is blocked and the user is keyed
+    /// as anonymous: with the server's <c>AnonymousIdentity = PerSession</c>, the default, memory and
+    /// <c>RateLimitPerUser</c> last only as long as the connection; with <c>Shared</c> every user shares
+    /// the single memory key <c>"anonymous"</c> and one global limit. This is the WASM equivalent of the JavaScript client's <c>accessTokenFactory</c>, and
     /// the server reads the resulting principal off <c>HubCallerContext.User</c>.
     ///
     /// Return <see langword="null"/> while nobody is signed in; the connection then behaves exactly

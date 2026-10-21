@@ -95,9 +95,15 @@ internal sealed class AppContextProvider : AIContextProvider
                 if (user.Identity?.IsAuthenticated == true)
                 {
                     sb.AppendLine($"- User: {user.Identity.Name ?? "authenticated"}");
-                    var roles = user.Claims
-                        .Where(c => c.Type == ClaimTypes.Role)
+                    // BUG-183: the roles the gate checks. IsInRole reads each identity's own RoleClaimType
+                    // ("roles" from Entra ID, or from JwtBearer without inbound claim mapping), not only
+                    // ClaimTypes.Role, and so does this list. A Windows identity's are its groups' SIDs,
+                    // which name nothing the model can use, so they are left out.
+                    var roles = user.Identities
+                        .Where(i => i.RoleClaimType != ClaimTypes.GroupSid)
+                        .SelectMany(i => i.FindAll(i.RoleClaimType))
                         .Select(c => c.Value)
+                        .Distinct(StringComparer.Ordinal)
                         .ToList();
                     if (roles.Count > 0)
                         sb.AppendLine($"- Roles: {string.Join(", ", roles)}");

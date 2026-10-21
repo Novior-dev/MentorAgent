@@ -22,7 +22,7 @@ namespace Novior.MentorAgent.Abstractions.Interfaces;
 ///         .RegisterUIAction("highlight_row", "Highlights the row", id => HighlightRow((int)id!));
 /// }
 ///
-/// public void Dispose() => PageContext.Clear();
+/// public void Dispose() => PageContext.Clear("Orders");
 /// </code>
 /// </summary>
 public interface IMentorPageContext
@@ -38,8 +38,32 @@ public interface IMentorPageContext
     /// <summary>Removes a context entry.</summary>
     IMentorPageContext Remove(string key);
 
-    /// <summary>Clears all context data and all UI actions. Call in page Dispose().</summary>
+    /// <summary>
+    /// Clears all context data and all UI actions, whichever page registered them. In a page's
+    /// <c>Dispose()</c> call <see cref="Clear(string)"/> instead.
+    /// </summary>
     void Clear();
+
+    /// <summary>
+    /// Clears what the page named <paramref name="pageName"/> registered. Call it in the page's <c>Dispose()</c>,
+    /// with the name the page gave <see cref="SetPageName"/>.
+    /// <para>
+    /// Blazor disposes the previous page after it has initialized the next one. If the next page has set its own
+    /// name, only the entries and actions registered under <paramref name="pageName"/> go, and the next page keeps
+    /// its own, its name and its <see cref="SignalReady"/>. If <paramref name="pageName"/> is still the current
+    /// page, everything is cleared, as with <see cref="Clear()"/> (BUG-192).
+    /// </para>
+    /// <para>
+    /// Entries and actions belong to the page whose name was set when they were registered, so a page calls
+    /// <see cref="SetPageName"/> before anything else. The default body, for an implementation that does not
+    /// override it, clears everything when <paramref name="pageName"/> is the current page and nothing otherwise.
+    /// </para>
+    /// </summary>
+    void Clear(string pageName)
+    {
+        if (string.Equals(PageName, pageName, StringComparison.Ordinal))
+            Clear();
+    }
 
     // -- UI Actions ------------------------------------------------------------
 

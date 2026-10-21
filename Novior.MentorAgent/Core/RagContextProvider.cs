@@ -72,7 +72,11 @@ internal sealed class RagContextProvider : AIContextProvider
         _stateService = stateService;
         _options = options.Value;
         _logger = logger;
+        _citeInstruction = new Novior.MentorAgent.Abstractions.Core.MentorLocalizer(_options.Language).Get("rag.cite");
     }
+
+    /// <summary>How to cite the documents, appended after the host's template.</summary>
+    private readonly string _citeInstruction;
 
     /// <summary>
     /// Whether a real knowledge base is behind this provider, or the no-op default that
@@ -99,10 +103,14 @@ internal sealed class RagContextProvider : AIContextProvider
             return;
         }
 
-        // The retrieval itself is fully semantic: the vector search embeds the message and
-        // RagMinScore discards anything below the relevance threshold. So a pure command like
-        // "update the price of X" simply retrieves nothing above the score and injects nothing —
-        // no keyword pre-gate needed. (Relying on embeddings + minScore, not word lists.)
+        // No keyword pre-gate: whether anything is injected is decided by the source's scores and
+        // RagMinScore, not by word lists. With a vector source and a threshold on its own scale
+        // (cosine, 0.5–0.75), a pure command like "update the price of X" retrieves nothing above
+        // the threshold and injects nothing. That holds only when the threshold is on the source's
+        // scale: against the default 2 a cosine never clears it (warned about below), and a keyword
+        // source scores on another scale altogether. Either way the search itself runs on every
+        // message, commands included: for a vector source an embedding call, plus the reranker's
+        // time if it has one.
         try
         {
             var request = new MentorRagRequest
@@ -250,9 +258,8 @@ internal sealed class RagContextProvider : AIContextProvider
         // live on rc.4: the chips showed whatever the retriever returned, so an answer that came
         // from a skill or from the model's own knowledge still carried three "sources" under it.
         // Sources the answer did not use are not sources.
-        instructions += "\n\nWhen a document above supports part of your answer, cite it inline as " +
-                        "[1], [2], … using its number. Cite only what you actually used; if none of " +
-                        "them helped, cite nothing.";
+        // In the configured language, the one the model answers in (BUG-185).
+        instructions += "\n\n" + _citeInstruction;
 
         return ValueTask.FromResult(new AIContext { Instructions = instructions });
     }
@@ -313,10 +320,11 @@ internal sealed class RagContextProvider : AIContextProvider
         {
             foreach (System.Text.RegularExpressions.Match m in CitationPattern.Matches(answer))
             {
-                if (!int.TryParse(m.Groups[1].Value, out var n)) continue;
-                if (n < 1 || n > pending.Count) continue;          // an invented number cites nothing
-                var doc = pending[n - 1];
-                if (!cited.Contains(doc)) cited.Add(doc);
+                foreach (var n in CitedNumbers(m.Groups[1].Value, pending.Count))
+                {
+                    var doc = pending[n - 1];
+                    if (!cited.Contains(doc)) cited.Add(doc);
+                }
             }
         }
 
@@ -331,7 +339,32 @@ internal sealed class RagContextProvider : AIContextProvider
         _stateService.NotifyRagSourcesReady(cited);
     }
 
-    /// <summary>Inline citation markers: [1], [2] … — the form the instruction asks for.</summary>
+    /// <summary>
+    /// The documents one citation marker names, by number: one ("2"), a list ("1, 3") or a range ("1-3").
+    /// A number that names no document cites nothing, and neither does a range with such an end: "[0-9]"
+    /// in a code sample is not a citation of every document.
+    /// </summary>
+    private static IEnumerable<int> CitedNumbers(string marker, int documents)
+    {
+        foreach (System.Text.RegularExpressions.Match part in CitationPart.Matches(marker))
+        {
+            var from = int.Parse(part.Groups[1].Value, CultureInfo.InvariantCulture);
+            var to = part.Groups[2].Success ? int.Parse(part.Groups[2].Value, CultureInfo.InvariantCulture) : from;
+            if (Math.Min(from, to) < 1 || Math.Max(from, to) > documents) continue;   // an invented number cites nothing
+            for (var n = Math.Min(from, to); n <= Math.Max(from, to); n++)
+                yield return n;
+        }
+    }
+
+    /// <summary>
+    /// Inline citation markers: [1], [2] … — the form the instruction asks for — and the lists and ranges
+    /// models also write, [1, 2] and [1-2] (BUG-184).
+    /// </summary>
     private static readonly System.Text.RegularExpressions.Regex CitationPattern =
-        new(@"\[(\d{1,2})\]", System.Text.RegularExpressions.RegexOptions.Compiled);
+        new(@"\[\s*(\d{1,2}(?:\s*[-\u2013]\s*\d{1,2})?(?:\s*,\s*\d{1,2}(?:\s*[-\u2013]\s*\d{1,2})?)*)\s*\]",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>One number or one range inside a marker.</summary>
+    private static readonly System.Text.RegularExpressions.Regex CitationPart =
+        new(@"(\d{1,2})(?:\s*[-\u2013]\s*(\d{1,2}))?", System.Text.RegularExpressions.RegexOptions.Compiled);
 }

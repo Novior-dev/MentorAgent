@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using FluentAssertions;
+using Novior.MentorAgent.Tests.Harness;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -42,7 +43,7 @@ public sealed class JavaScriptSuitesTests(ITestOutputHelper output)
             "speech.test.js and dom.test.js are both expected to be found and run");
     }
 
-    [Theory]
+    [NodeTheory]
     [MemberData(nameof(Suites))]
     public void JavaScript_suite_passes(string suite)
     {
@@ -52,14 +53,11 @@ public sealed class JavaScriptSuitesTests(ITestOutputHelper output)
         // whether Node is installed.
         Assert.True(File.Exists(script), $"JS test suite not found at {script}");
 
+        // A machine without Node never gets here: the theory is reported as skipped. It used to pass
+        // with a line in the output, so a run without Node looked like a run of every suite (BUG-191).
+        // A release run is not skipped, and a suite that cannot run fails it.
         if (!TryRunNode(script, out var log, out var exitCode))
-        {
-            // xUnit 2.9 has no dynamic skip (that arrived in v3), so a machine without Node reports
-            // a pass with the reason in the test output rather than failing a build for a missing
-            // tool. Node is listed as a prerequisite in ROADMAP.md §9.
-            output.WriteLine($"node is not on PATH — {suite} did NOT run.");
-            return;
-        }
+            Assert.Fail($"node is not on PATH — {suite} did not run, and a release run runs every suite.");
 
         output.WriteLine(log);
         Assert.True(exitCode == 0, $"JavaScript suite {suite} failed:{Environment.NewLine}{log}");

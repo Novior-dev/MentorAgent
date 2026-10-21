@@ -5,8 +5,9 @@ namespace Novior.MentorAgent.Memory;
 /// bucket (BUG-064).
 ///
 /// <para>
-/// Every session without a signed-in user resolves to the memory key <c>"anonymous"</c>. In a
-/// single-user host that is exactly right; on a website it means a fact one visitor states is
+/// With <c>AnonymousIdentity = Shared</c> every session without a signed-in user resolves to the
+/// memory key <c>"anonymous"</c>; with <c>PerSession</c>, the default, a session has a key of its own.
+/// In a single-user host the shared key is exactly right; on a website it means a fact one visitor states is
 /// recalled for the next. Nothing at startup can tell the two apart — the widget sits in a layout,
 /// and whether its pages require authentication is the host's routing, not ours — so the warning
 /// waits for the one observation that settles it: a <em>second</em> session using the bucket. A

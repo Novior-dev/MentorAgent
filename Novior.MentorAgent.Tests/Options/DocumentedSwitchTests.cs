@@ -205,6 +205,42 @@ public sealed class DocumentedSwitchTests
     }
 
     [Fact]
+    public async Task Observability_traces_the_coordinators_model_calls_and_not_the_embedding_generator()
+    {
+        // The option was documented as tracing "the chat client and embedding generator". Only the
+        // coordinator's chat pipeline is wrapped; an embedding generator the host wants traced, it
+        // wraps itself. Pinned so the documentation and the wiring move together. The source name is
+        // unique because the listener is process-global and sibling classes trace in parallel.
+        var sourceName = $"MentorTrace-{Guid.NewGuid():N}";
+        var operations = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = s => s.Name == sourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = a => operations.Enqueue(a.GetTagItem("gen_ai.operation.name") as string ?? a.DisplayName),
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        await using var host = MentorHostFixture.Create(configure: o =>
+        {
+            o.EnableObservability = true;
+            o.ObservabilitySourceName = sourceName;
+            o.EnableToolFiltering = true;   // embeds the message on every turn
+        }, withEmbeddings: true);
+
+        host.Chat!.Say("ok");
+        await host.RunTurnAsync("how many open orders?");
+        listener.Dispose();
+        var seen = operations.ToArray();
+
+        host.Embeddings!.CallCount.Should().BeGreaterThan(0, "the tool filter embedded the message this turn");
+        seen.Should().Contain("chat", "the coordinator's model call is traced. Seen: {0}", string.Join(", ", seen));
+        seen.Should().NotContain("embeddings",
+            "the embedding generator is the host's to wrap with UseOpenTelemetry. Seen: {0}", string.Join(", ", seen));
+    }
+
+    [Fact]
     public void The_default_source_name_is_the_documented_one()
     {
         // Both READMEs and the ROADMAP tell hosts to write .AddSource("MentorAgent").

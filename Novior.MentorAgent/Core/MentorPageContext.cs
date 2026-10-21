@@ -21,8 +21,10 @@ internal sealed class MentorPageContext : IMentorPageContext
 
     private string? _pageName;
     private TaskCompletionSource<bool> _readyTcs = new();
-    private readonly Dictionary<string, object?> _data = new();
-    private readonly Dictionary<string, UIActionRegistration> _actions = new();
+
+    // Each entry remembers the page that registered it, so that Clear(pageName) removes only that page's (BUG-192).
+    private readonly Dictionary<string, PageEntry<object?>> _data = new();
+    private readonly Dictionary<string, PageEntry<UIActionRegistration>> _actions = new();
 
     // -- IMentorPageContext � Write (called by pages) -------------------------
 
@@ -34,7 +36,7 @@ internal sealed class MentorPageContext : IMentorPageContext
 
     public IMentorPageContext Set(string key, object? value)
     {
-        lock (_lock) _data[key] = value;
+        lock (_lock) _data[key] = new(_pageName, value);
         return this;
     }
 
@@ -46,35 +48,56 @@ internal sealed class MentorPageContext : IMentorPageContext
 
     public void Clear()
     {
+        lock (_lock) ClearAll();
+    }
+
+    public void Clear(string pageName)
+    {
         lock (_lock)
         {
-            _pageName = null;
-            _data.Clear();
-            _actions.Clear();
-            // Replace TCS inside the lock so that SignalReady() and
-            // WaitForPageReadyAsync() always capture a consistent reference.
-            _readyTcs = new TaskCompletionSource<bool>();
+            // Still the current page: nobody has taken the context over, so it all goes, the ready signal too.
+            if (string.Equals(_pageName, pageName, StringComparison.Ordinal))
+            {
+                ClearAll();
+                return;
+            }
+
+            // The next page has set its name: Blazor disposes the previous page after initializing the next one,
+            // so its name, its entries and its SignalReady stay, and only the previous page's entries go.
+            RemovePage(_data, pageName);
+            RemovePage(_actions, pageName);
         }
+    }
+
+    private void ClearAll()
+    {
+        _pageName = null;
+        _data.Clear();
+        _actions.Clear();
+        // Replace TCS inside the lock so that SignalReady() and
+        // WaitForPageReadyAsync() always capture a consistent reference.
+        _readyTcs = new TaskCompletionSource<bool>();
+    }
+
+    private static void RemovePage<T>(Dictionary<string, PageEntry<T>> entries, string pageName)
+    {
+        foreach (var (key, entry) in entries)
+            if (string.Equals(entry.PageName, pageName, StringComparison.Ordinal))
+                entries.Remove(key);
     }
 
     public IMentorPageContext RegisterUIAction(
         string actionName,
         string description,
         Action<object?> handler)
-    {
-        lock (_lock)
-            _actions[actionName] = new UIActionRegistration(actionName, description, handler);
-        return this;
-    }
+        => Add(new UIActionRegistration(actionName, description, handler));
 
     public IMentorPageContext RegisterUIAction<TParam>(
         string actionName,
         string description,
         Action<TParam> handler,
         string? parameterHint = null)
-    {
-        lock (_lock)
-            _actions[actionName] = new UIActionRegistration(
+        => Add(new UIActionRegistration(
                 actionName, description,
                 Handler: _ => { },          // legacy slot unused — HandlerAsync takes priority
                 HandlerAsync: p =>
@@ -82,37 +105,33 @@ internal sealed class MentorPageContext : IMentorPageContext
                     handler(DeserializeParam<TParam>(p));
                     return Task.CompletedTask;
                 },
-                ParameterHint: parameterHint ?? MentorParameterHint.For(typeof(TParam)));
-        return this;
-    }
+                ParameterHint: parameterHint ?? MentorParameterHint.For(typeof(TParam))));
 
     public IMentorPageContext RegisterUIActionAsync(
         string actionName,
         string description,
         Func<object?, Task> handler,
         string? parameterHint = null)
-    {
-        lock (_lock)
-            _actions[actionName] = new UIActionRegistration(
+        => Add(new UIActionRegistration(
                 actionName, description,
                 Handler: _ => { },
                 HandlerAsync: handler,
-                ParameterHint: parameterHint);
-        return this;
-    }
+                ParameterHint: parameterHint));
 
     public IMentorPageContext RegisterUIActionAsync<TParam>(
         string actionName,
         string description,
         Func<TParam, Task> handler,
         string? parameterHint = null)
-    {
-        lock (_lock)
-            _actions[actionName] = new UIActionRegistration(
+        => Add(new UIActionRegistration(
                 actionName, description,
                 Handler: _ => { },
                 HandlerAsync: p => handler(DeserializeParam<TParam>(p)),
-                ParameterHint: parameterHint ?? MentorParameterHint.For(typeof(TParam)));
+                ParameterHint: parameterHint ?? MentorParameterHint.For(typeof(TParam))));
+
+    private MentorPageContext Add(UIActionRegistration registration)
+    {
+        lock (_lock) _actions[registration.ActionName] = new(_pageName, registration);
         return this;
     }
 
@@ -149,6 +168,15 @@ internal sealed class MentorPageContext : IMentorPageContext
         if (param is null) return default!;
         // Fallback for boxed primitives (e.g. object boxing of long/double)
         return (T)Convert.ChangeType(param, typeof(T));
+    }
+
+    /// <summary>
+    /// Takes the ready signal back. <c>navigate_to</c> calls it before it asks for another page, so that only that
+    /// page's <see cref="SignalReady"/> ends its wait: the page being left signalled when it opened (BUG-194).
+    /// </summary>
+    internal void TakeReadySignalBack()
+    {
+        lock (_lock) _readyTcs = new TaskCompletionSource<bool>();
     }
 
     public IMentorPageContext SignalReady()
@@ -189,11 +217,14 @@ internal sealed class MentorPageContext : IMentorPageContext
 
     public IReadOnlyDictionary<string, object?> ContextData
     {
-        get { lock (_lock) return new Dictionary<string, object?>(_data); }
+        get { lock (_lock) return _data.ToDictionary(e => e.Key, e => e.Value.Value); }
     }
 
     public IReadOnlyDictionary<string, UIActionRegistration> UIActions
     {
-        get { lock (_lock) return new Dictionary<string, UIActionRegistration>(_actions); }
+        get { lock (_lock) return _actions.ToDictionary(e => e.Key, e => e.Value.Value); }
     }
+
+    /// <summary>An entry and the name of the page that registered it.</summary>
+    private readonly record struct PageEntry<T>(string? PageName, T Value);
 }

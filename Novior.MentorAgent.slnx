@@ -1,4 +1,5 @@
 ﻿<Solution>
+  <Project Path="demo/MentorAgentDemo/MentorAgentDemo.csproj" />
   <Project Path="Novior.MentorAgent.Abstractions/Novior.MentorAgent.Abstractions.csproj" />
   <Project Path="Novior.MentorAgent.Blazor/Novior.MentorAgent.Blazor.csproj" />
   <Project Path="Novior.MentorAgent.Declarative/Novior.MentorAgent.Declarative.csproj" />

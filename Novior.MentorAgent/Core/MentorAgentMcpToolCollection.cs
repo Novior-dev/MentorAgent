@@ -38,6 +38,9 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
     /// <summary>1 while the resolver is failing, so its outage is logged once at Warning, not per request.</summary>
     private int _resolverFailing;
 
+    /// <summary>1 once the withheld actions are named, so the startup report and the catalogue write it once.</summary>
+    private int _withheldLogged;
+
     /// <summary>A tool and the roles that may see it (empty: everybody).</summary>
     private sealed record Candidate(McpServerTool Tool, string[] RequiredRoles);
 
@@ -151,6 +154,14 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
         }
     }
 
+    /// <summary>
+    /// Names the withheld actions without building the catalogue. <c>MapMentorAgentMcp</c> calls it, so the
+    /// warning comes at startup, as documented, and not with the first MCP request (BUG-178). Which tools a
+    /// caller sees is still decided when that request builds the catalogue, and per request after it.
+    /// </summary>
+    internal void ReportWithheld()
+        => LogWithheld([.. _discovery.Discover().Level1Methods.Select(m => WithheldReason(m, out _)).OfType<string>()]);
+
     private Catalogue BuildCatalogue()
     {
         var methods = _discovery.Discover().Level1Methods;
@@ -160,51 +171,12 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
         var candidates = new List<Candidate>(methods.Count);
         var withheld = new List<string>();
         var perCaller = new List<string>();
-        var identityAvailable = _options.McpCallerPrincipal is not null;
 
         foreach (var method in methods)
         {
-            // Fail closed on anything the author protected.
-            //
-            // This is the only surface where a tool is invoked by a caller who is not the
-            // application's own user: an MCP client is a separate process reaching in over HTTP,
-            // with no principal to check RequiredRoles against and nobody watching to answer a
-            // RequiresConfirmation dialog. Everywhere else the gate travels with the tool
-            // (GatedAIFunction, for exactly this reason) — here there is nothing for it to gate
-            // against, so the honest answer is not to offer the tool at all. A protected action
-            // that a remote client can call unattended is the gap the wrapper was written to close.
-            // The predicate is the *other* gate, and it is checked here for exactly the same reason.
-            // `MentorOptions.RequiresApproval` gates by tool name, and its whole purpose is covering
-            // what the author did not annotate — tools reached through a Level-2 agent, tools from an
-            // MCP client, tools in a class the host does not own. Reading only the attribute meant a
-            // host who used the documented seam still published those actions to unattended remote
-            // callers: the headless sample gates `update_stock` and `update_order_status` this way and
-            // both were live on /mcp (BUG-035). How a host gated an action is not the remote caller's
-            // business; that it is gated is.
-            var predicateGated = _options.RequiresApproval?.Invoke(method.ToolName) == true;
-
-            // ROADMAP #32 — an identity, not an override.
-            //
-            // A confirmation gate can never be satisfied here: RequiresConfirmation and the
-            // RequiresApproval predicate both mean "ask a human first", and there is no human on
-            // the far end of an MCP call. A ROLE gate can be satisfied, but only by a host that can
-            // actually say who is calling — and then per request (IsPublishedTo). With no resolver —
-            // the default — nothing changes.
-            var roleGatedForCallers = method.RequiredRoles.Length > 0
-                && !method.RequiresConfirmation
-                && !predicateGated
-                && identityAvailable;
-
-            if (!roleGatedForCallers &&
-                (method.RequiredRoles.Length > 0 || method.RequiresConfirmation || predicateGated))
+            if (WithheldReason(method, out var roleGatedForCallers) is { } reason)
             {
-                withheld.Add(method.RequiresConfirmation && method.RequiredRoles.Length > 0
-                    ? $"{method.ToolName} (roles + approval)"
-                    : method.RequiredRoles.Length > 0
-                        ? $"{method.ToolName} (roles: {string.Join(", ", method.RequiredRoles)})"
-                        : predicateGated && !method.RequiresConfirmation
-                            ? $"{method.ToolName} (RequiresApproval predicate)"
-                            : $"{method.ToolName} (approval)");
+                withheld.Add(reason);
                 continue;
             }
 
@@ -239,13 +211,8 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
             }
         }
 
-        if (withheld.Count > 0)
-            _logger.LogWarning(
-                "[MentorAgent:MCP] {Count} action(s) withheld from the MCP server because they are " +
-                "gated and an MCP client cannot satisfy the gate — there is no signed-in principal " +
-                "to check roles against and no user to approve anything: {Tools}. Remove the " +
-                "[MentorAction] gate if the action really is safe for an unattended remote caller.",
-                withheld.Count, string.Join("; ", withheld));
+        // Already written at startup when the endpoint was mapped with MapMentorAgentMcp.
+        LogWithheld(withheld);
 
         if (perCaller.Count > 0)
             _logger.LogInformation(
@@ -268,6 +235,70 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
             [.. candidates.Where(c => c.RequiredRoles.Length == 0).Select(c => c.Tool)],
             byName,
             HasRoleGated: perCaller.Count > 0);
+    }
+
+    /// <summary>
+    /// Why <paramref name="method"/> is withheld from every MCP caller, or <see langword="null"/> when it is
+    /// published: to everyone, or — <paramref name="roleGatedForCallers"/> — per request to the callers
+    /// that hold its role. One rule for the startup report and the catalogue.
+    /// </summary>
+    private string? WithheldReason(MethodDiscoveryInfo method, out bool roleGatedForCallers)
+    {
+        // Fail closed on anything the author protected.
+        //
+        // This is the only surface where a tool is invoked by a caller who is not the
+        // application's own user: an MCP client is a separate process reaching in over HTTP,
+        // with no principal to check RequiredRoles against and nobody watching to answer a
+        // RequiresConfirmation dialog. Everywhere else the gate travels with the tool
+        // (GatedAIFunction, for exactly this reason) — here there is nothing for it to gate
+        // against, so the honest answer is not to offer the tool at all. A protected action
+        // that a remote client can call unattended is the gap the wrapper was written to close.
+        // The predicate is the *other* gate, and it is checked here for exactly the same reason.
+        // `MentorOptions.RequiresApproval` gates by tool name, and its whole purpose is covering
+        // what the author did not annotate — tools reached through a Level-2 agent, tools from an
+        // MCP client, tools in a class the host does not own. Reading only the attribute meant a
+        // host who used the documented seam still published those actions to unattended remote
+        // callers: the headless sample gates `update_stock` and `update_order_status` this way and
+        // both were live on /mcp (BUG-035). How a host gated an action is not the remote caller's
+        // business; that it is gated is.
+        var predicateGated = _options.RequiresApproval?.Invoke(method.ToolName) == true;
+
+        // ROADMAP #32 — an identity, not an override.
+        //
+        // A confirmation gate can never be satisfied here: RequiresConfirmation and the
+        // RequiresApproval predicate both mean "ask a human first", and there is no human on
+        // the far end of an MCP call. A ROLE gate can be satisfied, but only by a host that can
+        // actually say who is calling — and then per request (IsPublishedTo). With no resolver —
+        // the default — nothing changes.
+        roleGatedForCallers = method.RequiredRoles.Length > 0
+            && !method.RequiresConfirmation
+            && !predicateGated
+            && _options.McpCallerPrincipal is not null;
+
+        if (roleGatedForCallers ||
+            (method.RequiredRoles.Length == 0 && !method.RequiresConfirmation && !predicateGated))
+            return null;
+
+        return method.RequiresConfirmation && method.RequiredRoles.Length > 0
+            ? $"{method.ToolName} (roles + approval)"
+            : method.RequiredRoles.Length > 0
+                ? $"{method.ToolName} (roles: {string.Join(", ", method.RequiredRoles)})"
+                : predicateGated && !method.RequiresConfirmation
+                    ? $"{method.ToolName} (RequiresApproval predicate)"
+                    : $"{method.ToolName} (approval)";
+    }
+
+    /// <summary>The warning that names the withheld actions, written once: at startup, or by the first catalogue.</summary>
+    private void LogWithheld(IReadOnlyCollection<string> withheld)
+    {
+        if (withheld.Count == 0 || Interlocked.Exchange(ref _withheldLogged, 1) == 1) return;
+
+        _logger.LogWarning(
+            "[MentorAgent:MCP] {Count} action(s) withheld from the MCP server because they are " +
+            "gated and an MCP client cannot satisfy the gate — there is no signed-in principal " +
+            "to check roles against and no user to approve anything: {Tools}. Remove the " +
+            "[MentorAction] gate if the action really is safe for an unattended remote caller.",
+            withheld.Count, string.Join("; ", withheld));
     }
 
     public IEnumerator<McpServerTool> GetEnumerator() => GetTools().GetEnumerator();

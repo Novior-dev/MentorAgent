@@ -6,6 +6,32 @@ internal sealed class DiscoveryResult
     public List<AgentDiscoveryInfo> Level2Agents { get; } = [];
     public List<TeamDiscoveryInfo> Level3Teams { get; } = [];
     public List<PageDiscoveryInfo> Pages { get; } = [];
+
+    /// <summary>
+    /// Every discovered method that carries <paramref name="toolName"/>: level 1, then the specialists',
+    /// then the team members'.
+    /// </summary>
+    public IEnumerable<MethodDiscoveryInfo> Named(string toolName)
+        => Level1Methods
+            .Concat(Level2Agents.SelectMany(a => a.Methods))
+            .Concat(Level3Teams.SelectMany(t => t.Members).SelectMany(m => m.Tools))
+            .Where(m => m.ToolName == toolName);
+
+    /// <summary>
+    /// The copy of <paramref name="toolName"/> built from <paramref name="method"/>, the function's own method;
+    /// null when it is not known or discovery did not find it.
+    /// </summary>
+    public MethodDiscoveryInfo? BuiltFrom(string toolName, MethodInfo? method)
+        => method is null ? null : Named(toolName).FirstOrDefault(m => m.Method == method);
+
+    /// <summary>
+    /// The method a call to <paramref name="toolName"/> runs, whose roles, confirmation, text and page the gate
+    /// applies: the copy built from the function's own <paramref name="method"/> when discovery knows it, so two
+    /// methods that share a name are each checked against their own (BUG-188); otherwise the first copy, level 1
+    /// first. Null for a tool discovery does not know, such as an MCP tool.
+    /// </summary>
+    public MethodDiscoveryInfo? Called(string toolName, MethodInfo? method)
+        => BuiltFrom(toolName, method) ?? Named(toolName).FirstOrDefault();
 }
 
 internal sealed record PageDiscoveryInfo(

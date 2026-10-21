@@ -21,7 +21,10 @@ namespace Novior.MentorAgent.Server.Hubs;
 ///   Server → Client: StreamingChunk, StreamingCompleted, BusyChanged, Error, ActionExecuting,
 ///                    ActionCompleted, ActionFailed, ConfirmationRequired, NavigationRequested,
 ///                    RagSourcesReady, TeamMemberSpeaking, UIActionExecuting, UIActionCompleted,
-///                    UIActionRequested, McpServerStatusChanged, GeneratedImages, HostedToolsDeclared
+///                    UIActionRequested, McpServerStatusChanged, GeneratedImages, HostedToolsDeclared,
+///                    Cards
+///   Over HTTP, beside the hub: POST /mentor/approve, POST /mentor/cancel, GET and POST /mentor/session
+///   (a hub call would queue behind the turn it is meant to reach)
 /// </summary>
 public class MentorHub : Hub
 {

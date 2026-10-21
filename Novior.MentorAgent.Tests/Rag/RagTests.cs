@@ -343,6 +343,58 @@ public sealed class RagTests
         string.Join(",", ChipsOf(host).Select(c => c.Title)).Should().Be("Good");
     }
 
+    // BUG-184: the chips knew only "[1] [2]". Models also write a list or a range in one marker, and those
+    // answers showed no chip at all.
+
+    private static (MentorHostFixture Host, ScriptedRagSource Source) WithThreeDocuments()
+        => WithRag(s => s.Returns("One.", 5f, "First").Returns("Two.", 5f, "Second").Returns("Three.", 5f, "Third"));
+
+    [Theory]
+    [InlineData("Secondo [1, 2], sì.")]
+    [InlineData("Secondo [1,2], sì.")]
+    [InlineData("Secondo [1-2], sì.")]
+    [InlineData("Secondo [1–2], sì.")]
+    [InlineData("Secondo [ 1 - 2 ], sì.")]
+    public async Task A_list_or_a_range_raises_a_chip_for_each_document_it_names(string answer)
+    {
+        var (host, _) = WithThreeDocuments();
+        await using var _ = host;
+        host.Chat!.Say(answer);
+
+        await host.RunTurnAsync("anything");
+
+        string.Join(",", ChipsOf(host).Select(c => c.Title)).Should().Be("First,Second");
+    }
+
+    [Fact]
+    public async Task A_range_covers_the_documents_between_its_ends()
+    {
+        var (host, _) = WithThreeDocuments();
+        await using var _ = host;
+        host.Chat!.Say("Lo dicono [1-3] e di nuovo [2].");
+
+        await host.RunTurnAsync("anything");
+
+        string.Join(",", ChipsOf(host).Select(c => c.Title)).Should().Be("First,Second,Third");
+    }
+
+    [Theory]
+    [InlineData("Use [0-9] in the pattern.", "")]
+    [InlineData("Secondo [2-7], sì.", "")]
+    [InlineData("Secondo [7, 3], sì.", "Third")]
+    public async Task A_number_that_names_no_document_cites_nothing_in_a_list_or_a_range(string answer, string chips)
+    {
+        // A list keeps the numbers that exist; a range with an end that names no document is not a citation —
+        // a character class in a code sample would otherwise cite every document.
+        var (host, _) = WithThreeDocuments();
+        await using var _ = host;
+        host.Chat!.Say(answer);
+
+        await host.RunTurnAsync("anything");
+
+        string.Join(",", ChipsOf(host).Select(c => c.Title)).Should().Be(chips);
+    }
+
     [Fact]
     public async Task The_same_document_cited_twice_is_one_chip()
     {
@@ -366,6 +418,34 @@ public sealed class RagTests
         await host.RunTurnAsync("anything");
 
         FirstPrompt(host).Should().Contain("cite it inline as");
+    }
+
+    // BUG-185: the instruction was in English whatever the language, next to a template the host writes in its own.
+
+    [Theory]
+    [InlineData(MentorLanguage.English, "cite it inline as [1], [2], … using its number")]
+    [InlineData(MentorLanguage.Italian, "citalo nel testo come [1], [2], … con il suo numero")]
+    [InlineData(MentorLanguage.German, "zitiere es im Text als [1], [2], … mit seiner Nummer")]
+    public async Task The_model_is_told_how_to_cite_in_the_configured_language(MentorLanguage language, string expected)
+    {
+        var (host, _) = WithRag(s => s.Returns("Kept.", 5f, "Good"), o => o.Language = language);
+        await using var _ = host;
+
+        await host.RunTurnAsync("anything");
+
+        FirstPrompt(host).Should().Contain(expected);
+        if (language != MentorLanguage.English)
+            FirstPrompt(host).Should().NotContain("cite it inline as", "one instruction, in one language");
+    }
+
+    [Fact]
+    public void Every_language_asks_for_the_markers_the_chips_read()
+    {
+        // A translation that wrote the markers its own way — full-width brackets, another separator — would
+        // turn the chips off for that language without a word.
+        foreach (var language in Enum.GetValues<MentorLanguage>())
+            new Novior.MentorAgent.Abstractions.Core.MentorLocalizer(language).Get("rag.cite")
+                .Should().Contain("[1], [2]", $"the {language} instruction is what the model copies");
     }
 
     [Fact]

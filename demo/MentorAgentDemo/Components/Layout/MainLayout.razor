@@ -1,0 +1,127 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject DemoLanguage L
+@inject DemoAuthenticationStateProvider Users
+@inject DemoModel Model
+@inject IJSRuntime JS
+
+<div class="page">
+    <header class="site-header">
+        <div class="container site-header__inner">
+            <a class="brand" href="">
+                <picture>
+                    <source type="image/webp" srcset="img/mentoragent-logo-64.webp 1x, img/mentoragent-logo-128.webp 2x" />
+                    <img class="brand__logo" src="img/mentoragent-logo-64.png" srcset="img/mentoragent-logo-128.png 2x"
+                         width="32" height="32" alt="" />
+                </picture>
+                <span class="brand__name">MentorAgent <span class="brand__tag">Demo</span></span>
+            </a>
+
+            <nav class="site-nav" aria-label="Main">
+                <NavLink class="site-nav__link" href="" Match="NavLinkMatch.All">@L["nav.home"]</NavLink>
+                <NavLink class="site-nav__link" href="expenses" Match="NavLinkMatch.All">@L["nav.expenses"]</NavLink>
+                <NavLink class="site-nav__link" href="expenses/new">@L["nav.new"]</NavLink>
+                <NavLink class="site-nav__link" href="policy">@L["nav.policy"]</NavLink>
+                <NavLink class="site-nav__link" href="try">@L["nav.try"]</NavLink>
+                @if (Users.Current.Role == DemoRoles.Administrator)
+                {
+                    <NavLink class="site-nav__link" href="usage">@L["nav.usage"]</NavLink>
+                }
+            </nav>
+
+            <div class="site-tools">
+                <label class="role-picker">
+                    <span class="role-picker__label">@L["header.actingAs"]</span>
+                    <select class="role-picker__select" value="@Users.Current.Id" @onchange="PickUser">
+                        @foreach (var user in DemoUser.All)
+                        {
+                            <option value="@user.Id">@user.Name · @DemoText.Role(user.Role, L.Italian)</option>
+                        }
+                    </select>
+                </label>
+
+                <button type="button" class="tool-button" title="@L["header.language"]" aria-label="@L["header.language"]"
+                        @onclick="ToggleLanguage">
+                    <span class="@(L.Italian ? "" : "is-current")">EN</span><span aria-hidden="true">/</span><span class="@(L.Italian ? "is-current" : "")">IT</span>
+                </button>
+
+                <button type="button" class="tool-button tool-button--icon" title="@L["header.theme"]" aria-label="@L["header.theme"]"
+                        @onclick="ToggleTheme">
+                    @* The site's icons: the moon switches to dark, the sun to light. *@
+                    <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+                        <path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+                    </svg>
+                    <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+                        <circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+                        <path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="container site-main">
+        @if (!Model.IsConfigured)
+        {
+            <SetupNotice />
+        }
+        @Body
+    </main>
+
+    <footer class="site-footer">
+        <div class="container site-footer__inner">
+            <p>@L["footer.note"]</p>
+            <p class="site-footer__muted">@L["footer.license"]</p>
+            @if (Model.IsConfigured)
+            {
+                <p class="site-footer__muted" data-demo-model>@L["footer.model"] @(Model.IsAzure ? "Azure OpenAI" : "OpenAI") · @Model.Model</p>
+            }
+        </div>
+    </footer>
+</div>
+
+@if (Model.IsConfigured)
+{
+    <ChatWidget />
+}
+
+@code {
+    protected override void OnInitialized()
+    {
+        L.Changed += Refresh;
+        Users.AuthenticationStateChanged += OnUserChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // The language picked on an earlier visit, kept by the browser.
+        var stored = await JS.InvokeAsync<string?>("mentorDemo.storedLanguage");
+        if (stored == "it") L.Set(italian: true);
+    }
+
+    private void PickUser(ChangeEventArgs e)
+    {
+        var user = DemoUser.All.FirstOrDefault(u => u.Id == e.Value as string);
+        if (user is not null) Users.SignInAs(user);
+    }
+
+    private async Task ToggleLanguage()
+    {
+        L.Set(!L.Italian);
+        await JS.InvokeVoidAsync("mentorDemo.storeLanguage", L.Code);
+    }
+
+    private async Task ToggleTheme() => await JS.InvokeVoidAsync("mentorDemo.toggleTheme");
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnUserChanged(Task<AuthenticationState> _) => Refresh();
+
+    public void Dispose()
+    {
+        L.Changed -= Refresh;
+        Users.AuthenticationStateChanged -= OnUserChanged;
+    }
+}

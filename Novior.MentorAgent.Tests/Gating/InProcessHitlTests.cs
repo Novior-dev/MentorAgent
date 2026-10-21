@@ -198,6 +198,38 @@ public sealed class InProcessHitlTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Both_modes_make_the_same_model_calls(bool approve)
+    {
+        // MentorHitlMode documented Native as costing "one extra model round-trip per approved call".
+        // It does not: the model is asked for the tool call, then for the answer after the result, in
+        // either mode. Native adds an agent run per round of confirmations — the run stops at the
+        // request and a second run carries the answer — not a model call.
+        var calls = new Dictionary<MentorHitlMode, int>();
+        foreach (var mode in new[] { MentorHitlMode.Blocking, MentorHitlMode.Native })
+        {
+            await using var host = MentorHostFixture.Create(o =>
+            {
+                o.HitlMode = mode;
+                o.MemoryAutoCapture = false;   // its extraction call goes to the same client
+            });
+            host.Chat!.CallTool("issue_refund", new { orderId = 1001 }).Say("done");
+            var service = host.Get<TestOrderService>();
+
+            var error = await RunAndAnswerAsync(host, "refund order 1001", approve);
+
+            error.Should().BeNull("mode {0}", mode);
+            service.Invoked.Contains(nameof(TestOrderService.IssueRefundAsync)).Should().Be(approve, "mode {0}", mode);
+            calls[mode] = host.Chat.CallCount;
+        }
+
+        calls[MentorHitlMode.Native].Should().Be(calls[MentorHitlMode.Blocking],
+            "the confirmation flow changes how the run is resumed, not how often the model is asked");
+        calls[MentorHitlMode.Blocking].Should().Be(2, "the tool call, then the answer after its result");
+    }
+
+    [Theory]
     [InlineData(MentorHitlMode.Blocking)]
     [InlineData(MentorHitlMode.Native)]
     public async Task After_Stop_during_an_approval_the_next_turn_still_works(MentorHitlMode mode)
@@ -302,6 +334,71 @@ public sealed class InProcessHitlTests
         TheTurnStillWorks(host, error, "and the delivered ones?");
     }
 
+    // BUG-187: the request a Stop left open was kept in process only. A snapshot saved in that state carries it
+    // in the stored conversation, and once restored — in another circuit, after a restart — nothing answers it.
+
+    [Fact]
+    public async Task A_snapshot_saved_after_a_Stop_restores_a_conversation_without_an_open_request()
+    {
+        await using var host = NativeHost();
+        host.Chat!.CallTool("issue_refund", new { orderId = 1001 });
+        StopAtTheFirstBanner(host);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await host.RunTurnAsync("refund order 1001", deadline.Token);
+
+        var snapshot = await host.Orchestrator.SerializeSessionAsync(deadline.Token);
+        snapshot.Should().NotBeNull();
+
+        await using var restored = NativeHost();
+        await restored.Orchestrator.RestoreSessionAsync(snapshot!.Value, deadline.Token);
+        restored.Chat!.Say("eight open orders");
+        var error = await restored.RunTurnAsync("how many open orders?", deadline.Token);
+
+        restored.Chat.Calls.Should().NotBeEmpty("the turn after the restore must reach the model; error: {0}; logged: {1} :: {2}",
+            error?.Message,
+            string.Join(" | ", restored.Logs.Records.Where(r => r.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Select(r => r.Message)),
+            restored.Logs.ExceptionText);
+        TheTurnStillWorks(restored, error, "how many open orders?");
+        restored.Get<TestOrderService>().Invoked.Should().NotContain(nameof(TestOrderService.IssueRefundAsync));
+    }
+
+    [Fact]
+    public async Task The_same_snapshot_restored_after_a_reset_in_the_scope_that_saved_it_works_too()
+    {
+        // A reset replaces the session the open request belonged to, so the memory of it no longer applies:
+        // only what the snapshot carries can answer it.
+        await using var host = NativeHost();
+        host.Chat!.CallTool("issue_refund", new { orderId = 1001 }).Say("eight open orders");
+        StopAtTheFirstBanner(host);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await host.RunTurnAsync("refund order 1001", deadline.Token);
+
+        var snapshot = await host.Orchestrator.SerializeSessionAsync(deadline.Token);
+        await host.Orchestrator.ResetSessionAsync(deadline.Token);
+        await host.Orchestrator.RestoreSessionAsync(snapshot!.Value, deadline.Token);
+        var error = await host.RunTurnAsync("how many open orders?", deadline.Token);
+
+        TheTurnStillWorks(host, error, "how many open orders?");
+    }
+
+    [Fact]
+    public async Task A_snapshot_saved_once_the_request_was_answered_carries_nothing_open()
+    {
+        await using var host = NativeHost();
+        host.Chat!.CallTool("issue_refund", new { orderId = 1001 }).Say("eight open orders");
+        StopAtTheFirstBanner(host);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await host.RunTurnAsync("refund order 1001", deadline.Token);
+
+        (await host.Orchestrator.SerializeSessionAsync(deadline.Token))!.Value
+            .TryGetProperty("openApprovals", out _).Should().BeTrue("the Stop left the request open");
+
+        await host.RunTurnAsync("how many open orders?", deadline.Token);
+
+        (await host.Orchestrator.SerializeSessionAsync(deadline.Token))!.Value
+            .TryGetProperty("openApprovals", out _).Should().BeFalse("the turn after the Stop answered it");
+    }
+
     [Fact]
     public async Task A_run_that_fails_after_the_user_confirmed_leaves_the_conversation_usable_and_the_action_run_once()
     {
@@ -365,6 +462,44 @@ public sealed class InProcessHitlTests
 
         raised.Should().NotBeNull();
         raised!.ToolName.Should().Be("count_open_orders");
+    }
+
+    [Fact]
+    public async Task The_predicate_is_asked_again_on_every_call_to_the_tool()
+    {
+        // Documented as "evaluated once per tool while the coordinator is built". In Blocking mode the
+        // middleware asks it on every call, so a predicate that reads a file or a database pays for
+        // that read every time.
+        var asked = 0;
+        await using var host = MentorHostFixture.Create(o =>
+        {
+            o.HitlMode = MentorHitlMode.Blocking;
+            o.MemoryAutoCapture = false;
+            o.RequiresApproval = name =>
+            {
+                if (name != "count_open_orders") return false;
+                Interlocked.Increment(ref asked);
+                return true;
+            };
+        });
+        host.Chat!.Say("hello");
+        await host.RunTurnAsync("hi");   // builds the coordinator
+        var afterBuild = asked;
+
+        var banners = 0;
+        var state = host.Get<IMentorStateService>();
+        state.OnConfirmationRequired += req =>
+        {
+            Interlocked.Increment(ref banners);
+            _ = state.ConfirmAsync(req.ActionId);
+        };
+        host.Chat.CallTool("count_open_orders").CallTool("count_open_orders").Say("counted twice");
+
+        var error = await host.RunTurnAsync("count the open orders, then count them again");
+
+        error.Should().BeNull();
+        banners.Should().Be(2, "each call to a gated tool is confirmed");
+        (asked - afterBuild).Should().BeGreaterThanOrEqualTo(2, "the predicate is asked once for each call");
     }
 
     [Fact]

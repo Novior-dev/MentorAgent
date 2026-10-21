@@ -3,13 +3,15 @@ using System.Security.Claims;
 namespace Novior.MentorAgent.Server.Auth;
 
 /// <summary>
-/// Scoped holder for the authenticated principal of the current SignalR invocation.
+/// Scoped holder for the authenticated principal of a SignalR connection.
 ///
-/// SignalR creates a new DI scope per hub method call, so <see cref="Hubs.MentorHub"/>
-/// captures <c>Context.User</c> into this holder at the start of each method (mirroring
-/// the SetConnectionId pattern). <see cref="ServerAuthenticationStateProvider"/> then
-/// surfaces it to the MentorAgent core, which resolves the current user through the
-/// standard <c>AuthenticationStateProvider</c> abstraction.
+/// Each connection has one DI scope of its own (<c>MentorHubScopes</c>), built on connect and reused
+/// for every hub method; SignalR's own scope per method call is not the one MentorAgent runs in.
+/// <see cref="Hubs.MentorHub"/> writes <c>Context.User</c> into this holder at the start of each
+/// method (with the connection id), so the principal is the current one even if the connection's
+/// token was refreshed. <see cref="ServerAuthenticationStateProvider"/> then surfaces it to the
+/// MentorAgent core, which resolves the current user through the standard
+/// <c>AuthenticationStateProvider</c> abstraction.
 /// </summary>
 public sealed class MentorServerUserContext
 {

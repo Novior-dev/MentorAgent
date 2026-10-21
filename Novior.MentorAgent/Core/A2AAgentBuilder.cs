@@ -57,8 +57,8 @@ internal sealed class A2AAgentBuilder : IDisposable
     /// <summary>
     /// Resolves agent cards for all configured remote agents and builds
     /// <see cref="ChatClientAgent"/> instances. Returns an empty list when no
-    /// remote agents are configured or when <c>ChatClient</c> is <c>null</c>
-    /// (Path B — pre-built AIAgent does not support Handoff extension).
+    /// remote agents are configured. On Path B (no <c>ChatClient</c>) the orchestrator does not
+    /// call it: a pre-built AIAgent gets no handoff tool, so no turn could reach a remote agent (BUG-179).
     /// </summary>
     public async Task<List<ChatClientAgent>> BuildAsync(CancellationToken ct = default)
     {

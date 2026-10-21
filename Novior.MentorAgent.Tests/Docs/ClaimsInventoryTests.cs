@@ -14,7 +14,8 @@ namespace Novior.MentorAgent.Tests.Docs;
 /// The READMEs are the specification — they are what a reader believes before they run anything —
 /// and they assert well over a thousand things. The suites that verify most of those already exist,
 /// but "most" was an impression rather than a number, and an impression cannot be a release gate.
-/// This regenerates <c>claims.tsv</c> on every run and fails if any claim has no owner at all.
+/// This regenerates <c>claims.tsv</c> on every run — into <c>TestResults</c>, and into the tracked file with
+/// <c>MENTORAGENT_WRITE_LEDGERS=1</c> — and fails if any claim has no owner at all.
 /// </para>
 ///
 /// <para>
@@ -186,8 +187,10 @@ public sealed class ClaimsInventoryTests(ITestOutputHelper output)
                .Append(string.Join(" ", c.Identifiers)).Append('\t')
                .AppendLine(Clean(c.Text));
 
-        File.WriteAllText(Path.Combine(RepoFiles.Root, RepoFiles.Tests, "Docs", "claims.tsv"),
-                          tsv.ToString());
+        // The tracked copy only with MENTORAGENT_WRITE_LEDGERS=1; otherwise TestResults (BUG-190).
+        var path = RepoFiles.LedgerOutput(Path.Combine(RepoFiles.Root, RepoFiles.Tests, "Docs", "claims.tsv"));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, tsv.ToString());
 
         foreach (var group in claims.GroupBy(c => c.Verdict).OrderByDescending(g => g.Count()))
             output.WriteLine($"{group.Key,-12} {group.Count(),5}  ({group.Count() * 100.0 / claims.Count:F1}%)");

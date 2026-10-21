@@ -52,8 +52,8 @@ public sealed class MentorMcpServer
     public IDictionary<string, string>? EnvironmentVariables { get; set; }
 
     /// <summary>
-    /// If not null, only these tool names from the MCP server will be registered.
-    /// Null (default) = register all tools from the server.
+    /// If it lists names, only these tools from the MCP server are registered. Null (default) or an
+    /// empty array registers every tool the server exposes: an empty list is not "none".
     /// </summary>
     public string[]? AllowedTools { get; set; }
 

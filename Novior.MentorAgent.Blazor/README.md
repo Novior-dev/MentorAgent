@@ -61,7 +61,7 @@ All features below are available. Configure them server-side in `AddMentorAgent(
 | 📖 **Agent Skills** | Domain knowledge loaded on demand (`load_skill`) — progressive disclosure |
 | 🧠 **Contextual memory** | Remembers user preferences across sessions |
 | 🗺️ **Page navigation** | AI navigates to pages decorated with `[MentorPage]` |
-| 📚 **RAG** | Inject relevant documents from any vector DB into every AI response |
+| 📚 **RAG** | Inject relevant documents into every AI response, read through an `IMentorRagSource` you implement on the server |
 | 🔌 **MCP Client** | Consume external MCP servers as additional tools |
 | 🖥️ **MCP Server** | Expose `[MentorAction]` methods to Claude Desktop, VS Code, Cursor |
 | 🌐 **A2A Consumer** | Connect to remote A2A agents in the Handoff workflow |
@@ -258,8 +258,9 @@ builder.Services.AddMentorAgentBlazor(options =>
 ### Authenticating the connection — `AccessTokenProvider`
 
 **If your users sign in, set this.** The server resolves the caller from the SignalR
-`HubCallerContext.User`, and a WebSocket handshake cannot carry an `Authorization` header — so the
-token travels the way SignalR expects, and `AccessTokenProvider` is where you supply it. It is the
+`HubCallerContext.User`, and a browser cannot send an `Authorization` header on a WebSocket or
+Server-Sent Events connection — so the token travels the way SignalR expects, and
+`AccessTokenProvider` is where you supply it. It is the
 WASM equivalent of the JavaScript client's `accessTokenFactory`.
 
 ```csharp
@@ -281,9 +282,10 @@ builder.Services.AddMentorAgentBlazor(options =>
 > `MemoryAutoCapture` on (the default), one person's name and preferences then reach another
 > person's prompt.
 
-> **The server must accept the token from the query string.** A WebSocket handshake cannot carry a
-> header, so SignalR sends the token as `?access_token=…`. With JWT bearer on the server, forward it in
-> `OnMessageReceived`, or the hub still sees an anonymous caller:
+> **The server must accept the token from the query string.** A browser cannot send an `Authorization`
+> header on a WebSocket or Server-Sent Events connection, so SignalR sends the token as
+> `?access_token=…`. With JWT bearer on the server, forward it in `OnMessageReceived`, or the hub
+> still sees an anonymous caller:
 >
 > ```csharp
 > // Server Program.cs
@@ -455,7 +457,7 @@ options.EnableOnboardingTour = true;   // shown once, on this user's first open 
 options.TourUrl = "/mentor/tour";      // default — only change it if you remapped the server endpoints
 ```
 
-The steps are **generated on the server** — only it knows the registered `[MentorPage]` pages and the assistant's tools — and fetched from `GET /mentor/tour`. So the server also needs `options.EnableOnboardingTour = true`; the client flag only decides whether to show it.
+The steps are **generated on the server** — only it knows the registered `[MentorPage]` pages and the assistant's tools — and fetched from `GET /mentor/tour`, which `MapMentorAgentServer()` maps whatever the server's own `EnableOnboardingTour` says. The flag on this client alone decides whether to show the tour; the server needs only the `[MentorPage]` pages, and with none it answers `[]`.
 
 That split follows the same rule as the hosted-tools badge: the server is the single source of truth, and a client that reproduces server state locally eventually displays something the server no longer agrees with.
 
@@ -599,7 +601,7 @@ The WASM client handles all three out of the box.
             .Set("VisibleRows", _orders.Count);
     }
 
-    public void Dispose() => PageContext.Clear();
+    public void Dispose() => PageContext.Clear("Orders");   // this page's entries only, by its name
 }
 ```
 
@@ -642,7 +644,7 @@ PageContext.RegisterUIActionAsync<OrderModel>(
 PageContext.UnregisterUIAction("highlight_row");
 ```
 
-### Signal page ready (Blazor Server only)
+### Signal page ready (Blazor Server and MAUI Blazor Hybrid only)
 
 **On WebAssembly `SignalReady()` is a no-op** and costs nothing, so you can keep the call in pages shared with a Blazor Server host:
 
@@ -650,13 +652,13 @@ PageContext.UnregisterUIAction("highlight_row");
 protected override async Task OnInitializedAsync()
 {
     await LoadDataAsync();
-    PageContext.SignalReady();   // Blazor Server: tells navigate_to the UI actions are ready. WASM: no-op
+    PageContext.SignalReady();   // Blazor Server, MAUI Blazor Hybrid: tells navigate_to the UI actions are ready. WASM: no-op
 }
 ```
 
 What matters on WebAssembly is *when the server learns about the page*. Its name, data and UI actions reach the server only with the page-context snapshot sent before the user's next message (`UpdatePageContext`). So when the assistant moves the user with `navigate_to`, the server does **not** wait for the new page — even on a `[MentorPage]` with `HasUIActions = true`, because on a hub connection nothing could ever signal it. The new page's UI actions become callable from the user's **next** message, not later in the same answer.
 
-(On Blazor Server, where `navigate_to` does wait on `HasUIActions` pages, call `SignalReady()` as the last line of `OnInitialized` / `OnInitializedAsync`, not from `OnAfterRenderAsync`, or the wait may already have timed out.)
+(On Blazor Server and in MAUI Blazor Hybrid, where `navigate_to` does wait on `HasUIActions` pages, call `SignalReady()` as the last line of `OnInitialized` / `OnInitializedAsync`, not from `OnAfterRenderAsync`, or the wait may already have timed out.)
 
 ---
 
@@ -675,7 +677,7 @@ public class ProductsPage { }
 
 The AI calls `navigate_to("/orders")` — the WASM widget handles navigation automatically via Blazor's `NavigationManager`.
 
-`HasUIActions` and `ReadyTimeout` only affect Blazor Server hosts. For a turn that arrives over the hub, `navigate_to` returns without waiting for `SignalReady` (it logs this at Debug level), and the new page's UI actions reach the model with the next page-context snapshot, on the user's next message — see [Signal page ready](#signal-page-ready-blazor-server-only).
+`HasUIActions` and `ReadyTimeout` only affect hosts where the page runs in the same process as the turn: Blazor Server, or a MAUI Blazor Hybrid app. For a turn that arrives over the hub, `navigate_to` returns without waiting for `SignalReady` (it logs this at Debug level), and the new page's UI actions reach the model with the next page-context snapshot, on the user's next message — see [Signal page ready](#signal-page-ready-blazor-server-and-maui-blazor-hybrid-only).
 
 ---
 
@@ -726,8 +728,8 @@ Override only when extra clarity is needed:
 | `Url` | ✅ | Page URL (e.g. `"/orders"`) |
 | `Name` | ✅ | Human-readable page name injected into the system prompt |
 | `Description` | — | Optional feature description |
-| `HasUIActions` | — | If `true`, `navigate_to` waits for `PageContext.SignalReady()` before UI actions — **Blazor Server (interactive circuit) only**. On a hub turn from this WASM client it does not wait: the page's actions arrive with the user's next message. Default: `false` |
-| `ReadyTimeout` | — | Timeout in ms for `SignalReady()` (Blazor Server only). Default: `2000` |
+| `HasUIActions` | — | If `true`, `navigate_to` waits for `PageContext.SignalReady()` before UI actions — **only where the page runs in the turn's process: Blazor Server or MAUI Blazor Hybrid**. On a hub turn from this WASM client it does not wait: the page's actions arrive with the user's next message. Default: `false` |
+| `ReadyTimeout` | — | Timeout in ms for `SignalReady()` (Blazor Server and MAUI Blazor Hybrid only). Default: `2000` |
 
 ---
 
@@ -752,7 +754,7 @@ Override only when extra clarity is needed:
 | `VoiceBargeIn` | `bool` | `true` | Stop playback when the user takes the floor |
 | `VoiceHandsFree` | `bool` | `false` | Voice-only conversation loop. Ignored unless both voice options are on |
 | `VoiceRate` | `double` | `1.0` | `SpeechSynthesisUtterance.rate` — useful range 0.5–2.0 |
-| `EnableOnboardingTour` | `bool` | `false` | Show the [guided tour](#onboarding-tour) on first open. The server must enable it too |
+| `EnableOnboardingTour` | `bool` | `false` | Show the [guided tour](#onboarding-tour) on first open. This flag alone decides: the server answers `GET /mentor/tour` whatever its own `EnableOnboardingTour` says |
 | `TourUrl` | `string` | `"/mentor/tour"` | Where to fetch the tour steps from. A relative value is resolved against `HubUrl`'s origin when `HubUrl` is absolute (the tour is served by the same server as the hub), otherwise against the app base address. An absolute URL is used as-is |
 | `EnableSuggestions` | `bool` | `false` | Suggestion chips in the welcome panel |
 | `EnableImageInput` | `bool` | `false` | [Image attachments](#image-input-multimodal) — 📎 upload, paste, drag & drop and 🔗 URL. Must also be enabled server-side |

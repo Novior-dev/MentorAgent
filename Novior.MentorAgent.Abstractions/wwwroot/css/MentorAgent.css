@@ -1287,6 +1287,10 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
+    /* A flex item is never narrower than its content by default: a wide table widened the bubble past the panel
+       and scrolled the whole conversation sideways. At 0 it fits the bubble, and the table scrolls in its own box
+       (BUG-193). */
+    min-width: 0;
 }
 
 .bm-bubble__content {
@@ -1379,6 +1383,10 @@
     padding: 7px 10px;
     text-align: left;
     border-bottom: 1px solid var(--bm-border);
+    /* Break between words only. The bubble's word-break: break-word let a column shrink to one character, so a
+       number stood one digit per line (BUG-193); a table wider than the bubble scrolls in .bm-table-wrap. */
+    word-break: normal;
+    overflow-wrap: normal;
 }
 
 /* A Markdown column's alignment marker (:---: or ---:). */
@@ -1388,6 +1396,11 @@
 
 .bm-table .bm-align-right {
     text-align: right;
+}
+
+/* A cell holding only a number, an amount, a date or a time stays on one line (BUG-193). */
+.bm-table .bm-num {
+    white-space: nowrap;
 }
 
 .bm-table thead th {

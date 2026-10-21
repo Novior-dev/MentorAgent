@@ -69,8 +69,8 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     /// Approval requests a turn left open in the stored conversation, each with the result it is to be answered
     /// with at the start of the next turn on the same session (BUG-116): Stop or a failure while the banner
     /// waited, a run that failed after the user had answered (the framework stores nothing from a failed run),
-    /// or the approval-round cap. Kept until a run that carries the answers succeeds. In process only: a
-    /// snapshot saved in that state and restored still carries the open request.
+    /// or the approval-round cap. Kept until a run that carries the answers succeeds. A snapshot saved in
+    /// that state carries them too, and a restore puts them back here (BUG-187).
     /// </summary>
     private (AgentSession Session, List<(ToolApprovalRequestContent Request, string Result)> Requests)? _unansweredApprovals;
 
@@ -436,7 +436,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             // Reliable memory: extract durable user facts from the message with a dedicated
             // call, regardless of whether the coordinator proactively called remember(). Still
             // awaited inside the try, so Stop still cancels it and a failure is still handled.
-            if (_options.MemoryAutoCapture && _options.UseMemoryContext)
+            if (_options.MemoryAutoCaptureRuns)
                 await CaptureUserFactsAsync(userMessage, cts.Token);
         }
         catch (OperationCanceledException)
@@ -745,7 +745,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             return request.CreateResponse(false, MentorTurnOrigin.NobodyToConfirm);
         }
 
-        var message = _confirmations.BuildMessage(toolName, arguments);
+        var message = _confirmations.BuildMessage(toolName, arguments, _sp);
 
         var actionId = Guid.NewGuid();
         var req = new ConfirmationRequest
@@ -971,7 +971,58 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // conversation yet" would pay for the whole discovery pass on a page that never chatted.
         if (_coordinator is null) return null;
 
-        return await _sessionManager.SerializeCurrentSessionAsync(_coordinator);
+        var snapshot = await _sessionManager.SerializeCurrentSessionAsync(_coordinator);
+
+        // BUG-187: a request that a Stop or a failure left open is answered at the start of the next turn, from
+        // memory, but the stored conversation still holds it, and so does a snapshot saved now. Restored in
+        // another scope, nothing answered it, and every later turn failed ("ToolApprovalRequestContent found …
+        // that have no matching ToolApprovalResponseContent"). The requests and their answers travel with the
+        // snapshot; readers that predate the property ignore it.
+        if (snapshot is { } saved && _unansweredApprovals is { } open
+            && ReferenceEquals(open.Session, await _sessionManager.GetOrCreateSessionAsync(_coordinator, ct)))
+        {
+            var envelope = System.Text.Json.Nodes.JsonNode.Parse(saved.GetRawText())!.AsObject();
+            envelope[OpenApprovalsProperty] = new System.Text.Json.Nodes.JsonArray(
+                [.. open.Requests.Select(r => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+                {
+                    ["request"] = JsonSerializer.SerializeToNode(r.Request, ContentTypeInfo),
+                    ["result"]  = r.Result,
+                })]);
+            return JsonSerializer.SerializeToElement(envelope);
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>The snapshot property that carries the approval requests left open, with their answers (BUG-187).</summary>
+    private const string OpenApprovalsProperty = "openApprovals";
+
+    private static System.Text.Json.Serialization.Metadata.JsonTypeInfo ContentTypeInfo
+        => AIJsonUtilities.DefaultOptions.GetTypeInfo(typeof(AIContent));
+
+    /// <summary>The approval requests a snapshot says were left open, with their answers; none when it says nothing.</summary>
+    private static List<(ToolApprovalRequestContent Request, string Result)> OpenApprovalsIn(JsonElement snapshot)
+    {
+        var open = new List<(ToolApprovalRequestContent, string)>();
+        if (snapshot.ValueKind != JsonValueKind.Object
+            || !snapshot.TryGetProperty(OpenApprovalsProperty, out var items)
+            || items.ValueKind != JsonValueKind.Array)
+            return open;
+
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("request", out var request)
+                || !item.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.String)
+                continue;
+            try
+            {
+                if (request.Deserialize(ContentTypeInfo) is ToolApprovalRequestContent read)
+                    open.Add((read, result.GetString()!));
+            }
+            catch (JsonException) { /* not one of ours: the restore goes on without it */ }
+        }
+        return open;
     }
 
     /// <summary>
@@ -985,9 +1036,16 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // reconnecting host does, before any message has built one.
         await EnsureInitializedAsync(ct);
 
+        var left = OpenApprovalsIn(snapshot);
         await _sessionManager.RestoreSessionAsync(_coordinator!, snapshot, ct);
         _toolFilter?.ForgetPreviousTurn();
         _ragContextProvider.ForgetConversation();
+
+        // BUG-187: the restored conversation's open requests are answered on its first turn, as they would have
+        // been in the scope that saved it. Whatever was open in the conversation it replaces is not.
+        _unansweredApprovals = left.Count > 0
+            ? (await _sessionManager.GetOrCreateSessionAsync(_coordinator!, ct), left)
+            : null;
     }
 
     /// <summary>
@@ -1060,7 +1118,14 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             // nine tasks, ~6,000 input tokens a hop — until a process was killed by hand. The flag is
             // set by MentorAgentA2AHandler before the turn, and this build is lazy, so it is read in time.
             _offerRemoteAgents = _sp.GetService<MentorTurnOrigin>()?.FromAnotherAgent != true;
-            if (_offerRemoteAgents)
+            if (_options.ChatClient is null)
+            {
+                // Path B (BUG-179). A remote agent is reached through the handoff tool, which is built on
+                // options.ChatClient: no turn here can reach one, yet every peer's card was read — one HTTP call
+                // per peer, and a warning when one was down. The Path B diagnostics name them instead.
+                _remoteAgents = [];
+            }
+            else if (_offerRemoteAgents)
             {
                 _remoteAgents = await _a2aAgentBuilder.BuildAsync(ct);
             }
@@ -1489,7 +1554,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                     _options.ToolFilterMinTools,
                     // A match that needs confirmation — the application's mark for an action that
                     // changes data — never reaches the model alone (BUG-099).
-                    _confirmations.IsDeclaredConfirmationGated,
+                    name => _confirmations.IsDeclaredConfirmationGated(name),
                     // BUG-106 — what may travel when nothing matched: an action that needs no
                     // confirmation and no role, or an MCP tool its server marks read-only.
                     IsZeroMatchEligible(discovery),
@@ -1604,7 +1669,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             // Memory writer — Path A only. The Path B counterpart is reported after the branch:
             // this whole block runs under `_options.ChatClient is not null`, so testing the same
             // condition again here can only ever be true, and an `else` on it is unreachable.
-            if (_options.UseMemoryContext && _options.MemoryAutoCapture)
+            if (_options.MemoryAutoCaptureRuns)
                 BuildLog.LogInformation(
                     "[MentorAgent] Reliable memory auto-capture active (post-turn extraction; remember tool omitted).");
 
@@ -1670,10 +1735,16 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             // Path B diagnostics. These used to live inside the Path A branch above, guarded by a
             // second `_options.ChatClient is not null` check whose `else` could therefore never
             // run — so a developer on Path B was told nothing about what they were not getting.
-            if (_options.UseMemoryContext && _options.MemoryAutoCapture)
+            // The writer is named either way: with a ClassifierChatClient the extraction runs here
+            // too and is the only writer; without one the remember tool is.
+            if (_options.MemoryAutoCaptureRuns)
                 BuildLog.LogInformation(
-                    "[MentorAgent] MemoryAutoCapture is on but no ChatClient (Path B) — memory uses " +
-                    "the remember-tool fallback. The post-turn extraction needs a ChatClient MentorAgent " +
+                    "[MentorAgent] Reliable memory auto-capture active on Path B through the ClassifierChatClient " +
+                    "(post-turn extraction, one call per message; remember tool omitted).");
+            else if (_options.UseMemoryContext && _options.MemoryAutoCapture)
+                BuildLog.LogInformation(
+                    "[MentorAgent] MemoryAutoCapture is on but no ChatClient or ClassifierChatClient (Path B) — " +
+                    "memory uses the remember-tool fallback. The post-turn extraction needs a client MentorAgent " +
                     "can call on its own.");
 
             if (_options.MemoryRelevanceFiltering && _options.EmbeddingGenerator is null)
@@ -1698,6 +1769,36 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                     "[MentorAgent] RequireActionForChangeRequests has no effect on Path B: the action is required by " +
                     "the tool filter of the chat pipeline MentorAgent builds, and a pre-built AIAgent brings its own. " +
                     "Use options.ChatClient (Path A).");
+
+            // A safety check that cannot run is the one setting nobody may believe is on. Both are model
+            // calls MentorAgent makes on its own (ClassifierChatClient ?? ChatClient), and a pre-built
+            // agent offers none; a custom guardrail replaces the built-in check and needs no client.
+            if (_options.AuxiliaryChatClient is null && _options.EnableSafetyCheck && _options.InputGuardrail is null)
+                _logger.LogWarning(
+                    "[MentorAgent] EnableSafetyCheck has no effect on Path B without a ClassifierChatClient: the check is a " +
+                    "model call MentorAgent makes on its own, and a pre-built AIAgent offers none, so every message goes " +
+                    "through unchecked. Set options.ClassifierChatClient, or a custom InputGuardrail.");
+
+            if (_options.AuxiliaryChatClient is null && _options.EnableOutputSafetyCheck && _options.OutputGuardrail is null)
+                _logger.LogWarning(
+                    "[MentorAgent] EnableOutputSafetyCheck has no effect on Path B without a ClassifierChatClient: the check " +
+                    "is a model call MentorAgent makes on its own, and a pre-built AIAgent offers none, so every reply is " +
+                    "shown unchecked (still buffered, no live streaming). Set options.ClassifierChatClient, or a custom OutputGuardrail.");
+
+            // Specialists, teams and remote agents run on options.ChatClient (BuildAllTools), and a pre-built agent
+            // offers none: each was discovered or configured, and was absent from every turn without a word.
+            string[] notBuilt =
+            [
+                .. discovery.Level2Agents.Select(a => $"{a.Attribute.Name} ([MentorAgent])"),
+                .. discovery.Level3Teams.Select(t => $"{t.Attribute.Name} ([MentorTeam])"),
+                .. (_options.RemoteAgents ?? []).Select(r => $"{r.Name} (RemoteAgents)"),
+            ];
+            if (notBuilt.Length > 0)
+                _logger.LogWarning(
+                    "[MentorAgent] {Count} agent(s) not built on Path B: {Agents}. Specialists, teams and remote agents " +
+                    "run on options.ChatClient, and a pre-built AIAgent offers none, so no turn can reach them. Use " +
+                    "options.ChatClient (Path A), or build them into your own agent.",
+                    notBuilt.Length, string.Join(", ", notBuilt));
         }
 
         // ?? Middleware � identical for both paths ???????????????????????????????????????
@@ -1896,9 +1997,22 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 }
 
                 log.LogDebug("[MentorAgent] Navigating to {Url}", url);
+
+                // The page being left signalled when it opened, and that signal would end the wait below at once,
+                // before the new page has registered its actions: take it back before asking for the navigation, so
+                // only the new page's SignalReady counts (BUG-194). Not for the page already shown: Blazor does not
+                // initialize it again, and no new signal would come.
+                var alreadyShown = page.HasUIActions && IsShown(sp, page.Url);
+                if (page.HasUIActions && !alreadyShown && pageCtx is MentorPageContext context && CanReceivePageReady(sp))
+                    context.TakeReadySignalBack();
+
                 state.NotifyNavigationRequested(url);
 
-                if (page.HasUIActions && !CanReceivePageReady(sp))
+                if (alreadyShown)
+                {
+                    log.LogDebug("[MentorAgent] {Url} is already shown: navigate_to does not wait for SignalReady.", url);
+                }
+                else if (page.HasUIActions && !CanReceivePageReady(sp))
                 {
                     // A hub, SSE or A2A turn has no circuit in this scope, so nothing here can ever
                     // call SignalReady: the new page runs in a browser or app on the other end, and its
@@ -1936,6 +2050,27 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
         try { _ = nav.Uri; return true; }
         catch (InvalidOperationException) { return false; }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="url"/> is the page this scope's circuit shows now: the same path, whatever the query
+    /// or fragment. False without an initialised <see cref="Microsoft.AspNetCore.Components.NavigationManager"/>.
+    /// </summary>
+    internal static bool IsShown(IServiceProvider services, string url)
+    {
+        if (services.GetService(typeof(Microsoft.AspNetCore.Components.NavigationManager))
+            is not Microsoft.AspNetCore.Components.NavigationManager nav)
+            return false;
+
+        try
+        {
+            static string PathOf(string relative) => relative.Split('?', '#')[0].Trim('/');
+            return string.Equals(PathOf(nav.ToBaseRelativePath(nav.Uri)), PathOf(url), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     // -- Memory Tools ----------------------------------------------------------
@@ -1978,8 +2113,10 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
     /// <summary>
     /// The client for MentorAgent's own auxiliary calls — the input safety check, the hosted-tool
-    /// domain gate, and post-turn memory auto-capture. Path A only; <see langword="null"/> on Path B,
-    /// where there is no <see cref="MentorOptions.ChatClient"/> to use.
+    /// domain gate, and post-turn memory auto-capture: <see cref="MentorOptions.ClassifierChatClient"/>,
+    /// else <see cref="MentorOptions.ChatClient"/> (<c>MentorOptions.AuxiliaryChatClient</c>).
+    /// <see langword="null"/> on Path B without a classifier, where there is nothing of MentorAgent's
+    /// own to call.
     ///
     /// <para>
     /// It deliberately does <b>not</b> go through the coordinator's pipeline: the domain gate runs
@@ -2001,7 +2138,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // answer, and they are in front of the reply the user is waiting for. A host that points
         // them at a small deployment changes the cost and the latency of every turn, not the
         // behaviour. Falls back to the main client, which is what every existing host gets.
-        var raw = _options.ClassifierChatClient ?? _options.ChatClient;
+        var raw = _options.AuxiliaryChatClient;
         if (raw is null) return null;
 
         return _auxClient ??= new TokenUsageChatClient(
@@ -2769,11 +2906,12 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // Memory
         if (_options.UseMemoryContext)
         {
-            // With reliable post-turn capture (Path A) the remember tool is redundant — omit it to
-            // save per-call schema tokens. Keep it as the writer only when auto-capture can't run
-            // (Path B / opt-out). Forget is always available (user-initiated).
-            var autoCaptureActive = _options.MemoryAutoCapture && _options.ChatClient is not null;
-            if (!autoCaptureActive)
+            // With reliable post-turn capture the remember tool is redundant — omit it to save
+            // per-call schema tokens. Keep it as the writer only when auto-capture can't run (Path B
+            // without a classifier, or opt-out). The condition is the extraction's own: up to 1.0.0
+            // this one tested ChatClient alone, so Path B with a ClassifierChatClient had two writers.
+            // Forget is always available (user-initiated).
+            if (!_options.MemoryAutoCaptureRuns)
                 tools.Add(BuildRememberTool());
             tools.Add(BuildForgetTool());
         }
@@ -2817,7 +2955,8 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             // Hosted tools are not AIFunction (the provider runs them, so there is nothing local to
             // gate) and an already-wrapped function must not be wrapped twice.
             if (tools[i] is not AIFunction fn || fn is ApprovalRequiredAIFunction) continue;
-            if (!_confirmations.RequiresApproval(fn.Name)) continue;
+            // The function's own method decides: two actions can share a name (BUG-188).
+            if (!_confirmations.RequiresApproval(fn.Name, fn.UnderlyingMethod)) continue;
 
             tools[i] = new ApprovalRequiredAIFunction(fn);
             gated.Add(fn.Name);
@@ -2911,8 +3050,9 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             var chatClient = GetChatClientForAux();
             if (chatClient is null)
             {
-                // Path B: safety check not available without IChatClient � allow through
-                _logger.LogDebug("[MentorAgent] Safety check skipped � no IChatClient on Path B.");
+                // Path B without a ClassifierChatClient: nothing to classify with, so the message goes
+                // through. The coordinator build has already warned about it.
+                _logger.LogDebug("[MentorAgent] Safety check skipped — no ChatClient or ClassifierChatClient (Path B).");
                 return true;
             }
             // BUG-047 — the classifier has to be told what this application is, or it cannot tell an
@@ -3108,7 +3248,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         if (string.IsNullOrWhiteSpace(userMessage)) return;
 
         var chatClient = GetChatClientForAux();
-        if (chatClient is null) return; // Path B: no IChatClient available
+        if (chatClient is null) return; // Path B without a classifier: nothing of our own to call
 
         try
         {

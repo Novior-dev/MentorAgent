@@ -142,6 +142,24 @@ public sealed class MessageBubbleTests : ComponentTestBase
     }
 
     [Fact]
+    public void A_cell_holding_only_a_number_an_amount_a_date_or_a_time_is_marked_to_stay_on_one_line()
+    {
+        // BUG-193: in a narrow bubble a browser broke "2026-10-16" after a hyphen. The stylesheet keeps a bm-num
+        // cell on one line; a cell with words still wraps between them.
+        var cut = RenderBubble(Assistant("""
+            | No. | Date | Amount | Time | Employee | When |
+            | --- | --- | ---: | --- | --- | --- |
+            | 1008 | 2026-10-16 | €1,412.30 | 10:30 | Paolo Marino | 16 Oct 2026 |
+            """));
+
+        var cells = cut.FindAll(".bm-table tbody td");
+        cells.Take(4).Should().AllSatisfy(c => c.ClassList.Should().Contain("bm-num"));
+        cells[2].ClassList.Should().Contain("bm-align-right", "the alignment class stays beside it");
+        cells.Skip(4).Should().AllSatisfy(c => c.ClassList.Should().NotContain("bm-num"));
+        cut.FindAll(".bm-table thead th.bm-num").Should().BeEmpty("headers are kept on one line by the stylesheet already");
+    }
+
+    [Fact]
     public void A_row_with_fewer_cells_than_headers_is_padded_rather_than_dropped()
     {
         // A truncated stream produces exactly this. Losing the row entirely would hide data;

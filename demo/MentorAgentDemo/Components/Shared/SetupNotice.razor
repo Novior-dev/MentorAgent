@@ -1,0 +1,15 @@
+@inherits DemoComponent
+@inject DemoModel Model
+
+<aside class="notice" role="status">
+    <h2 class="notice__title">@L["setup.title"]</h2>
+    <p>@L["setup.lead"]</p>
+    <pre class="code"><code>cd demo/MentorAgentDemo
+dotnet user-secrets set "Demo:ApiKey" "&lt;your key&gt;"
+dotnet run</code></pre>
+    <p><strong>@L["setup.missing"]</strong> @string.Join(", ", Model.Missing)</p>
+    @if (Model.IsAzure)
+    {
+        <p class="muted">@L["setup.azure"]</p>
+    }
+</aside>

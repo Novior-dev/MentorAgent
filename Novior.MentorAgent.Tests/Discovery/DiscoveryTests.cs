@@ -380,6 +380,19 @@ public sealed class DiscoveryTests
             .Should().NotContain(r => r.Contains("Initialization failed"));
     }
 
+    [Fact]
+    public void The_discovery_log_is_in_English()
+    {
+        // The two lines that open and close the discovery were the only Italian in the log of an English library
+        // ("Discovery avviata su …", "Discovery completata …").
+        DiscoverWith([typeof(TestOrderService).Assembly], out var logs);
+
+        var lines = logs.Records.Select(r => r.Message).ToList();
+        lines.Should().Contain(l => l.StartsWith("[MentorAgent] Discovery started on 1 assembly(ies): ", StringComparison.Ordinal));
+        lines.Should().Contain(l => l.StartsWith("[MentorAgent] Discovery completed — L1 tools: ", StringComparison.Ordinal));
+        lines.Should().NotContain(l => l.Contains("avviata", StringComparison.Ordinal) || l.Contains("completata", StringComparison.Ordinal));
+    }
+
     private static DiscoveryResult DiscoverWith(System.Reflection.Assembly[] assemblies, out TestLogCollector logs)
     {
         logs = new TestLogCollector();

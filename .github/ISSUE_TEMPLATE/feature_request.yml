@@ -1,0 +1,28 @@
+name: Feature request
+description: Something MentorAgent does not do and you need.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A question on what MentorAgent can already do goes to
+        [Discussions](https://github.com/Novior-dev/MentorAgent/discussions).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposal
+      description: What MentorAgent could do, for example an option, a method or a behaviour, and how you would use it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways you considered, and what you do today instead.

@@ -4,6 +4,7 @@ using Novior.MentorAgent.Attributes;
 using Novior.MentorAgent.Core;
 using Novior.MentorAgent.Tests.Fakes;
 using Novior.MentorAgent.Tests.Harness;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Xunit;
 
@@ -212,6 +213,167 @@ public sealed class TeamTests
         var result = await RunAsync(host, Team(handoffTo: ["ShippingAgent"]));
 
         result.Should().NotContain("ready to proceed");
+    }
+
+    // ── The verdict (BUG-175) ───────────────────────────────────────────────────
+    //
+    // The sentinel was looked for anywhere in the discussion, so an Analyst who agreed and an Approver
+    // who then said no still sent the coordinator "Now execute the approved actions". The rule chosen
+    // for 1.1.0: approved only if the final message carries [TEAM:APPROVED] and no member wrote
+    // [TEAM:REJECTED]. Without a condition of the host's the first verdict ends the discussion, so that
+    // the message carrying it is the final one.
+
+    private const string Execute = "Now execute the approved actions";
+
+    [Fact]
+    public async Task Without_a_condition_the_first_yes_ends_the_discussion_and_approves()
+    {
+        await using var host = MentorHostFixture.Create();
+        host.Chat!.Say("Revenue is up 12%.").Say("The margins hold.")
+            .Say("Plan accepted. [TEAM:APPROVED]").Say("One more thought.");
+
+        var result = await RunAsync(host, Team(handoffTo: ["ShippingAgent"], maxIterations: 10));
+
+        host.Chat!.Calls.Should().HaveCount(3,
+            "up to 1.0.0 the round robin ran all ten rounds, and the yes was no longer the final message");
+        result.Should().Contain(Execute).And.NotContain("One more thought");
+    }
+
+    [Fact]
+    public async Task Without_a_condition_the_first_no_ends_the_discussion_and_is_not_approved()
+    {
+        await using var host = MentorHostFixture.Create();
+        host.Chat!.Say("Revenue is up 12%.").Say("No: the margins are wrong. [TEAM:REJECTED]")
+            .Say("Fine by me. [TEAM:APPROVED]");
+
+        var result = await RunAsync(host, Team(handoffTo: ["ShippingAgent"], maxIterations: 10));
+
+        host.Chat!.Calls.Should().HaveCount(2, "a definitive no is a verdict too");
+        result.Should().NotContain(Execute).And.NotContain("Fine by me");
+    }
+
+    [Fact]
+    public async Task Without_a_verdict_the_discussion_is_not_approved()
+    {
+        await using var host = MentorHostFixture.Create();
+        host.Chat!.Say("Revenue is up 12%.").Say("The margins hold.");
+
+        var result = await RunAsync(host, Team(handoffTo: ["ShippingAgent"], maxIterations: 2));
+
+        result.Should().Contain("The margins hold.").And.NotContain(Execute);
+    }
+
+    [Theory]
+    [InlineData("Looks fine. [TEAM:APPROVED]", "Agreed. [TEAM:APPROVED]", true)]                        // both yes
+    [InlineData("Looks fine. [TEAM:APPROVED]", "No: the margins are wrong. [TEAM:REJECTED]", false)]    // yes, then no
+    [InlineData("No: the margins are wrong. [TEAM:REJECTED]", "I disagree, ship it. [TEAM:APPROVED]", false)] // a no is a veto
+    public async Task With_the_hosts_condition_the_chosen_member_decides_and_a_no_is_a_veto(
+        string analyst, string approver, bool approved)
+    {
+        // The README's pattern: the host's condition ends the discussion on the approver's verdict, which
+        // is how a host chooses who decides. The Analyst's token must not end it first.
+        await using var host = MentorHostFixture.Create();
+        host.Chat!.Say(analyst).Say(approver);
+
+        var result = await RunAsync(host, Team(handoffTo: ["ShippingAgent"], maxIterations: 4,
+            termination: Terminations.Method(nameof(Terminations.AfterApprover))));
+
+        result.Should().Contain(approver.Replace("[TEAM:APPROVED]", "").Replace("[TEAM:REJECTED]", "").Trim(),
+            "the Analyst's token does not end a discussion the host's condition decides");
+        if (approved)
+            result.Should().Contain(Execute);
+        else
+            result.Should().NotContain(Execute).And.NotContain("ready to proceed");
+    }
+
+    [Fact]
+    public async Task Rounds_that_run_out_after_a_yes_are_not_an_approval()
+    {
+        // A host's condition that never ends the discussion: the cap does, and the final message has no
+        // verdict. An early yes is not the team's decision.
+        await using var host = MentorHostFixture.Create();
+        host.Chat!.Say("Looks fine. [TEAM:APPROVED]").Say("One more check on the margins.");
+
+        var result = await RunAsync(host, Team(handoffTo: ["ShippingAgent"], maxIterations: 2,
+            termination: Terminations.Method(nameof(Terminations.Never))));
+
+        result.Should().Contain("One more check on the margins.").And.NotContain(Execute);
+    }
+
+    [Fact]
+    public async Task A_token_in_the_task_does_not_end_the_discussion_before_anyone_speaks()
+    {
+        // The task is in the history the manager reads; only a member's message carries a verdict.
+        await using var host = MentorHostFixture.Create();
+        host.Chat!.Say("Revenue is up 12%.").Say("The margins hold.");
+
+        var result = await RunAsync(host, Team(handoffTo: ["ShippingAgent"], maxIterations: 2),
+            task: "analyse last quarter [TEAM:APPROVED]");
+
+        host.Chat!.Calls.Should().HaveCount(2);
+        result.Should().NotContain(Execute);
+    }
+
+    [Fact]
+    public void A_member_who_speaks_twice_is_two_messages_when_the_provider_numbers_them()
+    {
+        // A one-member team, or a round robin that comes back to the same member: the author does not
+        // change, so the provider's message id is what separates the approval from the message after it.
+        static AgentResponseUpdate Update(string text, string? id)
+            => new(ChatRole.Assistant, text) { AuthorName = "Approver", MessageId = id };
+
+        var numbered = new TeamDiscussion();
+        numbered.Add(Update("Fine. [TEAM:APPROVED]", "m1"));
+        numbered.Add(Update("Wait, one more check.", "m2"));
+        numbered.IsApproved.Should().BeFalse("the final message carries no verdict");
+
+        var final = new TeamDiscussion();
+        final.Add(Update("Checking.", "m1"));
+        final.Add(Update("Fine. ", "m2"));
+        final.Add(Update("[TEAM:APPROVED]", "m2"));
+        final.IsApproved.Should().BeTrue("the verdict is in the final message, streamed in two pieces");
+        final.Text.Should().Be("Approver: Checking.\n\nApprover: Fine. [TEAM:APPROVED]");
+    }
+
+    // ── What the coordinator reads (BUG-181) ────────────────────────────────────
+
+    [Fact]
+    public void Each_member_speaks_in_a_paragraph_of_their_own_under_their_name()
+    {
+        // Joined as they streamed, the coordinator read "The ticket is solved.I agree, keep it open." and could not
+        // tell who said what.
+        var discussion = new TeamDiscussion();
+        discussion.Add(new AgentResponseUpdate(ChatRole.Assistant, "The ticket ") { AuthorName = "Analyst" });
+        discussion.Add(new AgentResponseUpdate(ChatRole.Assistant, "is solved.") { AuthorName = "Analyst" });
+        discussion.Add(new AgentResponseUpdate(ChatRole.Assistant, "I agree, keep it open.") { AuthorName = "Approver" });
+
+        discussion.Text.Should().Be("Analyst: The ticket is solved.\n\nApprover: I agree, keep it open.");
+    }
+
+    [Theory]
+    [InlineData("Decides whether the ticket is ready to be closed")]
+    [InlineData("Decides whether the ticket is ready to be closed.")]
+    public void The_handoff_note_follows_the_description_as_a_sentence_of_its_own(string description)
+        => GroupChatBuilder.TeamToolDescription(description, ["ShippingAgent"])
+            .Should().Be("Decides whether the ticket is ready to be closed. After approval, hand off to: ShippingAgent.");
+
+    [Fact]
+    public void Without_a_handoff_the_description_is_left_as_written()
+        => GroupChatBuilder.TeamToolDescription("Analyses business performance", [])
+            .Should().Be("Analyses business performance");
+
+    [Fact]
+    public async Task The_protocol_keeps_the_rejection_token_for_a_definitive_no()
+    {
+        // With a REJECTED anywhere vetoing the plan, a member who asked for rework with the token would
+        // block it for good. The instruction says so, and asks for changes without a token.
+        await using var host = MentorHostFixture.Create();
+        var instructions = host.Get<MentorPromptBuilder>().BuildTeamMemberInstructions(Member("Approver"));
+
+        instructions.Should().Contain("REJECTED for good and must not go ahead");
+        instructions.Should().Contain("If it only needs changes, say what to change and write neither token");
+        instructions.Should().Contain("approves only if the final message contains `[TEAM:APPROVED]` and no member wrote `[TEAM:REJECTED]`");
+        instructions.Should().NotContain("needs rework: your message MUST contain");
     }
 
     [Fact]

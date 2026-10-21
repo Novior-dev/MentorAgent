@@ -27,4 +27,18 @@ public sealed class RepoFilesTests
         // matching (an extension, a folder filter) without failing on ordinary growth or cleanup.
         RepoFiles.SourceFiles.Count.Should().BeGreaterThan(150);
     }
+
+    [Fact]
+    public void A_test_run_writes_the_ledgers_outside_the_tracked_files_unless_asked()
+    {
+        // BUG-190: every dotnet test rewrote option-coverage.md and claims.tsv, so a run left the working tree changed.
+        var tracked = Path.Combine(RepoFiles.Root, RepoFiles.Tests, "E2E", "option-coverage.md");
+
+        RepoFiles.LedgerOutput(tracked, writeTracked: false)
+            .Should().Be(Path.Combine(RepoFiles.Root, RepoFiles.Tests, "TestResults", "option-coverage.md"));
+        File.ReadAllLines(Path.Combine(RepoFiles.Root, ".gitignore"))
+            .Should().Contain("TestResults/", "the default output must be a folder git ignores");
+
+        RepoFiles.LedgerOutput(tracked, writeTracked: true).Should().Be(tracked);
+    }
 }

@@ -285,6 +285,58 @@ public sealed class HitlOverHttpTests
     }
 
     [Fact]
+    public async Task Stop_after_the_turn_is_200_and_after_the_connection_closed_is_404()
+    {
+        // BUG-162. The README said a 404 comes back when Stop is pressed just as the turn finishes, and
+        // taught clients to ignore it. The scope belongs to the connection, not to the turn: after the
+        // turn Stop is a 200 that stops nothing, and the 404 means the connection is gone — the one
+        // case a client should not ignore.
+        await using var app = await ServerAppFactory.CreateAsync(configureServices: s => s.AddScoped<ScopeEndProbe>());
+        app.Chat.Say("a short reply");
+        var (hub, turn) = await ConnectAsync(app);
+        var connectionId = hub.ConnectionId!;
+        Exception? closedWith = null;
+        var closed = false;
+        hub.Closed += ex => { closed = true; closedWith = ex; return Task.CompletedTask; };
+
+        ScopeEndProbe probe;
+        try
+        {
+            await StageAsync(hub.InvokeAsync("SendMessage", "hello", null), "SendMessage returned", turn);
+
+            // The connection's own scope, held from here on: when the server lets go of it, the probe hears.
+            var scope = app.Services.GetRequiredService<Novior.MentorAgent.Server.Hubs.MentorHubScopes>().TryGet(connectionId);
+            scope.Should().NotBeNull(
+                "the connection is open, so its scope is there; client closed: {0} ({1}); server errors: {2}",
+                closed, closedWith?.Message, ServerErrors(app));
+            probe = scope!.GetRequiredService<ScopeEndProbe>();
+
+            var afterTurn = await app.Client.PostAsync($"/mentor/cancel?connectionId={connectionId}", null);
+            afterTurn.StatusCode.Should().Be(HttpStatusCode.OK,
+                "the connection's scope outlives the turn, so a late Stop finds it and stops nothing");
+        }
+        finally { await hub.DisposeAsync(); }
+
+        // The server learns of the close in OnDisconnectedAsync, after the client has let go. It forgets the
+        // scope before disposing it, so once the probe is disposed no Stop can find it: no timing involved.
+        await probe.Ended.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        (await app.Client.PostAsync($"/mentor/cancel?connectionId={connectionId}", null)).StatusCode
+            .Should().Be(HttpStatusCode.NotFound, "a closed connection has no scope left to stop");
+    }
+
+    /// <summary>A scoped service that says when its scope is disposed.</summary>
+    private sealed class ScopeEndProbe : IDisposable
+    {
+        public TaskCompletionSource Ended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void Dispose() => Ended.TrySetResult();
+    }
+
+    private static string ServerErrors(ServerAppFactory app)
+        => string.Join(" | ", app.Logs.Records
+            .Where(r => r.Level >= Microsoft.Extensions.Logging.LogLevel.Warning)
+            .Select(r => r.Message));
+
+    [Fact]
     public async Task Cancelling_an_unknown_connection_is_a_404_not_a_500()
     {
         await using var app = await ServerAppFactory.CreateAsync();

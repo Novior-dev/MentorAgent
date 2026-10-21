@@ -1,7 +1,7 @@
 ﻿<Project>
   <PropertyGroup>
     <!-- Single version source for all MentorAgent packages -->
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
 
     <!-- Common metadata. Copyright matches NOTICE, which every package ships beside LICENSE.
          RepositoryUrl names the GitHub repository the source is published to. -->
@@ -40,11 +40,38 @@
          have no stable release yet. The README's Requirements table lists them. -->
     <NoWarn>$(NoWarn);NU5104</NoWarn>
 
-    <!-- Package validation: at pack time each package is checked for consistency. 1.0.0 has no baseline:
-         the packages are new ids (Novior.MentorAgent.*), with no earlier version to compare with. From
-         1.0.1 the baseline is 1.0.0 (PackageValidationBaselineVersion): each package's public API is then
-         compared with it, and an intended break is recorded, with the reason, in the project's
-         CompatibilitySuppressions.xml. Move the baseline forward at each release. -->
+    <!-- Package validation: at pack time each package's public API is compared with the baseline, the
+         last published version, and an unintended break fails the build. An intended one is recorded,
+         with the reason, in the project's CompatibilitySuppressions.xml. Move the baseline forward at each
+         release. 1.0.0 had none: its ids (Novior.MentorAgent.*) were new. -->
     <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>1.0.0</PackageValidationBaselineVersion>
+
+    <!-- A software bill of materials in every package: SPDX 2.2, at _manifest/spdx_2.2/manifest.spdx.json inside
+         the .nupkg, so whoever installs a package can read what it is made of without looking for the pipeline's
+         artifacts. Microsoft.Sbom.Targets writes it at pack time, and the packages are packed on every build
+         (GeneratePackageOnBuild): Release builds only, as the pipeline and the local feeds build, so that a Debug
+         build does not run the tool every time. -->
+    <GenerateSBOM Condition="'$(Configuration)' == 'Release'">true</GenerateSBOM>
+    <!-- The supplier is who publishes the packages (their owner on nuget.org). Left out, the tool takes the first
+         name of Authors, split at the comma. -->
+    <SbomGenerationPackageSupplier>Novior</SbomGenerationPackageSupplier>
+  </PropertyGroup>
+
+  <!-- The tool that writes the bill of materials: a build-time package of the five packages only, never a
+       dependency of the applications that use them. -->
+  <ItemGroup Condition="!$(MSBuildProjectName.Contains('.Tests'))">
+    <PackageReference Include="Microsoft.Sbom.Targets" Version="4.1.13" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- NuGet audit, packages and tests alike: a package with a known vulnerability of high or critical
+       severity (NU1903, NU1904), direct or transitive, fails a Release build, so a vulnerable dependency
+       cannot reach a published package. Debug builds keep it a warning, so a fresh advisory does not stop
+       local work. The release pipeline builds and tests in Release. -->
+  <PropertyGroup>
+    <NuGetAuditMode>all</NuGetAuditMode>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
   </PropertyGroup>
 </Project>

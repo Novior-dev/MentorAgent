@@ -26,6 +26,10 @@ packages/
 .idea/
 *.sln.iml
 
+# ── Claude Code ───────────────────────────────────────────────────────────────
+# Local settings of a Claude Code session: machine paths, not for the repository.
+**/.claude/settings.local.json
+
 # ── .NET ─────────────────────────────────────────────────────────────────────
 project.lock.json
 project.fragment.lock.json

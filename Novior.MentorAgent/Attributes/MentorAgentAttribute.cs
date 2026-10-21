@@ -3,9 +3,10 @@
 /// <summary>
 /// Level 2 — Decorates a class to turn it into a specialized AI agent with a Handoff Workflow.
 ///
-/// The class must implement <see cref="IMentorAgent"/> and be registered in the DI container.
-/// MentorAgent automatically builds a <c>ChatClientAgent</c> with the class methods as tools,
-/// and connects it to the Handoff graph via <c>HandoffTo</c>.
+/// The class must be registered in the DI container; implementing <see cref="IMentorAgent"/> is
+/// optional (discovery is by this attribute alone). MentorAgent builds a <c>ChatClientAgent</c> whose
+/// tools are the class's methods marked <c>[Description]</c> or <c>[MentorAction]</c>, and connects it
+/// to the Handoff graph via <c>HandoffTo</c>.
 ///
 /// <code>
 /// [MentorAgent(

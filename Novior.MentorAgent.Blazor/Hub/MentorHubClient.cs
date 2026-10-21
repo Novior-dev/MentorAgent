@@ -49,7 +49,8 @@ public sealed class MentorHubClient : IAsyncDisposable
 
         // BUG-046 — the connection has to be able to carry credentials. Without this the server's
         // identity bridge reads HubCallerContext.User and finds nothing, so every RequiredRoles
-        // action is blocked and every user shares the memory key "anonymous".
+        // action is blocked and the user is keyed as anonymous: a key per connection by default
+        // (AnonymousIdentity = PerSession), the one shared key "anonymous" with Shared.
         _connection = new HubConnectionBuilder()
             .WithUrl(hubUrl, connection =>
             {

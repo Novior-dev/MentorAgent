@@ -28,6 +28,207 @@ names of their time.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-21
+
+### Added
+
+- **Novior.MentorAgent:** `MentorOptions.ConfirmationMessage` writes the text of the confirmation banner, in the
+  application's own words or language. It gets the tool, its description, the arguments as the banner shows them,
+  `Language` and the services of the conversation's scope. When it returns `null` the default text is shown; when it
+  throws or returns only white space, the default text and a warning (BUG-186).
+
+- Every package carries its software bill of materials: SPDX 2.2, at `_manifest/spdx_2.2/manifest.spdx.json`
+  inside the `.nupkg`, with its SHA-256 beside it. It lists the package's files and the packages restored to build
+  it, build-time tools included.
+
+- **Novior.MentorAgent:** `MentorActionAttribute.RequiresConfirmationDeclared` is public and read-only: whether the
+  attribute writes `RequiresConfirmation`, true or false. With `RequireConfirmationForWrites` on, an action that
+  declares nothing asks for confirmation and one that declares `RequiresConfirmation = false` does not, while
+  `RequiresConfirmation` reads false for both; a component outside the library can now tell them apart.
+
+### Security
+
+- **Novior.MentorAgent.Blazor:** BUG-173 (S2): the package depended on `Microsoft.AspNetCore.SignalR.Client`
+  10.0.3, whose `Microsoft.AspNetCore.SignalR.Common` is covered by advisory GHSA-334f-vvp4-7g6p
+  (CVE-2026-70159, high): a client using stateful reconnect can block a server's broadcasts. It now depends on
+  10.0.13, the patched release. With 1.0.0, add
+  `<PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.13" />` to the client project.
+  MentorAgent turns stateful reconnect on neither in its hub nor in its client.
+- **Novior.MentorAgent.Server:** the hub runs on the SignalR of the ASP.NET Core shared framework, not on a
+  package: a host is patched by the ASP.NET Core runtime 10.0.13 or later.
+- A package with a high or critical advisory (NuGet audit NU1903, NU1904), direct or transitive, now fails the
+  Release build of the packages.
+
+### Changed
+
+- Every package is now checked at pack time against the public API of 1.0.0, so a 1.x release cannot break
+  code built against 1.0.0 by accident. An intended break is listed in this file as Breaking.
+
+- **Novior.MentorAgent, .Server, .Blazor, .Abstractions, .Declarative:** NOTICE says that "MentorAgent" and its
+  logo are trademarks of Antonio Macrì and Emanuele Longo, to be assigned to Novior, not licensed under the Apache
+  License 2.0, and points to the trademark policy, TRADEMARKS.md, in the GitHub repository.
+
+### Fixed
+
+- **Novior.MentorAgent:** the README's *Migrating from the MentorAgent.\* packages* listed the build diagnostic
+  `MENTOR001` among what stays the same. That check, and its `MentorAgentSkipOpenAIVersionCheck` switch, were
+  removed in 1.0.0-rc.15: the core package has no build target, and there is no switch to keep (BUG-159, S3).
+
+- **Novior.MentorAgent.Server:** three sentences of the README did not match the code. `IncludeWorkflowExceptionDetails`
+  puts the exception message of a failing handoff or group chat agent into the reply, not a stack trace.
+  `EnableSuggestions` and the widget options do take effect in a MAUI Blazor Hybrid app, which runs the Blazor
+  widget; only a MAUI app with its own native UI ignores them. And the `Authorization` header is missing from a
+  WebSocket or Server-Sent Events connection because a browser cannot send one, not because the protocol forbids
+  it; the Blazor README said the same and is corrected too (BUG-160, S4).
+
+- **Novior.MentorAgent.Server:** the README's React example for image input did not compile: a `<textarea>` outside
+  any component and an `await` at the top level. It is now a component that keeps the attachments in its state and
+  sends them from an `async` handler, passing `null` when there are none (BUG-161, S3).
+
+- **Novior.MentorAgent.Server:** the README said that `POST /mentor/cancel` answers `404` when Stop is pressed just as
+  the turn ends, and that it is not an error; its React, Angular and Vue components ignored it. The endpoint answers
+  `200` whenever the connection exists, with or without a turn running, and `404` only when the connection is closed
+  or unknown, which is the case a client must not hide. The README and the three components now say so (BUG-162, S3).
+
+- **Novior.MentorAgent:** the option reference tables of the README and the Server README left out options that only
+  their own sections described: `SkillSources`, `SkillFilter`, `SkillsRefreshInterval`, `AutoApprovalRules` and
+  `MaxAutoApprovalIterations` in the README; `EnableRichResponses`, `IsReadOnlyAction`, `EnableOutputSafetyCheck`,
+  `RequireLookupForRecordQuestions`, `RequireActionForChangeRequests` and `McpCallerPrincipal` in the Server README.
+  Every public option of `MentorOptions` is now in a reference table of both, or among the Server README's options
+  not listed on purpose. The `[MentorAction]` tables mark `Description` as required, and the Server README's lists
+  `ReadOnly` (BUG-163, S4).
+- **Novior.MentorAgent:** with a pre-built `Agent` (Path B), `MemoryAutoCapture` and a `ClassifierChatClient`, memory
+  had two writers: the post-turn extraction ran through the classifier, one call per message, and the `remember`
+  tool was sent too. The log and the documentation said the extraction does not run on Path B. The tool is now left
+  out whenever the extraction runs, and the build log names the writer: on Path B the extraction with a
+  `ClassifierChatClient`, the `remember` tool without one (BUG-174, S3).
+- **Novior.MentorAgent:** a `[MentorTeam]` with `HandoffTo` was approved when `[TEAM:APPROVED]` appeared anywhere
+  in the discussion, so a member's "yes" followed by another's "no" still told the coordinator to execute the
+  actions. The team is now approved only if its final message carries `[TEAM:APPROVED]` and no member wrote
+  `[TEAM:REJECTED]`; a discussion that ends without a verdict is not approved. Without a `[TeamTerminationCondition]`
+  the discussion now ends at the first verdict, instead of running all `MaxIterations` rounds; a host's condition
+  still decides alone when to stop. The members' instructions keep `[TEAM:REJECTED]` for a definitive no and ask for
+  changes without a token (BUG-175, S3).
+
+- **Novior.MentorAgent, .Server, .Blazor, .Abstractions, .Declarative:** the XML documentation that IntelliSense
+  shows no longer contradicts the code: anonymous callers share the memory key `"anonymous"` only with
+  `AnonymousIdentity = Shared`; an empty `AllowedTools` allows every tool, like `null` (the README says so too);
+  `MentorTheme.Custom` renders like `Default`; `IMentorAgent` is optional and validates nothing; the hub's events list
+  `Cards`, and `MapMentorAgentServer` lists `/mentor/session` (BUG-164, S4).
+
+- **Novior.MentorAgent:** the README did not say that with `UseRag` the search runs on every message, before the
+  model is called, so its time (an embedding call, the search, a reranker) is added to every reply; nor that the
+  absence of a keyword pre-gate relies on `RagMinScore` being on the source's scale. It says both now, and so does
+  the comment in `RagContextProvider` (BUG-165, S4).
+
+- **Novior.MentorAgent:** the XML documentation of `RequiresApproval` said the predicate is evaluated once per
+  tool while the coordinator is built. It is asked again on every call to a tool in Blocking mode and on every turn
+  the tool filter matches a tool, so a predicate that reads a file or a database pays for it each time. The
+  documentation now says when it is asked and that it must stay a cheap, pure function of the tool name
+  (BUG-176, S4).
+
+- **Novior.MentorAgent:** the documentation of `ConfigureChatClientPipeline` said only that the pipeline goes
+  outermost. It is built once per coordinator, so once per circuit on Blazor Server and once per SignalR connection
+  on the hub: a limit placed there does not limit the process. And only the coordinator's own calls go through it:
+  the auxiliary calls — classifier, safety checks, out-of-scope refusal, memory extraction, the lookup and action
+  checks — use `ClassifierChatClient ?? ChatClient`, and specialists, team members and the handoff router use
+  `ChatClient`. The READMEs and the XML documentation now say both (BUG-166, S4).
+
+- **Novior.MentorAgent:** the READMEs said that `navigate_to` waits for `SignalReady()` on a `HasUIActions` page
+  only in a Blazor Server circuit. It waits wherever the page runs in the same process as the turn, so in a MAUI
+  Blazor Hybrid app too; turns over the hub, SSE or A2A still do not wait. The READMEs now say so (BUG-171, S4).
+
+- **Novior.MentorAgent:** on Path B (a pre-built `Agent`), `EnableSafetyCheck` and `EnableOutputSafetyCheck`
+  without a `ClassifierChatClient` now log a warning when the coordinator is built: neither check can run, so every
+  message and every reply goes through unchecked. Both checks run on `ClassifierChatClient`, or on `ChatClient` when
+  none is set, so on Path B a `ClassifierChatClient` turns them on; the README and the XML documentation said they
+  required a `ChatClient` (BUG-167, S3).
+
+- **Novior.MentorAgent:** the README and the XML documentation of `HitlMode` said that `Native` costs one
+  model call more per approved action, and that `Blocking` is cheaper. Both modes make the same model calls:
+  `Native` adds one agent run per round of confirmations, and its reply arrives in two segments (BUG-168, S3).
+
+- **Novior.MentorAgent.Blazor:** the README said twice that the server must enable `EnableOnboardingTour` too,
+  and the widget's log said so when the tour had no steps. `MapMentorAgentServer()` maps `GET /mentor/tour`
+  whatever the server's flag says: the client's flag alone decides whether the tour is shown. The README and the
+  log now say so (BUG-169, S3).
+
+- **Novior.MentorAgent:** the README has an example of `RequiredRoles` with Windows groups (Negotiate, `DOMAIN\Group`)
+  and with Microsoft Entra ID (app roles, or the `groups` claim's ids). The XML documentation of `EnableObservability`
+  said the embedding generator is traced too, and the README "the chat client calls": only the coordinator's model
+  calls are traced, and both now say how to trace the rest (BUG-170, S4).
+
+- **Novior.MentorAgent.Server:** the A2A agent card listed the actions of classes not registered in the DI container,
+  which no turn can run, and repeated a skill id when two actions share a tool name. It now lists only the actions a
+  turn can call, once per name, and leaves a name out when any action carrying it is gated (BUG-177, S3).
+
+- **Novior.MentorAgent.Server:** the warning that lists the actions withheld from the MCP server was written on the
+  first MCP request, not at startup as the README says. `MapMentorAgentMcp()` now writes it when it maps the
+  endpoint; the tools are still built by the first request, and which of them a caller sees is still decided per
+  request (BUG-178, S3).
+
+- **Novior.MentorAgent:** on Path B (a pre-built `Agent`) the `[MentorAgent]` specialists, the `[MentorTeam]` teams
+  and the `RemoteAgents` are not built, because they run on `options.ChatClient`, and nothing said so. A warning now
+  names each of them when the coordinator is built, and the remote agents' cards are no longer fetched on Path B,
+  where no turn could reach them (BUG-179, S3).
+
+- **Novior.MentorAgent:** the two log lines that open and close the discovery were in Italian ("Discovery avviata",
+  "Discovery completata"). They now read "Discovery started on …" and "Discovery completed — …" (BUG-180, S4).
+
+- **Novior.MentorAgent:** a team's discussion reached the coordinator as one run-on text ("… is solved.I agree"), so
+  it could not tell who said what. Each message is now a paragraph of its own, headed by its author. The team tool's
+  description gets a full stop before the handoff note when the team's `Description` has none (BUG-181, S4).
+
+- **Novior.MentorAgent:** two methods carrying the same tool name were reported only with tool filtering on. A model
+  calls a tool by name, so an agent offered both reaches only one of them, and up to 1.0.0 one method's attributes
+  decided the other's call (BUG-188). A warning now names every shared tool name and its methods when the actions
+  are first read, with tool filtering on or off (BUG-182, S4).
+
+- **Novior.MentorAgent:** the signed-in user's roles told to the model came from `ClaimTypes.Role` claims only, while
+  the gate decides with `IsInRole`, which reads each identity's own `RoleClaimType`. With roles in a `roles` claim —
+  Microsoft Entra ID, or JwtBearer with `MapInboundClaims = false` — an action passed the gate while the model was
+  told no role. The model is now told the roles `IsInRole` answers to, from every identity of the user; a Windows
+  identity's group SIDs are left out (BUG-183, S3).
+
+- **Novior.MentorAgent:** the RAG citation chips knew one number per marker, "[1] [2]". An answer that cited "[1, 2]"
+  or "[1-2]", as models also write, showed no chip at all. A list or a range now raises a chip for each document it
+  names; a range with an end that names no document, such as "[0-9]" in a code sample, cites nothing (BUG-184, S3).
+
+- **Novior.MentorAgent:** the instruction that tells the model how to cite the RAG documents was in English whatever
+  `Language` said. It is now written in the configured language, in each of the ten, with the same `[1], [2]`
+  markers the citation chips read (BUG-185, S3).
+
+- **Novior.MentorAgent:** the confirmation banner showed each argument whole, control and bidirectional characters
+  included, in the order of the model's JSON. Each value is now cleaned and cut at 200 characters, and the arguments
+  follow the order of the method's parameters (BUG-186, S2).
+
+- **Novior.MentorAgent:** with `HitlMode.Native`, a confirmation that a Stop or a failure left open was answered
+  from memory only. A snapshot saved in that state and restored in another scope, or after a reset, still held the
+  open request, and every later turn failed as in BUG-116 (a known issue since 1.0.0-rc.15). The open requests and
+  their answers now travel with the snapshot, and the first turn after the restore answers them (BUG-187, S3).
+
+- **Novior.MentorAgent:** two methods carrying one tool name shared one set of rules. The roles, the confirmation,
+  the banner's text and the page to open came from the first method found with the name, level 1 first, so a
+  level-1 method without roles opened a specialist's role-gated action of the same name to every user. The gate now
+  applies the rules of the method the call runs, at every level and in both HITL modes (BUG-188, S2).
+
+- **Novior.MentorAgent, .Abstractions, .Blazor:** the README taught `PageContext.Clear()` in a page's `Dispose()`.
+  Blazor disposes the previous page after it has initialized the next one, so from one page with UI actions to
+  another, the previous page's `Clear()` wiped the actions the next page had just registered, and the assistant
+  answered that the action did not exist. `IMentorPageContext.Clear(pageName)` clears only what that page
+  registered, or everything when it is still the current page: call it in `Dispose()` with the page's name.
+  `Clear()` still clears everything (BUG-192, S2).
+
+- **Novior.MentorAgent.Abstractions:** in a table inside an assistant bubble, a number stood one digit per line. The
+  bubble lets a word break anywhere, so the table's columns could shrink to one character. The cells now break
+  between words only, a cell holding only a number, an amount, a date or a time stays on one line, and a table wider
+  than the bubble scrolls inside it instead of widening the conversation (BUG-193, S4).
+
+- **Novior.MentorAgent:** `navigate_to` to a page with `HasUIActions` could return before the new page had registered
+  its actions. The page being left had called `SignalReady()` when it opened, and that signal ended the wait at once.
+  `navigate_to` now takes it back before asking for the navigation, so it waits for the new page's `SignalReady()`;
+  to the page already shown it does not wait, since Blazor does not initialize that page again (BUG-194, S3).
+
 ## [1.0.0] - 2026-10-13
 
 ### Changed
@@ -986,6 +1187,7 @@ names of their time.
 - **MentorAgent:** `MentorRemoteAgent.RequiredRoles` is not enforced: any user can reach a remote agent.
 
 [Unreleased]: https://www.nuget.org/packages/Novior.MentorAgent
+[1.1.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.1.0
 [1.0.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.0.0
 [1.0.0-rc.15]: https://www.nuget.org/packages/MentorAgent/1.0.0-rc.15
 [1.0.0-rc.14]: https://www.nuget.org/packages/MentorAgent/1.0.0-rc.14

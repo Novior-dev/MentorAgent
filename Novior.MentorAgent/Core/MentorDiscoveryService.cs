@@ -57,7 +57,7 @@ internal sealed class MentorDiscoveryService
                         .Select(g => g.Key.GetName().Name)));
 
             _logger.LogInformation(
-                "[MentorAgent] Discovery avviata su {N} assembly: {Names}",
+                "[MentorAgent] Discovery started on {N} assembly(ies): {Names}",
                 assemblies.Length,
                 string.Join(", ", assemblies.Select(a => a.GetName().Name)));
 
@@ -69,10 +69,11 @@ internal sealed class MentorDiscoveryService
             RemoveMemberToolsFromLevel1(result);
 
             _logger.LogInformation(
-                "[MentorAgent] Discovery completata — L1 tools: {L1}, L2 agents: {L2}, L3 teams: {L3}, pages: {P}",
+                "[MentorAgent] Discovery completed — L1 tools: {L1}, L2 agents: {L2}, L3 teams: {L3}, pages: {P}",
                 result.Level1Methods.Count, result.Level2Agents.Count, result.Level3Teams.Count, result.Pages.Count);
 
             WarnAboutUnconfirmedWrites(result);
+            WarnAboutSharedToolNames(result);
 
             _cached = result;
             return result;
@@ -125,6 +126,35 @@ internal sealed class MentorDiscoveryService
                 "RequireConfirmationForWrites and run without confirmation: {Names}. Mark one [MentorAction] to have " +
                 "the default, or declare it read-only with IsReadOnlyAction if it only reads.",
                 uncovered.Count, string.Join(", ", uncovered));
+    }
+
+    /// <summary>
+    /// BUG-182: the tool names more than one method carries, said once at startup. A model calls a tool by
+    /// name, so an agent offered both methods can reach only one of them, and tool filtering and the
+    /// <c>RequiresApproval</c> and <c>IsReadOnlyAction</c> rules decide by name. The gate checks the method
+    /// called (BUG-188); up to 1.0.0 it took the first copy with the name. Only tool filtering reported shared
+    /// names before, and only when it was switched on.
+    /// </summary>
+    private void WarnAboutSharedToolNames(DiscoveryResult result)
+    {
+        var shared = result.Level1Methods
+            .Concat(result.Level2Agents.SelectMany(a => a.Methods))
+            .Concat(result.Level3Teams.SelectMany(t => t.Members).SelectMany(m => m.Tools))
+            // One method found twice is not two: a skill's methods are level-1 tools and a member's too.
+            .DistinctBy(m => m.Method)
+            .GroupBy(m => m.ToolName, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => $"{g.Key} ({string.Join(", ", g.Select(m => $"{m.DeclaringType.Name}.{m.Method.Name}"))})")
+            .ToList();
+
+        if (shared.Count > 0)
+            _logger.LogWarning(
+                "[MentorAgent] {Count} tool name(s) are carried by more than one method: {Names}. A model calls " +
+                "a tool by name, so an agent offered both can reach only one of them, and tool filtering and the " +
+                "RequiresApproval and IsReadOnlyAction rules decide by name. Rename the methods or expose only " +
+                "one of them.",
+                shared.Count, string.Join("; ", shared));
     }
 
     /// <summary>

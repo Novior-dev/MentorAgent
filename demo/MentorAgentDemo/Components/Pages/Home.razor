@@ -1,0 +1,39 @@
+@page "/"
+@attribute [MentorPage(Url = "/", Name = "Home", Description = "What the demo shows and the questions to try")]
+@inherits DemoPage
+
+<PageTitle>MentorAgent Demo</PageTitle>
+
+<section class="hero">
+    <h1 class="hero__title">@L["home.title"]</h1>
+    <p class="hero__lead">@L["home.lead"]</p>
+    <a class="button button--primary" href="expenses">@L["home.open"]</a>
+</section>
+
+<section class="grid grid--2">
+    <article class="card">
+        <h2 class="card__title">@L["home.try"]</h2>
+        <ul class="questions">
+            <li><code>@L["home.q1"]</code></li>
+            <li><code>@L["home.q2"]</code></li>
+            <li><code>@L["home.q3"]</code></li>
+            <li><code>@L["home.q4"]</code></li>
+            <li><code>@L["home.q5"]</code></li>
+            <li><code>@L["home.q6"]</code></li>
+        </ul>
+    </article>
+
+    <article class="card">
+        <h2 class="card__title">@L["home.receipt"]</h2>
+        <p>@L["home.receiptLead"]</p>
+        <a class="receipt-link" href="img/receipt-sample.png" download="receipt-sample.png">
+            <img src="img/receipt-sample.png" width="152" height="168" alt="@L["home.receiptAlt"]" />
+        </a>
+    </article>
+
+    <article class="card">
+        <h2 class="card__title">@DemoText.Role(CurrentUser.Role, Italian)</h2>
+        <p>@L["home.roles"]</p>
+        <p class="muted">@L["home.language"]</p>
+    </article>
+</section>

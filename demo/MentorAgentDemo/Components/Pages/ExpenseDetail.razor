@@ -1,0 +1,76 @@
+@page "/expenses/{Id:int}"
+@inherits DemoPage
+@inject ExpenseStore Store
+
+<PageTitle>@L["expenses.title"] @Id · MentorAgent Demo</PageTitle>
+
+<p><a class="back-link" href="expenses">← @L["expenses.back"]</a></p>
+
+@if (Store.Find(Id) is not { } expense)
+{
+    <div class="card">
+        <p>@L["expenses.notFound"]</p>
+    </div>
+}
+else
+{
+    <header class="page-header">
+        <h1>@L["expenses.title"] @expense.Id</h1>
+        <StatusBadge Status="expense.Status" />
+    </header>
+
+    <div class="card">
+        <dl class="details">
+            <dt>@L["expenses.employee"]</dt>
+            <dd>@expense.Employee</dd>
+            <dt>@L["expenses.category"]</dt>
+            <dd>@DemoText.Category(expense.Category, Italian)</dd>
+            <dt>@L["expenses.date"]</dt>
+            <dd>@Day(expense.Date)</dd>
+            <dt>@L["expenses.amount"]</dt>
+            <dd class="details__amount">@Money(expense.Amount)</dd>
+            <dt>@L["expenses.description"]</dt>
+            <dd>@expense.Description(Italian)</dd>
+            @if (expense.DecidedBy is { } decidedBy)
+            {
+                <dt>@L["expenses.decidedBy"]</dt>
+                <dd>@decidedBy</dd>
+            }
+        </dl>
+
+        @if (expense.Status == ExpenseStatus.Submitted)
+        {
+            <div class="actions">
+                @if (CanDecide)
+                {
+                    <button type="button" class="button button--primary" @onclick="() => Store.Approve(expense.Id, CurrentUser.Name)">@L["expenses.approve"]</button>
+                    <button type="button" class="button" @onclick="() => Store.Reject(expense.Id, CurrentUser.Name)">@L["expenses.reject"]</button>
+                }
+                else
+                {
+                    <p class="muted">@L["expenses.onlyManagers"]</p>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private bool CanDecide => CurrentUser.Role is DemoRoles.Manager or DemoRoles.Administrator;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        Store.Changed += OnStoreChanged;
+    }
+
+    private void OnStoreChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public override void Dispose()
+    {
+        Store.Changed -= OnStoreChanged;
+        base.Dispose();
+    }
+}

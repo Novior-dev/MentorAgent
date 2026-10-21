@@ -51,6 +51,19 @@ public sealed class ServerEndpointTests
             "the documented payload uses camelCase members");
     }
 
+    [Fact]
+    public async Task Tour_endpoint_serves_the_steps_without_EnableOnboardingTour_on_the_server()
+    {
+        // The widget's "no steps" log told headless and WASM hosts to set EnableOnboardingTour on the
+        // server too. The endpoint never reads it: the client's own option shows the button, and the
+        // server only needs [MentorPage] pages to build the steps from.
+        await using var app = await ServerAppFactory.CreateAsync(o => o.EnableOnboardingTour = false);
+
+        var steps = await app.Client.GetFromJsonAsync<List<MentorTourStep>>("/mentor/tour");
+
+        steps.Should().NotBeNullOrEmpty("the test app has [MentorPage] pages, and nothing else is needed");
+    }
+
     // ── GET /mentor/admin/metrics — role gated ───────────────────────────────────
 
     [Fact]
@@ -203,11 +216,11 @@ public sealed class ServerEndpointTests
             "/mentor/cancel?connectionId=not-a-real-connection", content: null);
 
         // 404 is deliberate — the endpoint resolves a per-connection scope and says so when there
-        // is none. It is also a *normal* outcome, not only an error: pressing Stop just as the turn
-        // finishes races the scope's disposal. The documented client ignores the status, which is
-        // why this never surfaced; a client that checks it must know 404 is expected.
+        // is none. The scope lives as long as the connection, not the turn: a Stop that arrives
+        // after the turn finished is a 200 (HitlOverHttpTests), and a 404 means the connection is
+        // unknown or closed (BUG-162).
         response.StatusCode.Should().Be(HttpStatusCode.NotFound,
-            "an unknown or already-finished connection has no scope to cancel");
+            "an unknown or closed connection has no scope to cancel");
     }
 
     [Fact]

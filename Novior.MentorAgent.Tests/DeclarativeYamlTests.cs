@@ -2,6 +2,8 @@ using FluentAssertions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Novior.MentorAgent.Tests.Docs;
+using Novior.MentorAgent.Tests.Harness;
 using Xunit;
 
 namespace Novior.MentorAgent.Tests;
@@ -145,22 +147,17 @@ public sealed class DeclarativeYamlTests
         (await Factory().CreateFromYamlAsync(yaml)).Should().NotBeNull();
     }
 
-    /// <summary>The shipped sample must actually load — it is the copy-paste source for users.</summary>
-    [Fact]
+    /// <summary>
+    /// The shipped sample must actually load — it is the copy-paste source for users. Without the sample repository
+    /// the test is reported as skipped; it passed without having run before (BUG-189).
+    /// </summary>
+    [SamplesFact]
     public async Task TheSampleDefinition_Loads()
     {
-        var path = Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "MentorAgentSample", "MentorAgentServer", "Agents", "shipping.agent.yaml");
+        RepoFiles.SamplesRoot.Should().NotBeNull("a release run loads the sample definition, and {0}", RepoFiles.SamplesMissing);
 
-        if (!File.Exists(path))
-        {
-            // Sample repo not checked out beside the library: fine on a CI box, not for a release run,
-            // which would otherwise pass without having loaded the sample at all.
-            Environment.GetEnvironmentVariable("MENTORAGENT_RELEASE_GATE").Should().BeNullOrEmpty(
-                "a release run loads the sample definition, and {0} is not there", path);
-            return;
-        }
+        var path = Path.Combine(RepoFiles.SamplesRoot!, "MentorAgentServer", "Agents", "shipping.agent.yaml");
+        File.Exists(path).Should().BeTrue("the sample repository is there, so its definition must be: {0}", path);
 
         var agent = await Factory().CreateFromYamlAsync(await File.ReadAllTextAsync(path));
 

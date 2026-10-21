@@ -13,7 +13,8 @@ public enum MentorHitlMode
     /// <c>MentorAgentUIMiddleware</c> and the AI thread is parked on a
     /// <see cref="System.Threading.Tasks.TaskCompletionSource{TResult}"/> until the user answers,
     /// so the agent run — and its streaming — stays alive for the whole turn.
-    /// Fewer moving parts and one model round-trip; use it unless you need AF interop.
+    /// Fewer moving parts and one agent run per turn; use it unless you need AF interop. Both modes
+    /// make the same model calls.
     /// </summary>
     Blocking = 0,
 
@@ -25,9 +26,10 @@ public enum MentorHitlMode
     ///
     /// <para>
     /// Choose this for <b>interop</b>: an AF workflow, DevUI or any AF-native host that consumes the
-    /// agent sees the standard approval protocol instead of MentorAgent's internal one. It costs one
-    /// extra model round-trip per approved call, and the reply arrives in two streamed segments
-    /// (before and after the banner).
+    /// agent sees the standard approval protocol instead of MentorAgent's internal one. It makes the
+    /// same model calls as <see cref="Blocking"/>, approved or declined: what it adds is one agent run
+    /// per round of confirmations (the run stops at the request, and a second one carries the answers),
+    /// and the reply arrives in two streamed segments (before and after the banner).
     /// </para>
     /// </summary>
     Native = 1,

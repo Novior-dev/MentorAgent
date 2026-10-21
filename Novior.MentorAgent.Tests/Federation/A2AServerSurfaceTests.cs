@@ -1,9 +1,11 @@
 ﻿using System.Text.Json;
 using A2A;
 using FluentAssertions;
+using Novior.MentorAgent.Attributes;
 using Novior.MentorAgent.Tests.Harness;
 using Novior.MentorAgent.Extensions;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Novior.MentorAgent.Tests.Federation;
@@ -647,6 +649,83 @@ public sealed class A2AServerSurfaceTests
         card.RootElement.GetProperty("skills").EnumerateArray()
             .Select(x => x.GetProperty("id").GetString())
             .Should().NotContain("count_open_orders");
+    }
+
+    // ── Only what a turn can run, once (BUG-177) ────────────────────────────────
+    //
+    // The card listed every level-1 method discovery found. A class the container cannot resolve is
+    // skipped by the coordinator and by the MCP server, so its actions were skills no task could use; and
+    // two actions sharing a tool name put the same id on the card twice. These classes live in this
+    // assembly, which the card host scans next to the test app's; only the twins are registered.
+
+    private sealed class CardTwinA
+    {
+        [MentorAction(Description = "Looks up a twin record", ReadOnly = true)]
+        public string LookUpCardTwin() => "a";
+
+        [MentorAction(Description = "Looks up a half-gated twin", ReadOnly = true)]
+        public string LookUpHalfGatedTwin() => "a";
+    }
+
+    private sealed class CardTwinB
+    {
+        [MentorAction(Description = "Looks up a twin record too", ReadOnly = true)]
+        public string LookUpCardTwin() => "b";
+
+        [MentorAction(Description = "Looks up a half-gated twin, after a confirmation", RequiresConfirmation = true)]
+        public string LookUpHalfGatedTwin() => "b";
+    }
+
+    private sealed class CardToolsOutsideDi
+    {
+        [MentorAction(Description = "Reads from a class nobody registered", ReadOnly = true)]
+        public string ReadFromAClassOutsideDi() => "never runs";
+    }
+
+    private static async Task<List<string?>> SkillIdsWithTwinsAsync()
+    {
+        var app = await ServerAppFactory.CreateAsync(
+            configure: o =>
+            {
+                o.A2AServerEnabled = true;
+                o.AppName = "Acme";
+                o.ScanAssemblies = [typeof(Novior.MentorAgent.Tests.App.TestOrderService).Assembly, typeof(CardTwinA).Assembly];
+            },
+            configureServices: s => s.AddScoped<CardTwinA>().AddScoped<CardTwinB>(),
+            configureApp: a => a.UseEndpoints(e => e.MapMentorAgentA2A()));
+        try
+        {
+            using var card = JsonDocument.Parse(await app.Client.GetStringAsync("/.well-known/agent-card.json"));
+            return [.. card.RootElement.GetProperty("skills").EnumerateArray().Select(x => x.GetProperty("id").GetString())];
+        }
+        finally { await app.DisposeAsync(); }
+    }
+
+    [Fact]
+    public async Task A_class_missing_from_DI_puts_no_skill_on_the_card()
+    {
+        var ids = await SkillIdsWithTwinsAsync();
+
+        ids.Should().Contain("count_open_orders", "a registered class's open action stays on the card");
+        ids.Should().NotContain("read_from_a_class_outside_di",
+            "no turn can run an action whose class the container cannot resolve");
+    }
+
+    [Fact]
+    public async Task A_tool_name_two_classes_share_is_one_skill()
+    {
+        var ids = await SkillIdsWithTwinsAsync();
+
+        ids.Count(id => id == "look_up_card_twin").Should().Be(1, "a skill id names one skill");
+    }
+
+    [Fact]
+    public async Task A_tool_name_with_one_gated_action_is_left_off_the_card()
+    {
+        // Which of the two a turn runs is not the card's to promise, and one of them asks a human first.
+        var ids = await SkillIdsWithTwinsAsync();
+
+        ids.Should().NotContain("look_up_half_gated_twin");
     }
 
     [Fact]

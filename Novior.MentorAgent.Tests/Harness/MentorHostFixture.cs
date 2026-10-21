@@ -302,6 +302,16 @@ internal sealed class TestAuthStateProvider : AuthenticationStateProvider
         NotifyAuthenticationStateChanged(Task.FromResult(new AuthenticationState(_user)));
     }
 
+    /// <summary>
+    /// Signs in as this principal — one whose identities name their own <c>RoleClaimType</c>, or more
+    /// than one identity (BUG-183).
+    /// </summary>
+    internal void SignInAs(ClaimsPrincipal user)
+    {
+        _user = user;
+        NotifyAuthenticationStateChanged(Task.FromResult(new AuthenticationState(_user)));
+    }
+
     /// <summary>Signs out — the anonymous case, where role-gated tools must fail closed.</summary>
     internal void SignOut()
     {

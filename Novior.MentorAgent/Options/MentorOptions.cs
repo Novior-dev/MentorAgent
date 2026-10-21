@@ -137,7 +137,9 @@ public sealed class MentorOptions
 
     /// <summary>
     /// Enables contextual memory — the Mentor remembers preferences and actions
-    /// across different sessions via the "remember" and "forget_all" tools.
+    /// across different sessions. One writer saves the facts: the post-turn extraction of
+    /// <see cref="MemoryAutoCapture"/> when it can run, else the "remember" tool. The "forget_all"
+    /// tool clears them.
     ///
     /// ⚠️ IMPORTANT — userId and data isolation:
     /// - With authentication configured: each user has their own isolated memory, keyed by the
@@ -218,16 +220,17 @@ public sealed class MentorOptions
     /// Antonio"). After each user message a small, focused LLM call extracts personal facts
     /// (name, role, team, company, location, preferences) and stores them directly.
     ///
-    /// This is the single memory-writing path when active: on <b>Path A</b> (an <see cref="ChatClient"/>
-    /// is configured) and <see cref="UseMemoryContext"/> is on, the redundant <c>remember</c> tool
-    /// and its forceful prompt block are dropped (saving per-call tokens). On <b>Path B</b> (a
-    /// pre-built <see cref="Agent"/> with no ChatClient) auto-capture cannot run, so the
-    /// <c>remember</c> tool + prompt are kept as the fallback writer. The <c>forget</c> tool is
-    /// always available.
+    /// This is the single memory-writing path when it can run, with <see cref="UseMemoryContext"/> on:
+    /// the extraction goes to <see cref="ClassifierChatClient"/> if set, else to <see cref="ChatClient"/>.
+    /// Then the redundant <c>remember</c> tool, and on <b>Path A</b> its forceful prompt block, are
+    /// dropped (saving per-call tokens). That holds on <b>Path B</b> too (a pre-built
+    /// <see cref="Agent"/>) when a <see cref="ClassifierChatClient"/> is set. With a pre-built agent
+    /// and no classifier, auto-capture cannot run, so the <c>remember</c> tool is kept as the
+    /// fallback writer. The build log names the writer. The <c>forget_all</c> tool is always available.
     ///
-    /// Cost: one lightweight model call per user message. Set to <see langword="false"/> to opt out
-    /// and go back to the tool-based writing (cheaper, but the model saves facts less reliably).
-    /// Default: <see langword="true"/>.
+    /// Cost: one lightweight model call per user message, to the classifier when there is one. Set to
+    /// <see langword="false"/> to opt out and go back to the tool-based writing (cheaper, but the
+    /// model saves facts less reliably). Default: <see langword="true"/>.
     /// </summary>
     public bool MemoryAutoCapture { get; set; } = true;
 
@@ -495,10 +498,11 @@ public sealed class MentorOptions
 
     /// <summary>
     /// How tool approval is implemented (roadmap #16). <see cref="MentorHitlMode.Blocking"/> (default)
-    /// keeps MentorAgent's own flow — one round-trip, streaming stays alive.
+    /// keeps MentorAgent's own flow — one agent run per turn, streaming stays alive.
     /// <see cref="MentorHitlMode.Native"/> switches to the Agent Framework standard
     /// (<c>ApprovalRequiredAIFunction</c> + <c>ToolApprovalRequestContent</c>/<c>ToolApprovalResponseContent</c>)
-    /// for interop with AF workflows and AF-native hosts.
+    /// for interop with AF workflows and AF-native hosts, with one more agent run per round of
+    /// confirmations. Both modes make the same model calls.
     ///
     /// <para>
     /// The user-facing banner and the client protocol are identical in both modes, so this is safe to
@@ -576,8 +580,11 @@ public sealed class MentorOptions
     ///     name.StartsWith("delete_") || name is "send_email" or "write_file";
     /// </code>
     ///
-    /// Evaluated once per tool while the coordinator is built, so it must be a pure function of the
-    /// tool name. <see langword="null"/> (default) = only the declared confirmations apply.
+    /// Asked whenever MentorAgent needs the answer, not once: while the coordinator is built, then
+    /// again on every call to a tool in <see cref="MentorHitlMode.Blocking"/> and on every turn the
+    /// tool filter matches a tool (a tool whose confirmation is already declared is never asked
+    /// about). Keep it a cheap, pure function of the tool name: read a file or a database once,
+    /// outside it. <see langword="null"/> (default) = only the declared confirmations apply.
     /// </summary>
     public Func<string, bool>? RequiresApproval { get; set; }
 
@@ -597,6 +604,27 @@ public sealed class MentorOptions
     /// of the name. <see langword="null"/> (default) = only the attribute declares.
     /// </summary>
     public Func<string, bool>? IsReadOnlyAction { get; set; }
+
+    /// <summary>
+    /// Optional function that writes the text of the confirmation banner, for example in the application's
+    /// own words or language. It gets the action's name and description, the arguments as the banner shows
+    /// them — in the order of the method's parameters, cleaned of control characters and cut at 200
+    /// characters — the configured <see cref="Language"/>, the text MentorAgent would show, and the services
+    /// of the conversation's scope (an <c>IStringLocalizer</c>, say).
+    ///
+    /// <code>
+    /// options.ConfirmationMessage = c => c.ToolName == "cancel_order"
+    ///     ? $"Cancel order {c.Arguments.First(a => a.Name == "orderId").Value}?"
+    ///     : null;
+    /// </code>
+    ///
+    /// The banner's title stays the localized "Confirmation required". When the function returns
+    /// <see langword="null"/> or white space, or throws, the default text is shown, with a warning for the
+    /// last two: a banner never fails to appear because of it. The text reaches the widget and the SignalR
+    /// clients as it is; for an MCP tool the server's name can still follow it. <see langword="null"/>
+    /// (default) = the action's description followed by its arguments.
+    /// </summary>
+    public Func<MentorConfirmationContext, string?>? ConfirmationMessage { get; set; }
 
     // ── Wave 3 · #7 Middleware suite ──────────────────────────────────────────
 
@@ -624,9 +652,11 @@ public sealed class MentorOptions
     /// blocked (replaced with a safe message) if it leaks system instructions/secrets, discloses
     /// someone's personal data, or contains harmful content. Like the output guardrail, the reply is
     /// buffered and revealed after moderation (no live streaming that turn). A custom
-    /// <see cref="OutputGuardrail"/> takes precedence over this built-in check. Requires a
-    /// <see cref="ChatClient"/> (Path A); adds one lightweight model call per reply. Default:
-    /// <see langword="false"/>.
+    /// <see cref="OutputGuardrail"/> takes precedence over this built-in check. Runs on
+    /// <see cref="ClassifierChatClient"/>, or on <see cref="ChatClient"/> when none is set: with a
+    /// pre-built <see cref="Agent"/> (Path B) it needs a <see cref="ClassifierChatClient"/>, and without
+    /// either the reply is shown unchecked and a warning is logged when the coordinator is built. Adds
+    /// one lightweight model call per reply. Default: <see langword="false"/>.
     /// </summary>
     public bool EnableOutputSafetyCheck { get; set; }
 
@@ -660,14 +690,32 @@ public sealed class MentorOptions
     /// (<see cref="ChatClient"/>) pipeline, letting you insert your own <c>DelegatingChatClient</c>
     /// or Agent Framework middleware via the builder (e.g. logging, caching, extra guardrails).
     /// Applied outermost, after MentorAgent's own middleware. <see langword="null"/> = none.
+    /// <para>
+    /// Built once per coordinator — one per scope, so one per circuit in Blazor Server and one per hub
+    /// connection: a semaphore, a concurrency limit or a counter kept in it does not limit the process.
+    /// Keep process-wide state in a singleton you inject.
+    /// </para>
+    /// <para>
+    /// Only the coordinator's own model calls go through it. MentorAgent's auxiliary calls (the request
+    /// classifier behind the out-of-scope refusal and the lookup and action checks, the safety checks,
+    /// the hosted-tool domain gate, the memory extraction) use <see cref="ClassifierChatClient"/> ??
+    /// <see cref="ChatClient"/>, and the agents under the coordinator (the handoff router,
+    /// <c>[MentorAgent]</c> specialists, <c>[MentorTeam]</c> members) use <see cref="ChatClient"/>; both
+    /// are wrapped only in MentorAgent's token metering.
+    /// </para>
     /// </summary>
     public Func<ChatClientBuilder, ChatClientBuilder>? ConfigureChatClientPipeline { get; set; }
 
     // ── Wave 3 · #8 Observability (OpenTelemetry) ─────────────────────────────
 
     /// <summary>
-    /// Emit OpenTelemetry traces/metrics (GenAI semantic conventions) from the chat client and
-    /// embedding generator, plus MentorAgent-level spans/counters. The host app wires the exporter
+    /// Emit OpenTelemetry traces/metrics (GenAI semantic conventions) for the coordinator's model
+    /// calls — its <see cref="ChatClient"/> pipeline on Path A, innermost so the spans show the real
+    /// provider calls — plus MentorAgent-level spans and counters (turns, tool calls, errors,
+    /// guardrail blocks) on both paths. Nothing else is wrapped: the auxiliary calls
+    /// (<see cref="ClassifierChatClient"/>), the agents under the coordinator, a pre-built
+    /// <see cref="Agent"/> and the <see cref="EmbeddingGenerator"/> are traced only if the host wraps
+    /// them with <c>UseOpenTelemetry()</c> before handing them over. The host app wires the exporter
     /// (App Insights, Aspire, OTLP) and adds the sources/meters. Default: <see langword="false"/>.
     /// </summary>
     public bool EnableObservability { get; set; }
@@ -780,6 +828,8 @@ public sealed class MentorOptions
     /// <summary>
     /// Optional client for MentorAgent's own yes/no decisions — the input and output safety checks,
     /// the hosted-tool scope check and the post-turn fact extraction. Defaults to <see cref="ChatClient"/>.
+    /// With a pre-built <see cref="Agent"/> (Path B) it is the only client MentorAgent can call on its
+    /// own: without it the safety checks are skipped and memory falls back to the remember tool.
     ///
     /// <para>
     /// These calls send a few hundred tokens and read back one word, and they sit <b>in front of</b>
@@ -799,6 +849,22 @@ public sealed class MentorOptions
     /// </para>
     /// </summary>
     public IChatClient? ClassifierChatClient { get; set; }
+
+    /// <summary>
+    /// The client of MentorAgent's own auxiliary calls: <see cref="ClassifierChatClient"/>, else
+    /// <see cref="ChatClient"/>. <see langword="null"/> with a pre-built <see cref="Agent"/> and no
+    /// classifier, the one configuration where MentorAgent has nothing of its own to call.
+    /// </summary>
+    internal IChatClient? AuxiliaryChatClient => ClassifierChatClient ?? ChatClient;
+
+    /// <summary>
+    /// True when the post-turn extraction of <see cref="MemoryAutoCapture"/> runs: memory and capture
+    /// are on and there is an <see cref="AuxiliaryChatClient"/>, on either path. It is then the only
+    /// memory writer, and the <c>remember</c> tool and its prompt block are left out. The tools, the
+    /// prompt, the extraction and the build log all decide on this one condition, so there is never a
+    /// second writer, nor none.
+    /// </summary>
+    internal bool MemoryAutoCaptureRuns => UseMemoryContext && MemoryAutoCapture && AuxiliaryChatClient is not null;
 
     /// <summary>
     /// Refuse, politely and without calling the coordinator, a message that is not about this
@@ -1236,6 +1302,10 @@ public sealed class MentorOptions
     /// Before processing each message, asks the LLM whether it is a prompt injection,
     /// jailbreak, or sensitive data extraction attempt.
     /// Works in any language automatically.
+    /// Runs on <see cref="ClassifierChatClient"/>, or on <see cref="ChatClient"/> when none is set:
+    /// with a pre-built <see cref="Agent"/> (Path B) it needs a <see cref="ClassifierChatClient"/>, and
+    /// without either every message goes through unchecked and a warning is logged when the
+    /// coordinator is built. A custom <see cref="InputGuardrail"/> replaces it and needs no client.
     /// ⚠️ Adds one extra API call per message (~200-500ms).
     /// Default: false
     /// </summary>

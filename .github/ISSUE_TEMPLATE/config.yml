@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/Novior-dev/MentorAgent/discussions
+    about: Questions on how to use MentorAgent go to Discussions, in the Q&A category.
+  - name: Report a vulnerability
+    url: https://github.com/Novior-dev/MentorAgent/security/policy
+    about: Never in a public issue. Write privately to security@mentoragent.net, as the security policy says.

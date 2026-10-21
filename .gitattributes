@@ -1,0 +1,28 @@
+# Line endings of every checkout, on Windows or Linux and whatever core.autocrlf says. The prompt's texts are string
+# literals inside the DLLs, and the widget's CSS and JavaScript ship as files in the packages: the line endings of the
+# sources end up in the published bytes. 1.0.0 was built from CRLF sources, so every text file is checked out CRLF.
+# The repository itself keeps LF.
+* text=auto eol=crlf
+
+# Scripts with a shebang stay LF: run directly on Linux, a CRLF first line asks for "python3\r".
+*.sh text eol=lf
+*.py text eol=lf
+
+# Binary files, named rather than guessed.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.nupkg binary
+*.snupkg binary
+*.dll binary
+*.pdb binary
+*.snk binary
+*.pfx binary

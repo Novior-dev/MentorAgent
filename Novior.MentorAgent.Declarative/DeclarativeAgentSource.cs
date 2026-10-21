@@ -127,8 +127,10 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
         if (agent.GetService(typeof(ChatOptions)) is not ChatOptions { Tools: { } list })
             return true;   // no tools at all
 
-        // Functions are the host's: they came from the list MentorAgent supplied (a name that matches
-        // nothing is left out by the factory itself). Anything else was defined by the file.
+        // Functions are not hosted tools, so they stay: the ones MentorAgent supplied and, for a name that
+        // matches nothing, the declaration-only function the factory creates in its place — the model can
+        // call it, but no code runs behind it (the README warns about it). Anything else was defined by
+        // the file.
         var foreign = list.Where(t => t is not AIFunctionDeclaration).ToList();
         if (foreign.Count == 0)
             return true;

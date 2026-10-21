@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>MentorAgentDemo</RootNamespace>
+    <!-- The model key lives in the user secrets of this project, never in a file of the repository:
+         dotnet user-secrets set "Demo:ApiKey" "<your key>" -->
+    <UserSecretsId>mentoragent-demo-2f6c1d84</UserSecretsId>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MentorAgent does not bring a provider SDK: the application references the one it uses. -->
+    <PackageReference Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- MentorAgent reads the skills from the content root (SkillsFolder "Skills"): published with the app too. -->
+    <Content Include="Skills\**\*.md" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The What to try page reads its features from the assembly, so a published app needs no extra file. -->
+    <Content Remove="Localization\TryCatalog.json" />
+    <EmbeddedResource Include="Localization\TryCatalog.json" LogicalName="MentorAgentDemo.TryCatalog.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The library from this repository. In your own application, reference the package instead:
+         <PackageReference Include="Novior.MentorAgent" Version="1.1.0" /> -->
+    <ProjectReference Include="..\..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
+  </ItemGroup>
+
+</Project>

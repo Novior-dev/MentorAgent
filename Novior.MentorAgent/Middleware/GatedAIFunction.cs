@@ -40,7 +40,10 @@ internal sealed class GatedAIFunction : DelegatingAIFunction
                // ToolApprovalRequestContent raised inside the workflow never reaches the
                // orchestrator. The blocking flow is the only one that can reach the user from here,
                // and the banner is identical either way.
-               alwaysBlockForApproval: true);
+               alwaysBlockForApproval: true,
+               // This function's own method: a level-1 method with the same name and no roles used to decide
+               // the roles of a specialist's call (BUG-188).
+               method: UnderlyingMethod);
 
     /// <summary>
     /// Wraps <paramref name="tool"/> in the gate when it is an invocable <see cref="AIFunction"/>.

@@ -1,0 +1,4 @@
+<Project>
+  <!-- Present so the repository root's Directory.Build.targets, which writes the packages' release
+       notes from the CHANGELOG, does not apply to the demo. -->
+</Project>

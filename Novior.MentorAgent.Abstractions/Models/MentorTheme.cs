@@ -9,6 +9,10 @@ public enum MentorTheme
     Dark = 1,
     /// <summary>Minimalist theme without shadows.</summary>
     Minimal = 2,
-    /// <summary>No theme — all CSS variables must be set manually.</summary>
+    /// <summary>
+    /// No theme overrides: the widget renders like <see cref="Default"/>, from the baseline values in
+    /// <c>MentorAgent.css</c>, and the host's own stylesheet changes what it overrides. <c>PrimaryColor</c>,
+    /// if set, is still applied. Nothing has to be set by hand.
+    /// </summary>
     Custom = 3
 }

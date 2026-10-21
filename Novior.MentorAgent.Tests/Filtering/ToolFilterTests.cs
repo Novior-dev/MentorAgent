@@ -530,6 +530,36 @@ public sealed class ToolFilterTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task The_RequiresApproval_predicate_is_asked_again_on_every_turn()
+    {
+        // Documented as "evaluated once per tool while the coordinator is built". The filter asks it on
+        // every turn that matches a tool, so a predicate that reads a file or a database pays for that
+        // read on every message.
+        const string query = "how many open orders are there";
+        var asked = 0;
+        await using var host = WithFilter(o =>
+        {
+            o.ToolFilterMinScore = 0.35f;
+            // A read, so no declared confirmation answers first: only the predicate gates it.
+            o.RequiresApproval = name =>
+            {
+                if (name != "count_open_orders") return false;
+                Interlocked.Increment(ref asked);
+                return true;
+            };
+        });
+        SeedOnlyRelevant(host, query);
+        host.Embeddings!.AtSimilarity("count_open_orders: Counts open orders", Relevant, 0.40f);
+        host.Chat!.SayRepeatedly("ok", times: 4);
+
+        await host.RunTurnAsync(query);   // builds the coordinator
+        var afterFirstTurn = asked;
+        await host.RunTurnAsync(query);
+
+        asked.Should().BeGreaterThan(afterFirstTurn, "the filter asks the predicate again on the second turn");
+    }
+
+    [Fact]
     public async Task The_companions_never_push_the_list_past_max_tools()
     {
         const string query = "how many open orders are there";

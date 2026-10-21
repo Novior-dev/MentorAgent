@@ -1,0 +1,20 @@
+<Project>
+  <!-- The demo's own build settings. Without this file the demo would inherit the repository root's,
+       which are the packages' rules: XML documentation, package validation against 1.0.0, release
+       notes from the CHANGELOG. The demo is an application, not a package. -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- The same NuGet audit as the packages: a dependency with a high or critical advisory fails a
+       Release build. -->
+  <PropertyGroup>
+    <NuGetAuditMode>all</NuGetAuditMode>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+</Project>

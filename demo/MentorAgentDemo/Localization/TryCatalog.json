@@ -1,0 +1,193 @@
+[
+  {
+    "id": "read",
+    "title": { "en": "It reads the app's data", "it": "Legge i dati dell'app" },
+    "what": {
+      "en": "A method with [MentorAction] is a tool the model can call; ReadOnly says it changes nothing. With rich responses on, the answer can be a table.",
+      "it": "Un metodo con [MentorAction] è uno strumento che il modello può chiamare; ReadOnly dice che non cambia niente. Con le risposte ricche attive, la risposta può essere una tabella."
+    },
+    "ask": {
+      "en": "Which expenses are still waiting for approval? Show them in a table.",
+      "it": "Quali note spese aspettano ancora l'approvazione? Mostrale in una tabella."
+    },
+    "code": [
+      { "file": "Assistant/ExpenseActions.cs", "lines": [ "[MentorAction(", "    ReadOnly = true)]", "public IReadOnlyList<ExpenseRow> ListExpenses(" ] },
+      { "file": "Program.cs", "lines": [ "builder.Services.AddScoped<ExpenseActions>();", "options.EnableRichResponses = true;" ] }
+    ]
+  },
+  {
+    "id": "card",
+    "title": { "en": "A card with buttons", "it": "Una card con i pulsanti" },
+    "what": {
+      "en": "An action can return a card. Its buttons are written by the app, not by the model: open the claim, or approve it while it waits.",
+      "it": "Un'azione può restituire una card. I pulsanti li scrive l'app, non il modello: aprire la nota spese, o approvarla finché aspetta."
+    },
+    "ask": { "en": "Show me expense 1003.", "it": "Mostrami la nota spese 1003." },
+    "code": [
+      { "file": "Assistant/ExpenseActions.cs", "lines": [ "public object ShowExpense([Description(\"The claim number, for example 1002\")] int expenseId)" ] },
+      { "file": "Program.cs", "lines": [ "options.EnableGenerativeCards = true;" ] }
+    ]
+  },
+  {
+    "id": "confirm",
+    "title": { "en": "It asks before a change", "it": "Chiede prima di cambiare" },
+    "what": {
+      "en": "An action that changes data runs only after the person confirms it in the banner. The demo writes the banner's text itself, in the assistant's language. Act as Marco Bianchi (Manager) to see it run.",
+      "it": "Un'azione che cambia i dati parte solo dopo la conferma della persona nel riquadro. Il testo del riquadro lo scrive la demo, nella lingua dell'assistente. Usa l'app come Marco Bianchi (Responsabile) per vederla partire."
+    },
+    "ask": { "en": "Approve expense 1002.", "it": "Approva la nota spese 1002." },
+    "code": [
+      { "file": "Assistant/ExpenseActions.cs", "lines": [ "RequiresConfirmation = true,", "public string ApproveExpense([Description(\"The claim number\")] int expenseId)" ] },
+      { "file": "Program.cs", "lines": [ "options.RequireConfirmation = true;", "options.ConfirmationMessage = DemoConfirmation.Write;" ] }
+    ]
+  },
+  {
+    "id": "roles",
+    "title": { "en": "Roles", "it": "Ruoli" },
+    "what": {
+      "en": "MentorAgent checks the roles of an action before it runs, whatever the model says. As Giulia Rossi (Employee) the approval is refused; as a Manager or the Administrator it is asked for.",
+      "it": "MentorAgent controlla i ruoli di un'azione prima di eseguirla, qualunque cosa dica il modello. Come Giulia Rossi (Dipendente) l'approvazione è rifiutata; come Responsabile o Amministratore viene chiesta la conferma."
+    },
+    "ask": { "en": "Approve expense 1010.", "it": "Approva la nota spese 1010." },
+    "code": [
+      { "file": "Assistant/ExpenseActions.cs", "lines": [ "RequiredRoles = [DemoRoles.Manager, DemoRoles.Administrator],", "public string ApproveExpense([Description(\"The claim number\")] int expenseId)" ] }
+    ]
+  },
+  {
+    "id": "navigate",
+    "title": { "en": "It takes you to a page", "it": "Ti porta a una pagina" },
+    "what": {
+      "en": "A page with [MentorPage] is a place the assistant can open. An action can also open a page after it runs, with NavigateTo.",
+      "it": "Una pagina con [MentorPage] è un posto che l'assistente può aprire. Anche un'azione può aprire una pagina dopo che è partita, con NavigateTo."
+    },
+    "ask": { "en": "Take me to the expense policy.", "it": "Portami alla policy delle spese." },
+    "code": [
+      { "file": "Components/Pages/Policy.razor", "lines": [ "@attribute [MentorPage(Url = \"/policy\", Name = \"Expense policy\"," ] },
+      { "file": "Assistant/ExpenseActions.cs", "lines": [ "NavigateTo = \"/expenses\")]" ] }
+    ]
+  },
+  {
+    "id": "page-actions",
+    "title": { "en": "Actions on the page", "it": "Azioni sulla pagina" },
+    "what": {
+      "en": "A page registers what it can do while it is open, and those become tools for that page only. Expenses highlights a row; New expense fills its form.",
+      "it": "Una pagina registra quello che sa fare finché è aperta, e diventano strumenti solo per quella pagina. Note spese evidenzia una riga; Nuova nota spese compila il suo modulo."
+    },
+    "ask": { "en": "Highlight expense 1008 in the table.", "it": "Evidenzia la nota spese 1008 nella tabella." },
+    "page": "/expenses",
+    "code": [
+      { "file": "Components/Pages/Expenses.razor", "lines": [ "PageContext?", "    .SetPageName(\"Expenses\")", "    .RegisterUIAction<int>(\"highlight_expense\", \"Highlights one claim's row in the table of this page, by its number\",", "PageContext?.SignalReady();", "PageContext?.Clear(\"Expenses\");" ] }
+    ]
+  },
+  {
+    "id": "receipt",
+    "title": { "en": "It reads a receipt", "it": "Legge una ricevuta" },
+    "what": {
+      "en": "Download the made-up receipt from the home page and attach it with the paper clip on New expense: the model reads the picture and fills in the form, and you still press Submit.",
+      "it": "Scarica la ricevuta inventata dalla home e allegala con la graffetta in Nuova nota spese: il modello legge l'immagine e compila il modulo, e Invia lo premi tu."
+    },
+    "ask": { "en": "Fill in the form from this receipt.", "it": "Compila il modulo da questa ricevuta." },
+    "page": "/expenses/new",
+    "code": [
+      { "file": "Program.cs", "lines": [ "options.EnableImageInput = true;" ] },
+      { "file": "Components/Pages/NewExpense.razor", "lines": [ ".RegisterUIAction<ExpenseDraft>(\"fill_expense_form\"," ] }
+    ]
+  },
+  {
+    "id": "auditor",
+    "title": { "en": "A specialist: the Auditor", "it": "Uno specialista: l'Auditor" },
+    "what": {
+      "en": "A class with [MentorAgent] is a specialist with its own instructions and tools. The assistant hands it the question, and the Auditor checks the claim against the policy.",
+      "it": "Una classe con [MentorAgent] è uno specialista con le sue istruzioni e i suoi strumenti. L'assistente gli passa la domanda, e l'Auditor controlla la nota spese con la policy."
+    },
+    "ask": { "en": "Ask the Auditor to check expense 1003.", "it": "Chiedi all'Auditor di controllare la nota spese 1003." },
+    "code": [
+      { "file": "Assistant/AuditorAgent.cs", "lines": [ "[MentorAgent(", "    Name = \"Auditor\"," ] },
+      { "file": "Program.cs", "lines": [ "builder.Services.AddScoped<AuditorAgent>();" ] }
+    ]
+  },
+  {
+    "id": "rag",
+    "title": { "en": "Answers from the policy, with citations", "it": "Risposte dalla policy, con le citazioni" },
+    "what": {
+      "en": "The expense policy is a document source. The answer cites its sections as [1], [2], and each citation is a chip that opens the section.",
+      "it": "La policy delle spese è una fonte di documenti. La risposta cita le sezioni come [1], [2], e ogni citazione è un chip che apre la sezione."
+    },
+    "ask": { "en": "How much can I spend on a hotel night?", "it": "Quanto posso spendere per una notte in albergo?" },
+    "code": [
+      { "file": "Program.cs", "lines": [ "builder.Services.AddSingleton<IMentorRagSource>(sp => sp.GetRequiredService<PolicyHandbook>());", "options.UseRag = true;", "options.ShowRagSources = true;" ] }
+    ]
+  },
+  {
+    "id": "skills",
+    "title": { "en": "The desk's procedures, in a Skills file", "it": "Le procedure dell'ufficio, in un file Skills" },
+    "what": {
+      "en": "How the expense desk turns a receipt into a claim is written in a Markdown file. The model loads it when it needs it, for example before it submits a claim.",
+      "it": "Come l'ufficio trasforma una ricevuta in una nota spese è scritto in un file Markdown. Il modello lo carica quando gli serve, per esempio prima di inserire una nota spese."
+    },
+    "ask": { "en": "Submit a taxi of 23 euro from 14 October for me.", "it": "Inserisci per me un taxi di 23 euro del 14 ottobre." },
+    "code": [
+      { "file": "Skills/expense-desk/SKILL.md", "lines": [ "# Expense desk" ] },
+      { "file": "Program.cs", "lines": [ "options.EnableSkills = true;" ] }
+    ]
+  },
+  {
+    "id": "memory",
+    "title": { "en": "It remembers you", "it": "Si ricorda di te" },
+    "what": {
+      "en": "What the assistant learns about each person is kept for this run of the demo. Tell it something, start a new conversation, and ask again.",
+      "it": "Quello che l'assistente impara di ogni persona resta per questa esecuzione della demo. Digli qualcosa, apri una nuova conversazione e chiedi di nuovo."
+    },
+    "ask": { "en": "Remember that I always travel by train.", "it": "Ricorda che viaggio sempre in treno." },
+    "code": [
+      { "file": "Program.cs", "lines": [ "options.UseMemoryContext = true;" ] }
+    ]
+  },
+  {
+    "id": "safety",
+    "title": { "en": "It stays on topic", "it": "Resta in tema" },
+    "what": {
+      "en": "Unsafe messages are stopped, and a question that is not about the app is declined politely.",
+      "it": "I messaggi pericolosi sono fermati, e una domanda che non riguarda l'app viene declinata con garbo."
+    },
+    "ask": { "en": "What will the weather be in Rome tomorrow?", "it": "Che tempo farà domani a Roma?" },
+    "code": [
+      { "file": "Program.cs", "lines": [ "options.EnableSafetyCheck = true;", "options.RefuseOutOfScope = true;" ] }
+    ]
+  },
+  {
+    "id": "rate-limit",
+    "title": { "en": "A limit on messages", "it": "Un limite ai messaggi" },
+    "what": {
+      "en": "Each person can send 10 messages a minute; the next one is refused until the minute is over.",
+      "it": "Ogni persona può mandare 10 messaggi al minuto; il successivo è rifiutato finché il minuto non è passato."
+    },
+    "code": [
+      { "file": "Program.cs", "lines": [ "options.RateLimitPerUser = 10;", "options.RateLimitWindowSecs = 60;" ] }
+    ]
+  },
+  {
+    "id": "usage",
+    "title": { "en": "What the assistant costs", "it": "Quanto costa l'assistente" },
+    "what": {
+      "en": "Calls, tokens and cost per model, for the administrator only: act as Sara Conti (Administrator) and open Usage.",
+      "it": "Chiamate, token e costo per modello, solo per l'amministratore: usa l'app come Sara Conti (Amministratore) e apri Consumi."
+    },
+    "page": "/usage",
+    "code": [
+      { "file": "Components/Pages/Usage.razor", "lines": [ "<AuthorizeView Roles=\"@DemoRoles.Administrator\">", "<MentorDashboard Currency=\"$\" />" ] },
+      { "file": "Program.cs", "lines": [ "options.ModelPricing = new Dictionary<string, ModelPrice>(StringComparer.OrdinalIgnoreCase)" ] }
+    ]
+  },
+  {
+    "id": "tour",
+    "title": { "en": "The tour", "it": "Il tour" },
+    "what": {
+      "en": "The widget opens a short tour on the first visit, with a question to try at each step. The demo writes it by hand, in the language of the pages.",
+      "it": "Alla prima visita il widget apre un breve tour, con una domanda da provare a ogni passo. La demo lo scrive a mano, nella lingua delle pagine."
+    },
+    "code": [
+      { "file": "Program.cs", "lines": [ "builder.Services.AddScoped<IMentorTour, DemoTour>();", "options.EnableOnboardingTour = true;" ] }
+    ]
+  }
+]

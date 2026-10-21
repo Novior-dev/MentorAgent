@@ -1,8 +1,11 @@
 using FluentAssertions;
 using Novior.MentorAgent.Core;
+using Novior.MentorAgent.Extensions;
 using Novior.MentorAgent.Tests.App;
 using Novior.MentorAgent.Tests.Harness;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Novior.MentorAgent.Tests.Federation;
@@ -185,6 +188,32 @@ public sealed class McpServerSurfaceTests
 
         collection.Dispose();
     }
+
+    [Fact]
+    public async Task The_withheld_actions_are_named_at_startup_before_any_mcp_request()
+    {
+        // BUG-178. The Server README promises a startup warning, and it came with the first tools/list or
+        // tools/call: a host whose endpoint nobody had called yet did not know which actions were missing.
+        // MapMentorAgentMcp names them now. The catalogue is still built by the first request, which does
+        // not say it again.
+        await using var app = await ServerAppFactory.CreateAsync(
+            configure: o => o.McpServerEnabled = true,
+            configureApp: a => a.UseEndpoints(e => e.MapMentorAgentMcp()));
+
+        WithheldWarnings(app).Should().ContainSingle("no MCP request has been made")
+            .Which.Should().Contain("export_ledger");
+        app.Logs.Records.Should().NotContain(r => r.Message.Contains("MCP tool collection ready"),
+            "naming the withheld actions does not build the catalogue");
+
+        app.Services.GetRequiredService<MentorAgentMcpToolCollection>().GetTools();
+
+        app.Logs.Records.Should().Contain(r => r.Message.Contains("MCP tool collection ready"));
+        WithheldWarnings(app).Should().ContainSingle("the first request builds the catalogue and does not repeat it");
+    }
+
+    private static IEnumerable<string> WithheldWarnings(ServerAppFactory app) => app.Logs.Records
+        .Where(r => r.Level == LogLevel.Warning && r.Message.Contains("withheld from the MCP server", StringComparison.Ordinal))
+        .Select(r => r.Message);
 
     [Fact]
     public async Task The_ungated_neighbours_of_a_withheld_tool_are_still_published()

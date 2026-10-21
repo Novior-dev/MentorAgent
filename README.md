@@ -16,6 +16,8 @@
 
 Built on top of **[Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/)** (`Microsoft.Agents.AI`), MentorAgent abstracts the complexity of multi-agent systems into a clean, attribute-driven programming model designed specifically for Blazor developers.
 
+**See it run:** the [demo](https://github.com/Novior-dev/MentorAgent/tree/main/demo) is a small expense-claims app with MentorAgent inside. Clone the repository, set a model key in the user secrets and `dotnet run`.
+
 ---
 
 ## Table of Contents
@@ -90,7 +92,7 @@ MentorAgent turns any Blazor application into an AI-assisted experience. It prov
 - A **Main Coordinator agent** that understands the application context and routes requests.
 - An **attribute-driven discovery system** that scans your assemblies and turns plain C# methods and classes into AI tools and agents — zero boilerplate.
 - Full integration with **Microsoft Agent Framework**, supporting Handoff Workflows, Group Chat teams, and any AI provider compatible with the `IChatClient` abstraction.
-- **RAG** — inject relevant documents from any vector database into every AI response.
+- **RAG** — inject relevant documents into every AI response, read through an `IMentorRagSource` you implement over your own store.
 - **MCP** — consume external MCP servers as additional tools, and expose MentorAgent's own actions as an MCP server for other AI clients.
 - **A2A** — connect to remote AI agents via the Agent-to-Agent protocol, and expose MentorAgent as a federatable A2A agent.
 
@@ -115,7 +117,7 @@ UI actions registered by the current page are injected as **individually named A
 | 🗺️ **Page navigation** | AI navigates to any page decorated with `[MentorPage]` |
 | 💬 **Session management** | Conversation history managed by Agent Framework (`AgentSession`) |
 | 💾 **Persistent history** | Pluggable `ChatHistoryProvider` (CosmosDB, Redis, custom) |
-| 📚 **RAG** | Retrieval-Augmented Generation — inject relevant documents from any vector DB into every AI response |
+| 📚 **RAG** | Retrieval-Augmented Generation — inject relevant documents into every AI response, read through an `IMentorRagSource` you implement over your own store |
 | 🔌 **MCP Client** | Consume external MCP servers as additional Level-1 tools for the coordinator |
 | 🖥️ **MCP Server** | Expose your Level-1 actions (`[Description]` and `[MentorAction]` methods) as MCP tools — any MCP client can connect (Claude Desktop, VS Code, etc.). Gated actions (`RequiresConfirmation`, `RequiredRoles`, `RequiresApproval`) are withheld — an MCP caller cannot confirm anything — except a role-gated one published to a caller that `McpCallerPrincipal` identifies as holding the role |
 | 🌐 **A2A Consumer** | Connect to remote A2A agents; the coordinator delegates to them through the same handoff workflow as local specialists, and every answer says which system it came from. A request that arrived over A2A is answered locally, never passed on to another peer |
@@ -345,21 +347,21 @@ options.EmbeddingGenerator = new OpenAIClient("sk-...")
 | Feature | `ChatClient` (Path A) | `AIAgent` (Path B) |
 |---|---|---|
 | L1 actions | ✅ | ✅ |
-| L2 Handoff agents | ✅ | ❌ requires `IChatClient` |
-| L3 Group Chat teams | ✅ | ❌ requires `IChatClient` |
-| A2A remote agents | ✅ | ❌ requires `IChatClient` |
+| L2 Handoff agents | ✅ | ❌ requires `IChatClient` — skipped, with a warning when the coordinator is built |
+| L3 Group Chat teams | ✅ | ❌ requires `IChatClient` — skipped, with a warning when the coordinator is built |
+| A2A remote agents | ✅ | ❌ requires `IChatClient` — skipped, with a warning when the coordinator is built, and the peers' cards are not fetched |
 | MCP client tools | ✅ | ✅ |
 | RAG | ✅ | ✅ |
 | Agent Skills | ✅ | ✅ |
 | UI Actions (per-action tools) | ✅ via `UIActionsMiddleware` | ⚠️ single generic `invoke_ui_action` dispatcher |
-| Safety check (input and output) | ✅ | ⚠️ runs only when `ClassifierChatClient` is set — otherwise skipped automatically |
+| Safety check (input and output) | ✅ | ⚠️ runs only when `ClassifierChatClient` is set — otherwise skipped, with a warning when the coordinator is built |
 | Session history reduction | ✅ configurable | ✅ configured in the agent |
 | Custom `ChatHistoryProvider` | ✅ via options | ⚠️ must be set in the pre-built agent |
 | Declarative (YAML) agents | ✅ | ❌ skipped with a warning — they need a `ChatClient` |
-| Hosted tools (`HostedTools`) | ✅ | ❌ declare them on the pre-built agent itself (warning at startup) |
-| Semantic tool filtering (`EnableToolFiltering`) | ✅ | ❌ no effect (warning at startup) — filter the tools on your agent |
+| Hosted tools (`HostedTools`) | ✅ | ❌ declare them on the pre-built agent itself (warning when the coordinator is built) |
+| Semantic tool filtering (`EnableToolFiltering`) | ✅ | ❌ no effect (warning when the coordinator is built) — filter the tools on your agent |
 | Model routing (`StrongChatClient`) | ✅ | ❌ |
-| Memory auto-capture (`MemoryAutoCapture`) | ✅ | ⚠️ falls back to the `remember` tool |
+| Memory auto-capture (`MemoryAutoCapture`) | ✅ | ✅ with a `ClassifierChatClient`; without one ⚠️ falls back to the `remember` tool |
 | Structured outputs (`IMentorStructured`) | ✅ | ❌ returns `default` with a warning |
 
 > When using `AIAgent` (Path B), `ChatHistoryProvider` **cannot** be added after construction — configure it directly in the agent you pass to `options.Agent`.
@@ -404,9 +406,10 @@ MentorAgent discovers the service via `ScanAssemblies` and exposes its methods a
 
 | Parameter | Description |
 |---|---|
-| `Description` | Natural language description used as the AI tool description |
+| `Description` | **Required.** Natural language description used as the AI tool description |
 | `Category` | Published as the tag of this action's skill on the A2A agent card. It groups nothing and is not used anywhere else |
 | `RequiresConfirmation` | Shows a confirmation banner before executing. Use for destructive or irreversible operations |
+| `RequiresConfirmationDeclared` | Read-only, not set in the attribute: `true` when the attribute writes `RequiresConfirmation`, true or false. It tells an action that declares nothing, which asks with `RequireConfirmationForWrites` on, from one that declares `RequiresConfirmation = false`, which does not: `RequiresConfirmation` reads `false` for both |
 | `ReadOnly` | Declares that the action only reads — it changes no data. MentorAgent takes your word for it: the action is published to MCP clients with `readOnlyHint`, which some clients take as leave to skip their own confirmation — so a write declared `ReadOnly` by mistake runs from them with nobody asked — and with `RequireLookupForRecordQuestions` on it is one the assistant may be required to call before answering a question about a value of your records. Ignored when the action also needs confirmation. Declare `[Description]` methods by name with `options.IsReadOnlyAction` |
 | `RequiredRoles` | ASP.NET Core identity roles allowed to invoke the action — holding **any one** of them is enough (`["Manager", "Admin"]` means Manager *or* Admin). The user must be authenticated and an `AuthenticationStateProvider` must be registered, otherwise the call is refused. Empty = no role check, accessible to everyone including anonymous users |
 | `ProactiveHint` | Guidance for the model on when or how to use the action. Appended to the tool's description as `Guidance: <hint>` for the assistant's own tools (coordinator, specialists, team members); not added on the MCP server surface, and ignored by semantic tool filtering (tools are matched on `name: description` without the hint) |
@@ -428,9 +431,11 @@ member's `Tools`:
 
 #### Tool names — the rule you need before configuring anything else
 
-Several options identify a tool **by name**, not by method: `RequiresApproval`, `OnToolResult`,
-`EvalChecks.ToolCalledCheck`, the tool-filtering logs, the metrics `TopActions` list. The name is
-derived from the C# member, so you have to know the rule:
+Several options identify a tool **by name**, not by method: `RequiresApproval`, `IsReadOnlyAction`,
+`OnToolResult`, `EvalChecks.ToolCalledCheck`, the tool-filtering logs, the metrics `TopActions` list.
+The attributes do not: a call is checked against the `RequiredRoles`, `RequiresConfirmation` and
+`NavigateTo` of the method it runs, so a coordinator's action and a specialist's that share a name each
+keep their own. The name is derived from the C# member, so you have to know the rule:
 
 > **PascalCase → snake_case, with a trailing `Async` dropped first.**
 
@@ -548,7 +553,7 @@ public class BusinessAnalysisTeam : IMentorTeam            // IMentorTeam is opt
 }
 ```
 
-MentorAgent builds a `GroupChatWorkflow` from this declaration and gives it to the coordinator as a tool named after the team (`business_analysis_team` — see [Tool names](#tool-names--the-rule-you-need-before-configuring-anything-else)); the discussion's text is the tool's result. The team is not a node of the handoff graph, and `HandoffTo` hands nothing off by itself: the agents it names are added to the tool's description, and when the final message carries `[TEAM:APPROVED]` — the token every member is instructed to emit (`[TEAM:REJECTED]` otherwise; both are stripped before the text reaches the user) — the result ends with an instruction to execute the approved actions, which the coordinator does through `route_to_specialist`. It also says that an action may ask the user to confirm first, and that a declined confirmation is the user's decision, not a problem. A plain "APPROVED" satisfies the termination condition above but does not trigger that step.
+MentorAgent builds a `GroupChatWorkflow` from this declaration and gives it to the coordinator as a tool named after the team (`business_analysis_team` — see [Tool names](#tool-names--the-rule-you-need-before-configuring-anything-else)); the discussion's text is the tool's result. The team is not a node of the handoff graph, and `HandoffTo` hands nothing off by itself: the agents it names are added to the tool's description, and when the final message carries `[TEAM:APPROVED]` and no member wrote `[TEAM:REJECTED]` — the tokens every member is instructed to emit, the second only for a definitive no (a request for changes carries neither; both are stripped before the text reaches the user) — the result ends with an instruction to execute the approved actions, which the coordinator does through `route_to_specialist`. It also says that an action may ask the user to confirm first, and that a declined confirmation is the user's decision, not a problem. A discussion whose final message carries no verdict is not approved, and neither is a "yes" followed by a member's `[TEAM:REJECTED]`. Without a `[TeamTerminationCondition]` the discussion ends at the first verdict; a host's condition decides alone when to stop, within `MaxIterations`. A plain "APPROVED" satisfies the termination condition above but does not trigger that step.
 
 Register every class listed in `[TeamMember(Tools = ...)]` in DI (`builder.Services.AddScoped<ReportTools>();`) — a tool class the container cannot resolve is skipped with a warning and the member runs without it. Teams require `ChatClient` (Path A).
 
@@ -572,7 +577,7 @@ A class listed in `Tools` is that member's: its methods are **not** also the coo
 | `Instructions` | ✅ | System prompt for this member — defines what it should do and how it should respond |
 | `Tools` | — | Tool classes this member can call during the discussion — the member's only, not the coordinator's. Should be **read-only** — write operations belong in L2 agents via `HandoffTo` |
 
-- **`[TeamTerminationCondition]`** is required when you need custom exit logic. Required method signature: `bool ShouldTerminate(string lastMessage, string lastSpeaker)`. Without it, the team runs for `MaxIterations` turns with round-robin turn-taking and stops automatically.
+- **`[TeamTerminationCondition]`** is required when you need custom exit logic. Required method signature: `bool ShouldTerminate(string lastMessage, string lastSpeaker)`. Without it, members take turns round-robin and the discussion stops at the first message that carries `[TEAM:APPROVED]` or `[TEAM:REJECTED]`, or after `MaxIterations` turns.
 - **`TriggerOn`** keywords are injected into the Coordinator's prompt as an *always delegate to this team* directive — the model still decides, but pick specific words, because a broad one routes ordinary requests through the Group Chat.
 - `[TeamMember]` tools should be **read-only** (queries, reports). Write operations should be delegated to L2 agents via `HandoffTo`.
 - Implementing `IMentorTeam` is optional but recommended for the same reasons as `IMentorAgent`.
@@ -587,14 +592,16 @@ Decorate Blazor pages with `[MentorPage]` to let the AI navigate to them on user
 @* Simple page — navigation only *@
 @attribute [MentorPage(Url = "/orders", Name = "Orders")]
 
-@* Page with UI actions — on Blazor Server, navigate_to waits for SignalReady() *@
+@* Page with UI actions — on Blazor Server and in MAUI Blazor Hybrid, navigate_to waits for SignalReady() *@
 @attribute [MentorPage(Url = "/orders-interactive", Name = "Interactive Orders",
 	HasUIActions = true,
 	ReadyTimeout = 3000,
 	Description  = "Order management with inline editing and filtering")]
 ```
 
-Pages are discovered at startup from `ScanAssemblies` — they don't need to be visited first. When `HasUIActions = true` and the turn runs in an interactive Blazor Server circuit, `navigate_to` waits for the new page to call `PageContext.SignalReady()` (up to `ReadyTimeout`), so its UI actions are registered before the AI continues. A turn that arrives over the hub (WebAssembly, React, MAUI…), SSE or A2A does **not** wait — nothing there can call `SignalReady()`; the new page's actions reach the model with the client's next page-context snapshot, i.e. on the user's next message. On WebAssembly `SignalReady()` is a no-op and costs nothing, so the same page code works on both.
+Pages are discovered at startup from `ScanAssemblies` — they don't need to be visited first. When `HasUIActions = true` and the page runs in the same process as the turn — a Blazor Server circuit or a MAUI Blazor Hybrid app — `navigate_to` waits for the new page to call `PageContext.SignalReady()` (up to `ReadyTimeout`), so its UI actions are registered before the AI continues. A signal the page being left gave when it opened does not count. To the page already shown (the same path, whatever the query) `navigate_to` does not wait, since Blazor does not initialize that page again. A turn that arrives over the hub (WebAssembly, React, a MAUI app with its own native UI…), SSE or A2A does **not** wait — nothing there can call `SignalReady()`; the new page's actions reach the model with the client's next page-context snapshot, i.e. on the user's next message. On WebAssembly `SignalReady()` is a no-op and costs nothing, so the same page code works on both.
+
+**A component with two routes**, such as `/orders` and `/orders/{id}`: when `navigate_to` goes from one of its routes to the other, Blazor keeps the same instance and does not run `OnInitialized` again, so no new signal comes. The wait runs to `ReadyTimeout` and logs its warning, then the turn goes on with the page's actions, which are still registered. Call `SignalReady()` at the end of `OnParametersSet` too (BUG-194).
 
 **`[MentorPage]` parameters:**
 
@@ -603,8 +610,8 @@ Pages are discovered at startup from `ScanAssemblies` — they don't need to be 
 | `Url` | ✅ | Page URL (e.g. `"/orders"`). Used by the `navigate_to` tool |
 | `Name` | ✅ | Human-readable page name injected into the system prompt |
 | `Description` | — | Optional description of the page's features shown to the AI |
-| `HasUIActions` | — | If `true`, `navigate_to` waits for `PageContext.SignalReady()` on the new page — only in an interactive Blazor Server circuit; hub (WebAssembly, React, MAUI…), SSE and A2A turns do not wait, and the page's actions reach the model on the next message. Default: `false` |
-| `ReadyTimeout` | — | Timeout in milliseconds for `SignalReady()`. Used only when `HasUIActions = true` and the turn runs in a Blazor Server circuit. Default: `2000` |
+| `HasUIActions` | — | If `true`, `navigate_to` waits for `PageContext.SignalReady()` on the new page — only where the page runs in the turn's process (a Blazor Server circuit or a MAUI Blazor Hybrid app); hub (WebAssembly, React, native MAUI…), SSE and A2A turns do not wait, and the page's actions reach the model on the next message. Default: `false` |
+| `ReadyTimeout` | — | Timeout in milliseconds for `SignalReady()`. Used only when `HasUIActions = true` and the page runs in the turn's process (a Blazor Server circuit or a MAUI Blazor Hybrid app). Default: `2000` |
 
 ---
 
@@ -624,7 +631,7 @@ Each registered UI action becomes its **own named AI tool** before every LLM cal
 - Skips, with a warning, an action whose name matches a tool the coordinator already has (an L1 action, an MCP tool, `navigate_to`…) — give UI actions names of their own
 - Enables reliable multi-action chains
 
-UI actions are scoped to the **current page**: they appear in the tool list only while the page is mounted, and disappear the moment the page calls `PageContext.Clear()` in `Dispose()`.
+UI actions are scoped to the **current page**: they appear in the tool list only while the page is mounted, and disappear the moment the page calls `PageContext.Clear(pageName)` in `Dispose()`, with the name it gave `SetPageName`. Blazor disposes the old page after it has initialized the new one, so a bare `Clear()` there would also remove what the new page has just registered. Give every page its own name: when two components share one, the old page's `Clear(pageName)` takes it for the current page and clears everything.
 
 ### Registering UI actions
 
@@ -677,12 +684,13 @@ protected override void OnInitialized()
             parameterHint: "JSON: { customerId, items, notes }");
 
     // Signal the AI that the page is ready — last line of OnInitialized, required when HasUIActions = true
-    // (Blazor Server: navigate_to waits for it; WebAssembly: a no-op)
+    // (Blazor Server, MAUI Blazor Hybrid: navigate_to waits for it; WebAssembly: a no-op)
     PageContext.SignalReady();
 }
 
-// Always clear in Dispose — removes context and actions from the AI's view
-public void Dispose() => PageContext.Clear();
+// Clear this page's context and actions in Dispose, by the name given to SetPageName: Blazor disposes
+// the old page after the new one has registered its own, which a bare Clear() would remove too
+public void Dispose() => PageContext.Clear("Orders");
 }
 ```
 
@@ -703,7 +711,8 @@ public void Dispose() => PageContext.Clear();
 | `SetPageName(name)` | Sets the current page name injected into the system prompt |
 | `Set(key, value)` | Adds or updates a context entry (any serializable value) |
 | `Remove(key)` | Removes a single context entry without clearing everything |
-| `Clear()` | Removes all context data and all registered UI actions. Always call from `Dispose()` |
+| `Clear()` | Removes all context data and all registered UI actions, whichever page registered them |
+| `Clear(pageName)` | Removes what the page named `pageName` registered, or everything when it is still the current page. Call it from `Dispose()` with the page's own name, and call `SetPageName` before anything else |
 
 ### Automatic parameter schema generation
 
@@ -1052,7 +1061,7 @@ the built-in RAM one wins. Scoped is fine for EF Core; use singleton for Redis o
 When `UseMemoryContext = true`, MentorAgent captures durable facts **reliably** — without depending on the model proactively calling a tool (which weaker models do inconsistently, e.g. saving on *"Mi chiamo Antonio"* but not on *"Ciao, mi chiamo Antonio"*).
 
 - **Path A (a `ChatClient` is configured) — default:** after each user message a dedicated, minimal LLM call (`MemoryAutoCapture`, on by default) extracts durable personal facts and stores them directly. Because it is a separate focused task, it is robust regardless of how the coordinator replies. On this path the now-redundant `remember` tool and its forceful prompt block are **dropped** (fewer tokens per call); `forget_all` stays. Set `options.MemoryAutoCapture = false` to opt out — one fewer model call per message, but facts are then saved less reliably via the `remember` tool.
-- **Path B (a pre-built `Agent`, no `ChatClient`):** auto-capture cannot run, so the Coordinator is instructed to call the `remember` tool itself (forceful prompt block).
+- **Path B (a pre-built `Agent`):** with a `ClassifierChatClient`, auto-capture runs through it — one small call per message — and the `remember` tool is dropped, as on Path A. Without one, auto-capture cannot run and the `remember` tool is the writer: its description asks the model to call it (the prompt block is Path A's; on Path B the agent's instructions are yours).
 
 Examples of what gets saved automatically:
 
@@ -1209,7 +1218,7 @@ When `ShowRagSources = true`, citation chips appear below each AI message:
 📄 Support FAQ        ↗
 ```
 
-Chips are shown only for the documents the answer actually **cites**, not everything the search returned. MentorAgent numbers the injected documents and appends an instruction to cite them inline as `[1]`, `[2]`, … It adds this after your `RagSystemPromptTemplate`, so a custom template keeps it. When the reply is complete, each valid marker becomes a chip that links to that document's `SourceUrl`, labelled with its `Title` (or the URL when there is no title). An answer that cites nothing, for example one from a skill or a tool, shows no chips, even when the search returned documents. With more than 3 cited sources, a "**+N more**" button collapses the rest.
+Chips are shown only for the documents the answer actually **cites**, not everything the search returned. MentorAgent numbers the injected documents and appends an instruction, in the configured `Language`, to cite them inline as `[1]`, `[2]`, … It adds this after your `RagSystemPromptTemplate`, so a custom template keeps it. When the reply is complete, each valid marker — `[1]`, a list such as `[1, 2]`, or a range such as `[1-3]` — becomes a chip for each document it names, in the order the answer cites them and once per document, linking to that document's `SourceUrl` and labelled with its `Title` (or the URL when there is no title). A number that names no document cites nothing, and neither does a range that ends on one. An answer that cites nothing, for example one from a skill or a tool, shows no chips, even when the search returned documents. With more than 3 cited sources, a "**+N more**" button collapses the rest.
 
 ### Architecture note
 
@@ -1225,7 +1234,9 @@ RAG is applied **only at the coordinator level**, not on L2/L3 specialist agents
 | `RagSystemPromptTemplate` | `"Use the following documents to answer:\n{documents}"` | Template injected into the system prompt. Use `{documents}` as placeholder |
 | `ShowRagSources` | `false` | Show citation chips below AI messages in the widget |
 
-> RAG is fully semantic: the vector search embeds every message and `RagMinScore` discards anything below the threshold, so a pure command like *"update the price of X"* simply retrieves nothing relevant and injects nothing — no keyword pre-gate needed.
+> RAG is fully semantic: the vector search embeds every message and `RagMinScore` discards anything below the threshold, so a pure command like *"update the price of X"* simply retrieves nothing relevant and injects nothing — no keyword pre-gate needed, as long as `RagMinScore` is on your source's scale (see *Which threshold applies* above).
+>
+> The other side of it: the search runs on **every** message, before the model is called. Each message is one `SearchAsync` on your `IMentorRagSource`, with what it costs — an embedding call, the search, a reranker if your source has one — added to the time of every reply, commands included.
 
 ---
 
@@ -1263,7 +1274,7 @@ options.McpServers = [
 		Name      = "filesystem",
 		Command   = "npx",
 		Arguments = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-		AllowedTools         = ["read_file", "list_directory"], // null = all tools
+		AllowedTools         = ["read_file", "list_directory"], // null or empty = all tools
 		RequiresConfirmation = true, // shows confirmation banner for every call
 
 		// One child process for the whole application instead of one per visitor. Leave it unset
@@ -1303,7 +1314,7 @@ options.ShowMcpStatus = true; // default: false — recommended for development
 | `Command` | Executable to launch (stdio transport, e.g. `"npx"`) |
 | `Arguments` | Command-line arguments for the process |
 | `EnvironmentVariables` | Environment variables injected into the process |
-| `AllowedTools` | Whitelist of tool names to expose. `null` = expose all |
+| `AllowedTools` | Whitelist of tool names to expose, compared without regard to case. `null` or an empty list = expose all |
 | `RequiresConfirmation` | If `true`, every call to a tool from this server shows a confirmation banner |
 
 ---
@@ -1488,7 +1499,7 @@ app.MapMentorAgentA2A("/agent");  // custom path — a path passed here wins ove
 ```
 
 This registers two endpoints:
-- `GET /.well-known/agent-card.json` — **Agent Card**, always at this path whatever the task path is: name, description, version, the provider/icon/documentation fields of `AgentCard`, one `JSONRPC` interface at `A2AServerUrl` (or the bare path when it is unset), the application's **ungated** `[MentorAction]`s as skills (actions with `RequiredRoles`, `RequiresConfirmation` or matched by `RequiresApproval` are left out: the card is the same for every caller, and nobody answers a confirmation), the input/output modes (`text/plain`, plus `image/png` in with `EnableImageInput`) and `streaming: true`
+- `GET /.well-known/agent-card.json` — **Agent Card**, always at this path whatever the task path is: name, description, version, the provider/icon/documentation fields of `AgentCard`, one `JSONRPC` interface at `A2AServerUrl` (or the bare path when it is unset), the application's **ungated** `[MentorAction]`s of classes registered in DI as skills, one per tool name (actions with `RequiredRoles`, `RequiresConfirmation` or matched by `RequiresApproval` are left out, and so is a name that one of them shares: the card is the same for every caller, and nobody answers a confirmation), the input/output modes (`text/plain`, plus `image/png` in with `EnableImageInput`) and `streaming: true`
 - `POST /a2a` (or `A2AServerPath`, or the path you pass) — **A2A task handler** (JSON-RPC binding) that receives messages, routes them through `MentorOrchestrator`, and returns the complete reply when the turn ends
 
 Remote orchestrators can now discover this agent via `https://yourapp/.well-known/agent-card.json` and send A2A tasks to it.
@@ -1684,7 +1695,7 @@ MentorAgent automatically registers internal tools on the Coordinator. The devel
 
 | Tool | When it is used | Notes |
 |---|---|---|
-| `navigate_to` | User asks to go to a page, or an agent needs to navigate before executing UI actions | Discovers pages from `[MentorPage]` at startup; waits for `SignalReady()` if `HasUIActions = true` and the turn runs in a Blazor Server circuit (hub, SSE and A2A turns do not wait) |
+| `navigate_to` | User asks to go to a page, or an agent needs to navigate before executing UI actions | Discovers pages from `[MentorPage]` at startup; waits for `SignalReady()` if `HasUIActions = true` and the page runs in the turn's process — a Blazor Server circuit or a MAUI Blazor Hybrid app (hub, SSE and A2A turns do not wait) |
 | `route_to_specialist` | Coordinator delegates a request to a Level-2 agent, an agent from an `IMentorAgentSource` (e.g. a declarative YAML agent) or a remote A2A agent | Auto-registered on **Path A** (a `ChatClient` is configured) when at least one `[MentorAgent]`, agent-source agent or `MentorRemoteAgent` is available. Signature `route_to_specialist(request, specialist?)`: `specialist` carries the target agent's name when the user named one, and the Handoff Workflow's router picks otherwise. It returns what the specialists said, as text, or `NOT DELEGATED` / `DELEGATION FAILED` (see [Level 2](#level-2--specialized-agent-with-handoff)). On a host with remote agents every result opens with a note saying whose data it is, or `NOT <Name>'S ANSWER` (BUG-082). A turn that arrived over A2A is never offered the remote agents (BUG-080) |
 | `{action_name}` | AI invokes a UI action registered via `PageContext.RegisterUIAction*()` | **One tool per action** — each has its own name, description, and parameter schema. Injected dynamically per-call by `UIActionsMiddleware`. Only visible when the page is mounted. *(Path A only)* |
 | `invoke_ui_action` | Generic UI action dispatcher (legacy) | Used only on **Path B** (pre-built `AIAgent`). On Path A (`ChatClient`), each action is its own named tool — this dispatcher is not added. |
@@ -1693,7 +1704,7 @@ MentorAgent automatically registers internal tools on the Coordinator. The devel
 
 | Tool | Activated by | Notes |
 |---|---|---|
-| `remember` | `UseMemoryContext = true` **and** auto-capture is not running (`MemoryAutoCapture = false`, or Path B with no `ChatClient`) | AI saves a user preference or fact silently. With the default auto-capture on Path A the tool is not registered: facts are extracted by a separate call after each message |
+| `remember` | `UseMemoryContext = true` **and** auto-capture is not running (`MemoryAutoCapture = false`, or Path B with neither `ChatClient` nor `ClassifierChatClient`) | AI saves a user preference or fact silently. While auto-capture runs — by default on Path A, and on Path B with a `ClassifierChatClient` — the tool is not registered: facts are extracted by a separate call after each message |
 | `forget_all` | `UseMemoryContext = true` | User explicitly asks to reset their memory |
 | `load_skill` | `EnableSkills = true` | Returns full markdown instructions for the requested skill |
 | `read_skill_resource` | `EnableSkills = true` + at least one skill has resource files | Returns a specific resource file attached to a skill |
@@ -1865,7 +1876,7 @@ with `NU1605`: `Microsoft.Extensions.Hosting` came in with the same server depen
 
 ```xml
 <!-- in the <ItemGroup> the MAUI template generated -->
-<PackageReference Include="Novior.MentorAgent" Version="1.0.0" />
+<PackageReference Include="Novior.MentorAgent" Version="1.1.0" />
 ```
 
 **2 · Reference the widget's static assets.** A MAUI app serves `wwwroot/index.html` itself, and the
@@ -2039,6 +2050,20 @@ public async Task<bool> ApproveBudgetAsync(int requestId) { ... }
 
 Roles are verified with `IsInRole` on the current user: the caller of the hub, `/mentor/chat` or A2A (Novior.MentorAgent.Server), or in a Blazor circuit the user the host's `AuthenticationStateProvider` reports. For an action that also asks for confirmation, the roles are read before the banner and again after the user confirms, in either `HitlMode`: a role lost while the banner waits stops the action.
 
+**Roles from Windows and Active Directory groups.** `RequiredRoles` takes whatever `IsInRole` accepts for your sign-in, so a group works once the authentication makes it a role:
+
+```csharp
+// Windows authentication (Microsoft.AspNetCore.Authentication.Negotiate) on a Windows server:
+// the user is a WindowsPrincipal, and IsInRole takes a group as DOMAIN\Group.
+builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme).AddNegotiate();
+
+[MentorAction(Description = "Approves a budget request", RequiredRoles = [@"CONTOSO\Finance"])]
+public async Task<bool> ApproveBudgetAsync(int requestId) { ... }
+```
+
+- **Windows authentication on Windows:** name the group as `DOMAIN\Group`. On Linux, Negotiate knows the groups only through LDAP (`EnableLdap` on its options), which adds them as role claims: check the names it gives them before you write them in `RequiredRoles`.
+- **Microsoft Entra ID** (Microsoft.Identity.Web): the `roles` claim holds the app roles. Assign the group to an app role in the app registration and name the app role in `RequiredRoles`. The `groups` claim holds the groups' object ids, not their names; to test it directly, set `TokenValidationParameters.RoleClaimType = "groups"` and write the ids in `RequiredRoles`.
+
 ### Confirmation dialogs
 
 ```csharp
@@ -2056,13 +2081,25 @@ The widget shows a confirmation banner before executing the action. `options.Req
 [MentorAction(Description = "Adds a note to an order", RequiresConfirmation = false)]   // a write you chose to run unasked
 ```
 
+`RequiresConfirmation` reads `false` on all three. To tell the first from the third outside the library, for example in a page that lists the application's actions for an administrator, read `RequiresConfirmationDeclared`: it is `true` only on the third, which writes `RequiresConfirmation`. It reports what the attribute says, not the confirmation the action gets, which also depends on `ReadOnly`, `IsReadOnlyAction` and `RequiresApproval`.
+
 Like every confirmation-gated action, an action that asks is withheld from the MCP server and from the A2A agent card: nobody is there to confirm. Declare `RequiresConfirmation = false` on the ones that must stay available there, or turn the default off for the rc.14 behaviour:
 
 ```csharp
 options.RequireConfirmationForWrites = false;   // only RequiresConfirmation = true asks, as up to rc.14
 ```
 
-**The default covers `[MentorAction]` methods only**: a method marked with `[Description]` alone still asks for nothing and is still published on `/mcp`. Mark it `[MentorAction]` to have the default. A warning lists both kinds of write that run without confirmation: the `[MentorAction]` methods you opted out, and the `[Description]`-only methods not declared read-only with `IsReadOnlyAction`. A `[Description]` method cannot say that it only reads, so with `[Description]` alone the second list names your reads too: declare them with `options.IsReadOnlyAction`, or mark them `[MentorAction(ReadOnly = true)]`. The warning comes once, the first time MentorAgent reads your actions: at startup with `WarmUpAtStartup` or when `MapMentorAgentA2A()` builds the agent card, otherwise with the first conversation or the first MCP or tour request.
+**The default covers `[MentorAction]` methods only**: a method marked with `[Description]` alone still asks for nothing and is still published on `/mcp`. Mark it `[MentorAction]` to have the default. A warning lists both kinds of write that run without confirmation: the `[MentorAction]` methods you opted out, and the `[Description]`-only methods not declared read-only with `IsReadOnlyAction`. A `[Description]` method cannot say that it only reads, so with `[Description]` alone the second list names your reads too: declare them with `options.IsReadOnlyAction`, or mark them `[MentorAction(ReadOnly = true)]`. The warning comes once, the first time MentorAgent reads your actions: at startup with `WarmUpAtStartup`, or when `MapMentorAgentA2A()` builds the agent card or `MapMentorAgentMcp()` maps the endpoint, otherwise with the first conversation or the first tour request.
+
+**What the banner says.** The banner shows the action's description, then the arguments the model is about to pass, in the order of the method's parameters (for an MCP tool, in the model's order), each value cleaned of control and bidirectional characters and cut at 200 characters. To write it yourself — in your own words or language — set `ConfirmationMessage`:
+
+```csharp
+options.ConfirmationMessage = c => c.ToolName == "cancel_order"
+    ? $"Cancel order {c.Arguments.First(a => a.Name == "orderId").Value}? Reason: {c.Arguments.First(a => a.Name == "reason").Value}"
+    : null;   // null: the default text for this one
+```
+
+It gets the tool name, the description, the arguments as the default text shows them, the configured `Language`, the default text itself (`DefaultMessage`) and the services of the conversation's scope (`Services`, for an `IStringLocalizer` or your own data). The banner's title stays the localized "Confirmation required". When the function throws or returns only white space the default text is shown, with a warning: a banner never fails to appear because of it.
 
 Tools you can't annotate (MCP, skills) are gated with `MentorMcpServer.RequiresConfirmation` or `options.RequiresApproval`, and the whole flow can run on the Agent Framework's native protocol — see [Human-in-the-loop tool approval](#human-in-the-loop-tool-approval).
 
@@ -2405,10 +2442,11 @@ options.OnToolResult    = (toolName, result) => Truncate(result, maxChars: 2000)
 options.OnException     = ex => ex.Message.Contains("rate", StringComparison.OrdinalIgnoreCase)
     ? "The service is busy, please retry shortly." : null;
 // Public extension point — insert your own DelegatingChatClient / AF middleware, outermost.
+// Built once per coordinator (per circuit on Blazor Server); only the coordinator's own calls go through it.
 options.ConfigureChatClientPipeline = b => b.UseLogging();
 ```
 
-Two layers: **built-in toggles** — `EnableSafetyCheck` / `EnableOutputSafetyCheck`, LLM classifiers (one small model call each; require a `ChatClient`) — and **custom hooks** that replace or extend them. A custom `InputGuardrail` / `OutputGuardrail` takes precedence over the matching built-in. Output moderation (built-in **or** custom) buffers the reply for that turn, so no unmoderated text is ever streamed; leave both off to keep live token-by-token streaming.
+Two layers: **built-in toggles** — `EnableSafetyCheck` / `EnableOutputSafetyCheck`, LLM classifiers (one small model call each, on `ClassifierChatClient`, or on `ChatClient` when none is set; on Path B without either they are skipped, with a warning when the coordinator is built) — and **custom hooks** that replace or extend them. A custom `InputGuardrail` / `OutputGuardrail` takes precedence over the matching built-in. Output moderation (built-in **or** custom) buffers the reply for that turn, so no unmoderated text is ever streamed; leave both off to keep live token-by-token streaming.
 
 **`OnToolResult` and cards.** The hook runs *before* [generative cards](#generative-ui--cards-level-2) are extracted, and what it returns is what reaches the screen as well as the model. That ordering is deliberate, so a redaction reaches the card too. For a method declared as returning `MentorCard`, the hook receives a `JsonElement`. A hook that turns every result into a string therefore stops cards from rendering, with no error, so let card tools through untouched:
 
@@ -2422,7 +2460,7 @@ options.OnToolResult = (toolName, result) =>
 
 ## Observability (OpenTelemetry)
 
-Opt in with `EnableObservability`. MentorAgent then emits **GenAI-convention** traces/metrics for the chat client (LLM) calls, plus its own per-turn/tool spans and counters — all under the source/meter named by `ObservabilitySourceName` (default `"MentorAgent"`). Your app wires the exporter:
+Opt in with `EnableObservability`. MentorAgent then emits **GenAI-convention** traces/metrics for the coordinator's model calls (its `ChatClient` pipeline on Path A), plus its own per-turn/tool spans and counters on both paths — all under the source/meter named by `ObservabilitySourceName` (default `"MentorAgent"`). Nothing else is wrapped: to trace the embedding generator, the `ClassifierChatClient` or a pre-built `Agent` too, wrap it with `UseOpenTelemetry()` before you hand it over. Your app wires the exporter:
 
 ```csharp
 options.EnableObservability = true;
@@ -3246,11 +3284,15 @@ that refusing always beats fabricating.
 > than it should, and there is no keyword fallback: this project treats guessing relevance from
 > substrings as not implementing the feature at all.
 
-> **Duplicate tool names are reported at startup.** Two tools sharing a name are invisible everywhere
-> else and quietly expensive: both are declared on any turn the name matches, both consume the
+> **Duplicate tool names are reported**, once, the first time MentorAgent reads your actions, with tool
+> filtering on or off. A model calls a tool by name, so an agent offered both methods reaches only one of
+> them, and tool filtering and the `RequiresApproval` and `IsReadOnlyAction` rules decide by name — a call's
+> roles, confirmation and page are its own method's. MentorAgent logs
+> `N tool name(s) are carried by more than one method: …` with each name and its methods. With filtering
+> on they are also quietly expensive: both are declared on any turn the name matches, both consume the
 > `ToolFilterMaxTools` budget, and they share one relevance-score cache entry — so the second tool's
-> description decides the score for the first. MentorAgent logs
-> `N duplicate tool name(s) among the filterable tools: …` and names them.
+> description decides the score for the first. The filter adds
+> `N duplicate tool name(s) among the filterable tools: …`, MCP tools included.
 
 ### Provider support — read this before enabling
 
@@ -3323,9 +3365,9 @@ options.HitlMode = MentorHitlMode.Native;   // default: MentorHitlMode.Blocking
 |  | `Blocking` (default) | `Native` |
 |---|---|---|
 | Mechanism | MentorAgent's middleware parks the AI thread on a `TaskCompletionSource` | AF standard: `ApprovalRequiredAIFunction` → `ToolApprovalRequestContent` → `ToolApprovalResponseContent` |
-| Model round-trips | 1 for the whole turn | 1 extra per approved call |
-| Streaming | Stays alive across the banner | Reply arrives in two segments (before/after the banner) |
-| Why choose it | Fewer moving parts, cheaper | **Interop** — AF workflows, DevUI and AF-native hosts see the standard protocol |
+| Model calls | The same in both modes | The same in both modes. Each round of confirmations adds one agent run, not a model call |
+| Streaming | Stays alive across the banner | Reply arrives in two segments (before/after the banner). With output moderation on (`EnableOutputSafetyCheck` or an `OutputGuardrail`), each segment is checked on its own |
+| Why choose it | Fewer moving parts, one streamed reply | **Interop** — AF workflows, DevUI and AF-native hosts see the standard protocol |
 
 **The banner and the client protocol are identical in both modes** — same `ConfirmationRequired` event, same reply (`ConfirmAsync` / `Cancel` or `RespondToApprovalAsync` in-process, `POST /mentor/approve` over the wire, never the `RespondToApproval` hub method) — so you can flip the mode without touching a single client. On rejection, both modes send the model the same structured result (see below).
 
@@ -3656,7 +3698,7 @@ builder.Services.AddMentorAgent(options =>
 | `AnonymousIdentity` | `MentorAnonymousIdentity` | `PerSession` | Who a **signed-out** visitor is, for memory and for the rate-limit counter. `PerSession` gives each circuit/connection its own key, so two visitors never read each other's memories and one cannot spend everybody's allowance. `Shared` is the previous behaviour — every session on the literal key `"anonymous"` — and is the right choice for a **single-user** app (MAUI, desktop), where it is what makes memory survive a restart. Ignored for a signed-in user |
 | `MemoryContextCount` | `int` | `10` | Number of recent memories in the prompt |
 | `MemoryRelevanceFiltering` | `bool` | `false` | Inject only the memories **semantically** relevant to the current message (embedding cosine; identity/preference facts always kept) instead of the last N — saves tokens. Requires `EmbeddingGenerator`; without it, falls back to last-N |
-| `MemoryAutoCapture` | `bool` | `true` | The reliable memory writer: a dedicated post-turn extraction saves durable user facts instead of relying on the model to call `remember` (weak models do this inconsistently). On Path A (a `ChatClient` is set) it becomes the **only** writer — the redundant `remember` tool + its prompt are dropped (saves tokens); on Path B it falls back to the `remember` tool. `forget_all` is always kept. Adds one small model call per user message; set `false` to opt out |
+| `MemoryAutoCapture` | `bool` | `true` | The reliable memory writer: a dedicated post-turn extraction saves durable user facts instead of relying on the model to call `remember` (weak models do this inconsistently). Whenever it can run — with a `ChatClient`, or on Path B with a `ClassifierChatClient`, which then makes the call — it is the **only** writer: the redundant `remember` tool + its prompt are dropped (saves tokens). On Path B without a classifier it falls back to the `remember` tool. `forget_all` is always kept. Adds one small model call per user message; set `false` to opt out |
 
 ### Agent Skills
 
@@ -3664,6 +3706,9 @@ builder.Services.AddMentorAgent(options =>
 |---|---|---|---|
 | `EnableSkills` | `bool` | `false` | Enables skill discovery and the `load_skill` / `read_skill_resource` tools |
 | `SkillsFolder` | `string` | `"Skills"` | Folder to scan for file-based skills (`SKILL.md`). Relative to content root or absolute |
+| `SkillSources` | `IList<AgentSkillsSource>` | empty | Additional sources, using the Agent Framework's own abstraction — see [Skills from somewhere else](#skills-from-somewhere-else--agentskillssource) |
+| `SkillFilter` | `Func<AgentSkill, bool>?` | `null` | Keeps or drops a skill contributed by `SkillSources`. Does not apply to your own skills |
+| `SkillsRefreshInterval` | `TimeSpan?` | `null` | Shares one list from `SkillSources` across every session in the process (wrapped in the framework's `CachingAgentSkillsSource`) and re-fetches it when a session is built after this long. Without it, every new session (circuit, hub connection, SSE request) re-reads the sources when its coordinator is built and keeps that list for its lifetime. Set it for a remote or expensive source |
 
 ### RAG
 
@@ -3719,10 +3764,10 @@ builder.Services.AddMentorAgent(options =>
 |---|---|---|---|
 | `InputGuardrail` | `Func<string,CancellationToken,Task<bool>>?` | `null` | Custom input guardrail (`true` = safe). Replaces the built-in check; runs whenever set |
 | `OutputGuardrail` | `Func<string,CancellationToken,Task<bool>>?` | `null` | Moderate the completed reply (`true` = safe). When set, the reply is buffered and revealed after moderation (no live streaming that turn) |
-| `EnableOutputSafetyCheck` | `bool` | `false` | Built-in LLM check on the **reply**: blocks one that leaks system instructions or secrets, discloses someone's personal data, or contains harmful content. Buffers the reply for that turn (no live streaming). Runs on `ClassifierChatClient`, is bounded by `SafetyCheckTimeout` / `SafetyCheckFailure`, and a custom `OutputGuardrail` takes precedence. Requires a `ChatClient` |
+| `EnableOutputSafetyCheck` | `bool` | `false` | Built-in LLM check on the **reply**: blocks one that leaks system instructions or secrets, discloses someone's personal data, or contains harmful content. Buffers the reply for that turn (no live streaming). Runs on `ClassifierChatClient`, or on `ChatClient` when it is not set, is bounded by `SafetyCheckTimeout` / `SafetyCheckFailure`, and a custom `OutputGuardrail` takes precedence. Requires a `ChatClient` or a `ClassifierChatClient`: on Path B without one it is skipped, with a warning when the coordinator is built |
 | `OnToolResult` | `Func<string,object?,object?>?` | `null` | Transform/redact a tool result before it returns to the model, and to an MCP caller. A hook that throws withholds the result: the model is told the action ran and not to run it again (an MCP caller gets an `isError` result) |
 | `OnException` | `Func<Exception,string?>?` | `null` | Map an exception to a user-facing message (`null` → built-in mapping). For a tool that throws, the chat never shows the exception's own text while the hook is set: `null` shows the localized "The action could not be completed." The model gets the hook's message, else the exception's, and may repeat it in its reply: return a message for any exception whose text must not reach the user |
-| `ConfigureChatClientPipeline` | `Func<ChatClientBuilder,ChatClientBuilder>?` | `null` | Insert custom middleware into the Path A pipeline (outermost) |
+| `ConfigureChatClientPipeline` | `Func<ChatClientBuilder,ChatClientBuilder>?` | `null` | Insert custom middleware into the Path A pipeline (outermost). Built once per coordinator — one per scope, so one per circuit on Blazor Server: keep state meant for the whole process (a limit, a counter) in a singleton you inject. Only the coordinator's own calls go through it: the auxiliary calls (classifier, safety checks, out-of-scope refusal, memory extraction, the lookup and action checks) use `ClassifierChatClient ?? ChatClient`, and specialists, team members and the handoff router use `ChatClient`. See its XML documentation |
 | `EnableObservability` | `bool` | `false` | Emit OpenTelemetry traces/metrics (GenAI conventions) + MentorAgent spans/counters |
 | `ObservabilityIncludeSensitiveData` | `bool` | `false` | Include prompt/response content in telemetry — **Development only** |
 | `ObservabilitySourceName` | `string` | `"MentorAgent"` | ActivitySource/Meter name; add via `.AddSource(name).AddMeter(name)` |
@@ -3742,7 +3787,7 @@ builder.Services.AddMentorAgent(options =>
 | `RoutingComplexExemplars` | `IReadOnlyList<string>?` | `null` | `Semantic`: example "complex" turns (null → built-in multilingual set) |
 | `RoutingThreshold` | `float` | `0.35` | `Semantic`: cosine floor to escalate (higher = stricter) |
 | `RoutingClassifierClient` | `IChatClient?` | `null` | `Classifier`/`Cascade`: dedicated judge client (defaults to the cheap `ChatClient`) |
-| `ClassifierChatClient` | `IChatClient?` | `null` | Client for MentorAgent's own one-word decisions — input and output safety checks, the hosted-tool / `RefuseOutOfScope` scope check, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, post-turn fact extraction, and the A2A grounding verdict (does a tool-less reply to a peer state application data? BUG-081). Point it at a small, fast deployment: these calls sit in front of the reply (measured: 707–2091 ms on `gpt-4.1` for two tokens of answer). Defaults to `ChatClient`; metered under its own model id |
+| `ClassifierChatClient` | `IChatClient?` | `null` | Client for MentorAgent's own one-word decisions — input and output safety checks, the hosted-tool / `RefuseOutOfScope` scope check, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, post-turn fact extraction, and the A2A grounding verdict (does a tool-less reply to a peer state application data? BUG-081). Point it at a small, fast deployment: these calls sit in front of the reply (measured: 707–2091 ms on `gpt-4.1` for two tokens of answer). Defaults to `ChatClient`; metered under its own model id. On Path B (a pre-built `Agent`) it is the only client MentorAgent can call on its own: without it the safety checks are skipped |
 | `IMentorQueryEmbedding` | *service* | — | The current message's embedding, computed once per turn and shared by routing, tool filtering and memory. Inject it in your `IMentorRagSource` instead of embedding the query again |
 | `IMentorStructured` | *service* | — | `GenerateAsync<T>(...)` — typed/structured generation, see [Structured outputs](#structured-outputs) |
 | `MentorEvaluator` | *service* | — | `RunAsync(cases, options)` — token/quality regression harness, see [Evaluation & regression testing](#evaluation--regression-testing) |
@@ -3751,7 +3796,7 @@ builder.Services.AddMentorAgent(options =>
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `EnableSafetyCheck` | `bool` | `false` | AI-based prompt injection detection |
+| `EnableSafetyCheck` | `bool` | `false` | AI-based prompt injection detection. Runs on `ClassifierChatClient`, or on `ChatClient` when it is not set: on Path B without one it is skipped, with a warning when the coordinator is built. A custom `InputGuardrail` replaces it |
 | `SafetyCheckTimeout` | `TimeSpan` | `00:00:15` | How long the input and output safety checks (built-in or custom guardrail) may take before they count as failed. `TimeSpan.Zero` or negative = no limit; Stop still cancels a check in flight. Raise it for a slow local model, or point the checks at a fast `ClassifierChatClient` |
 | `SafetyCheckFailure` | `MentorSafetyCheckFailure` | `Allow` | What a safety check with **no verdict** (timed out, provider error, custom guardrail threw) does: `Allow` processes the message / shows the reply and logs a warning; `Block` refuses the message ("can't check it right now, try again") or withholds the reply. An UNSAFE verdict blocks under both |
 | `RefuseOutOfScope` | `bool` | `false` | Politely refuse a message that plainly has nothing to do with this application, without calling the coordinator. Asks its own question, which defaults to answering: a name the classifier does not recognise may be one of the application's records, and greetings, follow-ups and questions about the assistant are answered (BUG-105). With `EnableSafetyCheck` on it travels in the same classifier call; alone it adds one small call per turn. Judged against `HostedToolDomainScope`, or the app's name, description and pages with their descriptions. Counted in `GuardrailBlockCount` |
@@ -3761,9 +3806,12 @@ builder.Services.AddMentorAgent(options =>
 | `RateLimitWindowSecs` | `int` | `60` | Rate limiting window in seconds |
 | `RequireConfirmation` | `bool` | `true` | On/off for the confirmation dialogs of your actions, MCP-client servers and `RequiresApproval`. A hosted MCP server's approvals (`RequireApproval`, `AlwaysRequireApprovalTools`) still show the banner |
 | `RequireConfirmationForWrites` | `bool` | `true` | A `[MentorAction]` declaring neither `ReadOnly = true` nor `RequiresConfirmation` asks for confirmation, and is therefore withheld from `/mcp` and the A2A card. Covers `[MentorAction]` methods only: `[Description]`-only methods ask nothing, as before. `false` = the rc.14 behaviour. See [Confirmation dialogs](#confirmation-dialogs) |
-| `HitlMode` | `MentorHitlMode` | `Blocking` | How approval is implemented: `Blocking` (MentorAgent's own flow, one round-trip) or `Native` (AF `ApprovalRequiredAIFunction`, for interop). Same banner and same client protocol either way — see [Human-in-the-loop tool approval](#human-in-the-loop-tool-approval) |
+| `HitlMode` | `MentorHitlMode` | `Blocking` | How approval is implemented: `Blocking` (MentorAgent's own flow, one streamed run) or `Native` (AF `ApprovalRequiredAIFunction`, for interop; the same model calls, one more agent run per round of confirmations). Same banner and same client protocol either way — see [Human-in-the-loop tool approval](#human-in-the-loop-tool-approval) |
 | `IsReadOnlyAction` | `Func<string, bool>?` | `null` | Declares by tool name the actions that only read — same as `[MentorAction(ReadOnly = true)]`, for `[Description]` methods or central declaration. Published to MCP clients as `readOnlyHint`, which some clients take as leave to skip their own confirmation; the actions `RequireLookupForRecordQuestions` may require. A confirmation-gated tool is never read-only |
 | `RequiresApproval` | `Func<string, bool>?` | `null` | Forces approval for a tool **by name**, on top of `[MentorAction(RequiresConfirmation)]`. The way to gate tools you don't own (MCP, skills) |
+| `ConfirmationMessage` | `Func<MentorConfirmationContext, string?>?` | `null` | Writes the text of the confirmation banner from the tool, its description, the arguments (in parameter order, cleaned, cut at 200 characters), `Language` and the scope's services. `null`, white space or an exception: the default text |
+| `AutoApprovalRules` | `IList<Func<ToolAutoApprovalRuleContext, ValueTask<bool>>>` | empty | `Native` mode only — see [Approving without asking](#approving-without-asking--autoapprovalrules). Evaluated in order; the first `true` approves the call before any banner appears. Also enables "don't ask again". **Waives the prompt, never `RequiredRoles`** |
+| `MaxAutoApprovalIterations` | `int?` | `null` | Cap on re-runs caused by auto-approval. `null` uses the framework's default. Each re-run is a fresh billable model call |
 | `IncludeWorkflowExceptionDetails` | `bool` | `false` | Put the exception message of a failing Level-2 / Level-3 workflow agent (handoff, group chat) into the reply the user reads. **Development only, never in production** |
 
 ---
@@ -4086,8 +4134,7 @@ the Debug lines it turned on stop without a warning:
 - the telemetry names: `AddSource("MentorAgent")` and `AddMeter("MentorAgent")` (`ObservabilitySourceName`),
   and the `mentoragent.*` metrics;
 - the session snapshots: one saved by 1.0.0-rc.15 is restored by 1.0.0;
-- the `MentorAgentMcp` CORS policy, the `MentorAgent.css` and `MentorAgent.js` files and `window.MentorAgent`;
-- the build diagnostic `MENTOR001`.
+- the `MentorAgentMcp` CORS policy, the `MentorAgent.css` and `MentorAgent.js` files and `window.MentorAgent`.
 
 ---
 
@@ -4110,6 +4157,10 @@ the Debug lines it turned on stop without a warning:
   newer compatible line, including the ones with no stable release yet. The AI provider's packages are not
   among them: their versions are the host's (see [Provider package versions](#provider-package-versions)).
 - **Support.** .NET 10. Fixes go to the latest minor version of the current major.
+- **Questions, bugs and requests.** Questions go to
+  [Discussions](https://github.com/Novior-dev/MentorAgent/discussions), bugs and feature requests to
+  [issues](https://github.com/Novior-dev/MentorAgent/issues/new/choose) on GitHub, and a vulnerability privately to
+  security@mentoragent.net. See [SUPPORT.md](https://github.com/Novior-dev/MentorAgent/blob/main/SUPPORT.md).
 - **What changed.** Every package contains `CHANGELOG.md` with the whole history, and its release notes
   on nuget.org are that version's section.
 
@@ -4130,3 +4181,5 @@ the Debug lines it turned on stop without a warning:
 ## License
 
 Apache License 2.0 — the full text is in the `LICENSE` file inside this package, with the copyright notice in `NOTICE`. Versions up to and including 1.0.0-rc.14 were released under the MIT License, which still applies to them.
+
+MentorAgent is a trademark: see [TRADEMARKS.md](https://github.com/Novior-dev/MentorAgent/blob/main/TRADEMARKS.md).

@@ -30,6 +30,43 @@ internal static class RepoFiles
     /// <summary>Repository root — the folder holding <see cref="Solution"/>.</summary>
     internal static string Root { get; } = LocateRoot();
 
+    /// <summary>The environment variable that names the sample repository's folder.</summary>
+    internal const string SamplesVariable = "MENTORAGENT_SAMPLES_DIR";
+
+    /// <summary>The names the sample repository is found under beside this one: the working layout, then a clone's default.</summary>
+    internal static IReadOnlyList<string> SampleFolderNames { get; } = ["MentorAgentSample", "Novior.MentorAgent.Samples"];
+
+    /// <summary>
+    /// The sample repository: the folder <see cref="SamplesVariable"/> names, otherwise a sibling of this
+    /// repository under one of <see cref="SampleFolderNames"/>. Null when there is none. The tests that read it
+    /// used to look for <c>..\MentorAgentSample</c> only, so with a clone's default names they found nothing and
+    /// one of them passed without running (BUG-189).
+    /// </summary>
+    internal static string? SamplesRoot { get; } = LocateSamples();
+
+    /// <summary>The environment variable that has a test run rewrite the tracked ledgers: set it to <c>1</c>.</summary>
+    internal const string WriteLedgersVariable = "MENTORAGENT_WRITE_LEDGERS";
+
+    /// <summary>
+    /// Where a test run writes a ledger it regenerates, <c>option-coverage.md</c> or <c>claims.tsv</c>: the tracked
+    /// copy with <see cref="WriteLedgersVariable"/> set to <c>1</c>, otherwise a file of the same name in the test
+    /// project's <c>TestResults</c>, which git ignores. Every <c>dotnet test</c> used to rewrite the tracked copies,
+    /// so a run left the working tree changed (BUG-190).
+    /// </summary>
+    internal static string LedgerOutput(string trackedPath)
+        => LedgerOutput(trackedPath, Environment.GetEnvironmentVariable(WriteLedgersVariable) == "1");
+
+    /// <inheritdoc cref="LedgerOutput(string)"/>
+    internal static string LedgerOutput(string trackedPath, bool writeTracked)
+        => writeTracked ? trackedPath : Path.Combine(Root, Tests, "TestResults", Path.GetFileName(trackedPath));
+
+    /// <summary>Why <see cref="SamplesRoot"/> is null, for a skip or a failure message.</summary>
+    internal static string SamplesMissing =>
+        Environment.GetEnvironmentVariable(SamplesVariable) is { Length: > 0 } named
+            ? $"{SamplesVariable} names {named}, which does not exist"
+            : $"the sample repository is not beside {Root} as {string.Join(" or ", SampleFolderNames)}; " +
+              $"set {SamplesVariable} to its folder";
+
     /// <summary>The five package READMEs, keyed by the short name used in failure messages.</summary>
     internal static IReadOnlyDictionary<string, string> Readmes { get; } =
         new Dictionary<string, string>
@@ -65,6 +102,17 @@ internal static class RepoFiles
 
         throw new InvalidOperationException(
             $"Could not locate the repository root ({Solution}) walking up from {AppContext.BaseDirectory}.");
+    }
+
+    private static string? LocateSamples()
+    {
+        // A folder named on purpose is the only candidate: a wrong one must not quietly fall back to another copy.
+        if (Environment.GetEnvironmentVariable(SamplesVariable) is { Length: > 0 } named)
+            return Directory.Exists(named) ? Path.GetFullPath(named) : null;
+
+        return SampleFolderNames
+            .Select(name => Path.GetFullPath(Path.Combine(Root, "..", name)))
+            .FirstOrDefault(Directory.Exists);
     }
 
     private static List<string> EnumerateSource()

@@ -58,8 +58,16 @@ public sealed class MentorActionAttribute : Attribute
     /// <summary>
     /// Whether <see cref="RequiresConfirmation"/> was written in the attribute, true or false. An attribute
     /// argument cannot be a <c>bool?</c>, so the setter records it.
+    /// <para>
+    /// Read it to tell the two actions <see cref="RequiresConfirmation"/> alone cannot: with
+    /// <see cref="Options.MentorOptions.RequireConfirmationForWrites"/> on, an action that declares nothing asks
+    /// for confirmation, and one that declares <c>RequiresConfirmation = false</c> does not, while
+    /// <see cref="RequiresConfirmation"/> reads false for both. This is only what the attribute says: the
+    /// confirmation an action gets also depends on <see cref="ReadOnly"/> and on
+    /// <see cref="Options.MentorOptions.IsReadOnlyAction"/> and <see cref="Options.MentorOptions.RequiresApproval"/>.
+    /// </para>
     /// </summary>
-    internal bool RequiresConfirmationDeclared => _requiresConfirmationDeclared;
+    public bool RequiresConfirmationDeclared => _requiresConfirmationDeclared;
 
     /// <summary>
     /// The action only reads: it changes no data. MentorAgent does not check this; it takes your word,

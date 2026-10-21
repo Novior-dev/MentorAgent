@@ -31,6 +31,8 @@ public static class ServerEndpointExtensions
     ///   <item><c>POST /mentor/chat</c> — SSE streaming with image attachments (roadmap #13)</item>
     ///   <item><c>POST /mentor/approve</c> — human-in-the-loop approve/deny (roadmap #16)</item>
     ///   <item><c>POST /mentor/cancel</c> — stop the in-flight turn of a SignalR connection</item>
+    ///   <item><c>GET /mentor/session</c> and <c>POST /mentor/session</c> — save and restore the
+    ///   conversation of a SignalR connection, as a protected snapshot bound to its owner</item>
     ///   <item><c>GET /mentor/admin/metrics</c> — token &amp; cost snapshot, role-gated (roadmap #9)</item>
     ///   <item><c>GET /mentor/tour</c> — onboarding tour steps (roadmap #18)</item>
     /// </list>
@@ -53,10 +55,11 @@ public static class ServerEndpointExtensions
     ///
     /// <para>
     /// Optional, and omitting it changes nothing (BUG-060). But the default is worth understanding
-    /// before leaving it: <c>POST /mentor/chat</c> runs a paid turn for an anonymous caller, and the
-    /// memory key for an unauthenticated principal is the literal <c>"anonymous"</c> — so every
-    /// anonymous caller shares one memory bucket, and one user's remembered facts are injected into
-    /// another's turns. That is fine for a single-user demo and a cross-user leak for anything else.
+    /// before leaving it: <c>POST /mentor/chat</c> runs a paid turn for an anonymous caller. With
+    /// <c>AnonymousIdentity = Shared</c> every anonymous caller has the memory key <c>"anonymous"</c>,
+    /// so one user's remembered facts are injected into another's turns — fine for a single-user demo,
+    /// a cross-user leak for anything else. With <c>PerSession</c>, the default, nothing is shared, but
+    /// each request or connection is a new key: neither memory nor <c>RateLimitPerUser</c> follows a person.
     /// </para>
     /// </param>
     /// <param name="endpoints">The application's endpoint route builder.</param>
@@ -256,25 +259,6 @@ public static class ServerEndpointExtensions
     }
 
     /// <summary>
-    /// Warns, once at startup, when the transports are open to anyone <b>and</b> memory is on
-    /// (BUG-060).
-    ///
-    /// <para>
-    /// The memory key for an unauthenticated principal is the literal string <c>"anonymous"</c>, so
-    /// with no authentication configured every caller shares one bucket and
-    /// <c>MemoryAutoCapture</c> — on by default — keeps writing into it. Measured live: one
-    /// anonymous request stored a private code and a separate anonymous request read it back. It is
-    /// the outcome BUG-046 was an S1 for, reached by configuration rather than by a defect.
-    /// </para>
-    ///
-    /// <para>
-    /// A warning rather than a refusal, because a single-user demo or a desktop host is entitled to
-    /// exactly this configuration. And only when memory is on: with it off an open transport is a
-    /// cost decision rather than a privacy one, and a warning that fires for correctly configured
-    /// applications is one people learn to filter out.
-    /// </para>
-    /// </summary>
-    /// <summary>
     /// Guards the warning below, <b>per application</b>. ASP.NET Core may rebuild its endpoint data
     /// source, which runs every convention again — a startup warning that appears twice reads like
     /// two problems.
@@ -288,6 +272,28 @@ public static class ServerEndpointExtensions
     /// </summary>
     private static readonly ConditionalWeakTable<IServiceProvider, object> _sharedBucketWarned = new();
 
+    /// <summary>
+    /// Warns, once at startup, when the transports are open to anyone <b>and</b> memory is on
+    /// (BUG-060).
+    ///
+    /// <para>
+    /// What an open transport risks depends on <c>AnonymousIdentity</c> (BUG-064). With <c>Shared</c>
+    /// the memory key for an unauthenticated principal is the literal string <c>"anonymous"</c>, so
+    /// with no authentication configured every caller shares one bucket and <c>MemoryAutoCapture</c>
+    /// — on by default — keeps writing into it. Measured live, when that was the only behaviour: one
+    /// anonymous request stored a private code and a separate anonymous request read it back. It is
+    /// the outcome BUG-046 was an S1 for, reached by configuration rather than by a defect. With
+    /// <c>PerSession</c>, the default, nothing is shared, and the warning says instead that neither
+    /// memory nor <c>RateLimitPerUser</c> follows an unauthenticated caller.
+    /// </para>
+    ///
+    /// <para>
+    /// A warning rather than a refusal, because a single-user demo or a desktop host is entitled to
+    /// exactly this configuration. And only when memory is on: with it off an open transport is a
+    /// cost decision rather than a privacy one, and a warning that fires for correctly configured
+    /// applications is one people learn to filter out.
+    /// </para>
+    /// </summary>
     private static void WarnIfPubliclyShared(IEndpointRouteBuilder endpoints, EndpointBuilder builder)
     {
         var options = endpoints.ServiceProvider.GetService<IOptions<MentorOptions>>()?.Value;
