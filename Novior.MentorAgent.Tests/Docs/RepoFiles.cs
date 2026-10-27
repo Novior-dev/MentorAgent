@@ -71,7 +71,7 @@ internal static class RepoFiles
     internal static IReadOnlyDictionary<string, string> Readmes { get; } =
         new Dictionary<string, string>
         {
-            ["core"]   = Path.Combine(Root, "README.md"),
+            ["core"]   = Path.Combine(Root, Core, "README.md"),
             ["server"] = Path.Combine(Root, Server, "README.md"),
             ["blazor"] = Path.Combine(Root, Blazor, "README.md"),
             ["abstr"]  = Path.Combine(Root, Abstractions, "README.md"),

@@ -9,14 +9,24 @@
 /// </summary>
 public sealed class MentorLocalizer
 {
-    private readonly string _culture;
+    private readonly Func<MentorLanguage> _language;
 
     public MentorLocalizer(MentorLanguage language)
-        => _culture = language.ToIsoCode();
+        => _language = () => language;
+
+    /// <summary>
+    /// A localizer that reads its language on every call: the one <c>AddMentorAgent()</c> registers reads
+    /// <c>MentorOptions.Language</c>, so a change made while the application runs applies to every text.
+    /// </summary>
+    internal MentorLocalizer(Func<MentorLanguage> language)
+        => _language = language;
+
+    /// <summary>The language of the texts this localizer returns.</summary>
+    public MentorLanguage Language => _language();
 
     public string Get(string key)
         => _strings.TryGetValue(key, out var langs)
-            ? langs.TryGetValue(_culture, out var val) ? val
+            ? langs.TryGetValue(Language.ToIsoCode(), out var val) ? val
               : langs.TryGetValue("en", out var fallback) ? fallback
               : key
             : key;
@@ -29,6 +39,8 @@ public sealed class MentorLocalizer
         ["session.restore.lost"] = new() { ["en"]="The saved conversation could not be resumed: a new one has started.",["it"]="Non è stato possibile riprendere la conversazione salvata: ne è iniziata una nuova.",["fr"]="La conversation enregistrée n'a pas pu être reprise : une nouvelle a commencé.",["de"]="Das gespeicherte Gespräch konnte nicht fortgesetzt werden: Ein neues hat begonnen.",["es"]="No se pudo reanudar la conversación guardada: se ha iniciado una nueva.",["pt"]="Não foi possível retomar a conversa guardada: foi iniciada uma nova.",["nl"]="Het opgeslagen gesprek kon niet worden hervat: er is een nieuw gesprek gestart.",["pl"]="Nie udało się wznowić zapisanej rozmowy: rozpoczęto nową.",["ja"]="保存された会話を再開できませんでした。新しい会話を開始しました。",["zh"]="无法恢复已保存的对话，已开始新的对话。" },
         ["header.reset"] = new() { ["en"]="New conversation",["it"]="Nuova conversazione",["fr"]="Nouvelle conversation",["de"]="Neues Gespräch",["es"]="Nueva conversación",["pt"]="Nova conversa",["nl"]="Nieuw gesprek",["pl"]="Nowa rozmowa",["ja"]="新しい会話",["zh"]="新对话" },
         ["header.close"] = new() { ["en"]="Close",["it"]="Chiudi",["fr"]="Fermer",["de"]="Schließen",["es"]="Cerrar",["pt"]="Fechar",["nl"]="Sluiten",["pl"]="Zamknij",["ja"]="閉じる",["zh"]="关闭" },
+        // EU AI Act, article 50: the notice under the header (MentorOptions.ShowAiDisclosure, AiDisclosureMessage).
+        ["ai.disclosure"] = new() { ["en"]="You are talking to an AI assistant: its replies are generated automatically.",["it"]="Stai parlando con un assistente di intelligenza artificiale: le sue risposte sono generate automaticamente.",["fr"]="Vous échangez avec un assistant d'intelligence artificielle : ses réponses sont générées automatiquement.",["de"]="Sie sprechen mit einem KI-Assistenten: Seine Antworten werden automatisch erzeugt.",["es"]="Estás hablando con un asistente de inteligencia artificial: sus respuestas se generan automáticamente.",["pt"]="Você está conversando com um assistente de inteligência artificial: as respostas dele são geradas automaticamente.",["nl"]="U praat met een AI-assistent: de antwoorden worden automatisch gegenereerd.",["pl"]="Rozmawiasz z asystentem sztucznej inteligencji: jego odpowiedzi są generowane automatycznie.",["ja"]="AIアシスタントと会話しています。回答は自動的に生成されます。",["zh"]="您正在与人工智能助手对话，其回复均为自动生成。" },
         ["input.send"] = new() { ["en"]="Send message",["it"]="Invia messaggio",["fr"]="Envoyer le message",["de"]="Nachricht senden",["es"]="Enviar mensaje",["pt"]="Enviar mensagem",["nl"]="Bericht versturen",["pl"]="Wyślij wiadomość",["ja"]="メッセージを送信",["zh"]="发送消息" },
         ["input.placeholder"] = new() { ["en"]="Write a message...",["it"]="Scrivi un messaggio...",["fr"]="Écrivez un message...",["de"]="Nachricht schreiben...",["es"]="Escribe un mensaje...",["pt"]="Escreva uma mensagem...",["nl"]="Schrijf een bericht...",["pl"]="Napisz wiadomość...",["ja"]="メッセージを入力...",["zh"]="输入消息..." },
         ["input.hint.send"] = new() { ["en"]="Enter to send",["it"]="Invio per mandare",["fr"]="Entrée pour envoyer",["de"]="Enter zum Senden",["es"]="Enter para enviar",["pt"]="Enter para enviar",["nl"]="Enter om te verzenden",["pl"]="Enter aby wysłać",["ja"]="Enterで送信",["zh"]="回车发送" },
@@ -42,6 +54,7 @@ public sealed class MentorLocalizer
         ["confirm.ok"] = new() { ["en"]="Confirm",["it"]="Conferma",["fr"]="Confirmer",["de"]="Bestätigen",["es"]="Confirmar",["pt"]="Confirmar",["nl"]="Bevestigen",["pl"]="Potwierdź",["ja"]="確認",["zh"]="确认" },
         ["confirm.message"] = new() { ["en"]="Confirm: \"{0}\"?",["it"]="Confermi: \"{0}\"?",["fr"]="Confirmer : \"{0}\" ?",["de"]="Bestätigen: \"{0}\"?",["es"]="¿Confirmar: \"{0}\"?",["pt"]="Confirmar: \"{0}\"?",["nl"]="Bevestigen: \"{0}\"?",["pl"]="Potwierdź: \"{0}\"?",["ja"]="確認: \"{0}\"?",["zh"]="确认：\"{0}\"？" },
         ["confirm.denied"] = new() { ["en"]="The user declined this action; it did not run.",["it"]="L'utente ha rifiutato l'azione: non è stata eseguita.",["fr"]="L'utilisateur a refusé l'action : elle n'a pas été exécutée.",["de"]="Der Benutzer hat die Aktion abgelehnt; sie wurde nicht ausgeführt.",["es"]="El usuario rechazó la acción; no se ejecutó.",["pt"]="O usuário recusou a ação; ela não foi executada.",["nl"]="De gebruiker heeft de actie geweigerd; ze is niet uitgevoerd.",["pl"]="Użytkownik odrzucił akcję; nie została wykonana.",["ja"]="ユーザーがこの操作を拒否しました。実行されていません。",["zh"]="用户拒绝了此操作；它没有被执行。" },
+        ["confirm.timeout"] = new() { ["en"]="Nobody confirmed this action in time; it did not run.",["it"]="Nessuno ha confermato l'azione in tempo: non è stata eseguita.",["fr"]="Personne n'a confirmé l'action à temps : elle n'a pas été exécutée.",["de"]="Niemand hat die Aktion rechtzeitig bestätigt; sie wurde nicht ausgeführt.",["es"]="Nadie confirmó la acción a tiempo; no se ejecutó.",["pt"]="Ninguém confirmou a ação a tempo; ela não foi executada.",["nl"]="Niemand heeft de actie op tijd bevestigd; ze is niet uitgevoerd.",["pl"]="Nikt nie potwierdził akcji na czas; nie została wykonana.",["ja"]="時間内に誰もこの操作を確認しませんでした。実行されていません。",["zh"]="没有人及时确认此操作；它没有被执行。" },
         // ── Onboarding tour (#18) ────────────────────────────────────────────
         ["tour.next"] = new() { ["en"]="Next",["it"]="Avanti",["fr"]="Suivant",["de"]="Weiter",["es"]="Siguiente",["pt"]="Próximo",["nl"]="Volgende",["pl"]="Dalej",["ja"]="次へ",["zh"]="下一步" },
         ["tour.back"] = new() { ["en"]="Back",["it"]="Indietro",["fr"]="Retour",["de"]="Zurück",["es"]="Atrás",["pt"]="Voltar",["nl"]="Terug",["pl"]="Wstecz",["ja"]="戻る",["zh"]="上一步" },
@@ -71,6 +84,11 @@ public sealed class MentorLocalizer
         ["auth.login.required"] = new() { ["en"]="Access denied: you must log in to perform this operation.",["it"]="Accesso negato: devi effettuare il login per eseguire questa operazione.",["fr"]="Accès refusé : vous devez vous connecter pour effectuer cette opération.",["de"]="Zugriff verweigert: Sie müssen sich anmelden, um diesen Vorgang auszuführen.",["es"]="Acceso denegado: debes iniciar sesión para realizar esta operación.",["pt"]="Acesso negado: você deve fazer login para realizar esta operação.",["nl"]="Toegang geweigerd: u moet inloggen om deze bewerking uit te voeren.",["pl"]="Odmowa dostępu: musisz się zalogować, aby wykonać tę operację.",["ja"]="アクセス拒否: この操作を実行するにはログインが必要です。",["zh"]="访问被拒绝：您必须登录才能执行此操作。" },
         ["auth.role.required"] = new() { ["en"]="Access denied: this operation requires one of the following roles: {0}.",["it"]="Accesso negato: questa operazione richiede uno dei seguenti ruoli: {0}.",["fr"]="Accès refusé : cette opération nécessite l'un des rôles suivants : {0}.",["de"]="Zugriff verweigert: Dieser Vorgang erfordert eine der folgenden Rollen: {0}.",["es"]="Acceso denegado: esta operación requiere uno de los siguientes roles: {0}.",["pt"]="Acesso negado: esta operação requer uma das seguintes funções: {0}.",["nl"]="Toegang geweigerd: deze bewerking vereist een van de volgende rollen: {0}.",["pl"]="Odmowa dostępu: ta operacja wymaga jednej z następujących ról: {0}.",["ja"]="アクセス拒否: この操作には次のいずれかのロールが必要です: {0}。",["zh"]="访问被拒绝：此操作需要以下角色之一：{0}。" },
         ["auth.check.error"] = new() { ["en"]="Error during authorization check.",["it"]="Errore durante la verifica delle autorizzazioni.",["fr"]="Erreur lors de la vérification des autorisations.",["de"]="Fehler bei der Berechtigungsprüfung.",["es"]="Error durante la verificación de autorización.",["pt"]="Erro durante a verificação de autorização.",["nl"]="Fout bij de autorisatiecontrole.",["pl"]="Błąd podczas sprawdzania autoryzacji.",["ja"]="認証チェック中にエラーが発生しました。",["zh"]="授权检查期间出错。" },
+
+        // ── Action policies (IMentorActionPolicy): what the model reads for a call a policy refused ──────────
+        ["auth.not.authorized"] = new() { ["en"]="Access denied: you are not allowed to use this action.",["it"]="Accesso negato: non sei autorizzato a usare questa azione.",["fr"]="Accès refusé : vous n'êtes pas autorisé à utiliser cette action.",["de"]="Zugriff verweigert: Sie dürfen diese Aktion nicht verwenden.",["es"]="Acceso denegado: no tienes permiso para usar esta acción.",["pt"]="Acesso negado: você não tem permissão para usar esta ação.",["nl"]="Toegang geweigerd: u mag deze actie niet gebruiken.",["pl"]="Odmowa dostępu: nie masz uprawnień do użycia tej akcji.",["ja"]="アクセス拒否: この操作を使用する権限がありません。",["zh"]="访问被拒绝：您无权使用此操作。" },
+        ["action.stopped.rule"] = new() { ["en"]="Stopped by a rule: {0}",["it"]="Fermata da una regola: {0}",["fr"]="Arrêtée par une règle : {0}",["de"]="Von einer Regel gestoppt: {0}",["es"]="Detenida por una regla: {0}",["pt"]="Interrompida por uma regra: {0}",["nl"]="Gestopt door een regel: {0}",["pl"]="Zatrzymane przez regułę: {0}",["ja"]="ルールにより停止されました: {0}",["zh"]="已被规则阻止：{0}" },
+        ["action.stopped.rule.failed"] = new() { ["en"]="Stopped: the check before this action could not be completed.",["it"]="Fermata: il controllo prima di questa azione non è stato completato.",["fr"]="Arrêtée : la vérification préalable à cette action n'a pas pu être effectuée.",["de"]="Gestoppt: Die Prüfung vor dieser Aktion konnte nicht abgeschlossen werden.",["es"]="Detenida: no se pudo completar la comprobación previa a esta acción.",["pt"]="Interrompida: não foi possível concluir a verificação antes desta ação.",["nl"]="Gestopt: de controle vóór deze actie kon niet worden voltooid.",["pl"]="Zatrzymane: nie udało się ukończyć kontroli przed tą akcją.",["ja"]="停止しました: この操作の前のチェックを完了できませんでした。",["zh"]="已停止：无法完成此操作前的检查。" },
 
         // ── Admin token & cost dashboard (roadmap #9) ─────────────────────────────────────────────
         ["dash.title"] = new() { ["en"]="Usage & cost",["it"]="Utilizzo e costi",["fr"]="Utilisation et coûts",["de"]="Nutzung & Kosten",["es"]="Uso y costes",["pt"]="Utilização e custos",["nl"]="Gebruik & kosten",["pl"]="Zużycie i koszty",["ja"]="使用状況とコスト",["zh"]="使用情况与成本" },

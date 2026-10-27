@@ -325,10 +325,17 @@ internal sealed class TestAuthStateProvider : AuthenticationStateProvider
     /// </summary>
     internal Exception? ThrowOnRead { get; set; }
 
+    /// <summary>How many times the principal was read: what reading it costs is part of some behaviours.</summary>
+    internal int Reads => Volatile.Read(ref _reads);
+    private int _reads;
+
     public override Task<AuthenticationState> GetAuthenticationStateAsync()
-        => ThrowOnRead is { } ex
+    {
+        Interlocked.Increment(ref _reads);
+        return ThrowOnRead is { } ex
             ? Task.FromException<AuthenticationState>(ex)
             : Task.FromResult(new AuthenticationState(_user));
+    }
 }
 
 /// <summary>Captured log records — several documented behaviours are "warn and degrade".</summary>

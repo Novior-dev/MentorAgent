@@ -61,7 +61,7 @@
     --bm-text-muted: #4a567a;
     /* Text on the amber (hosted tools) and indigo (A2A) chips. These sit on a translucent tint of
        their own colour, so the text has to move with the theme: the pale shades below are legible on
-       the dark surface and invisible on the light one. Overridden per theme in BuildThemeVars. */
+       the dark surface and invisible on the light one. Overridden by the light theme in themes/minimal.css. */
     --bm-hosted-text: #fcd34d;
     --bm-hosted-text-strong: #fde68a;
     --bm-a2a-text: #a5b4fc;
@@ -1070,6 +1070,17 @@
 
 /* ── Hosted Tools Detail Bar (#15) ──────────────────────────────────────────
    In-flow bar — no absolute positioning, same pattern as the MCP/A2A bars.    */
+/* EU AI Act, article 50 — the notice under the header: a child of the panel, outside .bm-messages, so it stays in
+   place for the whole conversation. Readable, never louder than the conversation itself. */
+.bm-ai-disclosure {
+    flex-shrink: 0;
+    padding: 6px 16px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--bm-text-secondary);
+    border-bottom: 1px solid var(--bm-border);
+}
+
 .bm-hosted-detail {
     background: rgba(245,158,11,.08);
     border-top: 1px solid rgba(245,158,11,.22);
@@ -1426,6 +1437,20 @@
 .bm-list li {
     margin: 3px 0;
 }
+
+/* A link in a message (BUG-215). The text keeps the bubble's colour, so it reads on every theme and in the
+   user's bubble; the underline says it is a link. */
+.bm-bubble__content a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--bm-accent-bright);
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+}
+
+    .bm-bubble__content a:hover { text-decoration-thickness: 2px; }
+
+.bm-bubble--user .bm-bubble__content a { text-decoration-color: currentColor; }
 
 /* ── Typing Indicator ──────────────────────────────────────────────────────── */
 .bm-typing-dots {
@@ -2182,6 +2207,8 @@
     gap: 10px;
 }
 
+.bm-dash__grid--spaced { margin-top: 10px; }
+
 .bm-dash__stat {
     display: flex;
     flex-direction: column;
@@ -2222,8 +2249,11 @@
     white-space: nowrap;
 }
 
+/* The bar is an SVG 100 units wide and the fill's width attribute is the share: an attribute, not a style,
+   so it renders under a Content-Security-Policy without style-src 'unsafe-inline' (BUG-213). */
 .bm-dash__bar {
-    flex: 1 1 auto;
+    display: block;
+    flex: 1 1 0;
     min-width: 40px;
     height: 6px;
     margin: 0 10px;
@@ -2234,9 +2264,7 @@
 }
 
 .bm-dash__bar-fill {
-    display: block;
-    height: 100%;
-    background: var(--bm-dash-accent);
+    fill: var(--bm-dash-accent);
     opacity: .85;
 }
 
@@ -2303,9 +2331,21 @@
 .bm-chart__line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .bm-chart__ylab, .bm-chart__xlab { fill: var(--bm-chart-text); font-size: 10px; font-family: system-ui, sans-serif; }
 
+/* One class per series, for the line and its legend swatch: they were style attributes, which a
+   Content-Security-Policy without style-src 'unsafe-inline' refuses (BUG-213). */
+.bm-chart__line--in { stroke: var(--bm-chart-in); }
+.bm-chart__line--out { stroke: var(--bm-chart-out); }
+.bm-chart__line--total { stroke: var(--bm-chart-total); }
+.bm-chart__line--req { stroke: var(--bm-chart-req); }
+.bm-chart__line--lat { stroke: var(--bm-chart-lat); }
+
 .bm-dash__legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 11px; color: var(--bm-dash-muted); }
     .bm-dash__legend span { display: inline-flex; align-items: center; gap: 5px; }
     .bm-dash__legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+.bm-dash__swatch--in { background: var(--bm-chart-in); }
+.bm-dash__swatch--out { background: var(--bm-chart-out); }
+.bm-dash__swatch--total { background: var(--bm-chart-total); }
 
 .bm-dash__tablewrap { overflow-x: auto; }
 

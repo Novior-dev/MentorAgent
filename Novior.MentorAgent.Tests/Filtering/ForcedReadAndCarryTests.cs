@@ -43,14 +43,22 @@ public sealed class ForcedReadAndCarryTests
 
     private static readonly string[] Reads = ["count_open_orders", "get_active_orders", "show_order_card"];
 
+    /// <summary>
+    /// A host whose user holds every role of the test application: an action these tests expect left out is left out
+    /// by the filter, not for a role the user lacks (BUG-200).
+    /// </summary>
     private static MentorHostFixture Host(Action<Novior.MentorAgent.Options.MentorOptions>? configure = null)
-        => MentorHostFixture.Create(o =>
+    {
+        var host = MentorHostFixture.Create(o =>
         {
             o.EnableToolFiltering = true;
             o.ToolFilterMinScore = 0.35f;
             o.MemoryAutoCapture = false;
             configure?.Invoke(o);
         }, withEmbeddings: true);
+        host.Auth.SignIn("ada", "Manager", "Admin");
+        return host;
+    }
 
     private static MentorHostFixture Forcing(Action<Novior.MentorAgent.Options.MentorOptions>? configure = null)
         => Host(o =>
@@ -296,18 +304,23 @@ public sealed class ForcedReadAndCarryTests
     }
 
     [Fact]
-    public async Task Without_tool_filtering_the_option_warns_that_it_has_no_effect()
+    public async Task Without_tool_filtering_the_read_is_still_required()
     {
+        // BUG-222: the option warned here that it had no effect, and a host without an embedding model — the demo —
+        // got lists the model made up. The rest of the case is ForcedReadWithoutFilterTests.
         await using var host = MentorHostFixture.Create(o =>
         {
             o.RequireLookupForRecordQuestions = true;
             o.MemoryAutoCapture = false;
         });
-        host.Chat!.Say("ok");
+        host.Chat!.Say("LOOKUP").CallTool("count_open_orders").Say("Sono 3.");
 
         await host.RunTurnAsync("Quanto costa il Dell XPS 15?");
 
-        host.Logs.HasWarning("RequireLookupForRecordQuestions is on but options.EnableToolFiltering is off").Should().BeTrue();
+        host.Logs.HasWarning("RequireLookupForRecordQuestions is on but options.EnableToolFiltering is off").Should().BeFalse();
+        var first = CoordinatorCalls(host)[0];
+        first.ToolMode.Should().Be(ChatToolMode.RequireAny);
+        first.ToolNames.Should().Contain("count_open_orders", "the test application declares it [MentorAction(ReadOnly = true)]");
     }
 
     [Fact]

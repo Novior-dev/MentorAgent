@@ -9,12 +9,12 @@ namespace Novior.MentorAgent.Core;
 /// <summary>
 /// Default <see cref="IMentorTour"/> (roadmap #18). Builds the onboarding tour from the
 /// application's own surface — the pages registered with <c>[MentorPage]</c> and the L1 tools the
-/// assistant actually has — so it cannot describe a screen that no longer exists or promise a
-/// capability that was removed.
+/// assistant actually has, those that need no role — so it cannot describe a screen that no longer
+/// exists or promise a capability that was removed, or one its reader may not use.
 /// <para>
-/// The result is cached for the lifetime of the process. A tour is identical for every visitor,
-/// so generating it per user would pay for the same answer over and over; the first request warms
-/// it and everyone else is served from memory.
+/// The result is cached for the lifetime of the process, one tour per language. A tour is identical
+/// for every visitor in a language, so generating it per user would pay for the same answer over and
+/// over; the first request in a language warms it and everyone else is served from memory.
 /// </para>
 /// <para>
 /// Without a <c>ChatClient</c> — or if generation fails, or returns nothing usable — it falls back
@@ -33,8 +33,10 @@ internal sealed class MentorTourService : IMentorTour
     private readonly IMentorStructured _structured;
     private readonly ILogger<MentorTourService> _logger;
 
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private IReadOnlyList<MentorTourStep>? _cached;
+    private readonly Lock _gate = new();
+    // One per language (story 536): a page can ask for the tour in its own language.
+    private readonly Dictionary<MentorLanguage, Task<IReadOnlyList<MentorTourStep>>> _building = [];
+    private readonly IReadOnlyList<MentorTourStep>?[] _cached = new IReadOnlyList<MentorTourStep>?[Enum.GetValues<MentorLanguage>().Length];
 
     public MentorTourService(
         IOptions<MentorOptions> options,
@@ -48,45 +50,58 @@ internal sealed class MentorTourService : IMentorTour
         _logger = logger;
     }
 
-    public async Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(CancellationToken ct = default)
+        => GetStepsAsync(null, ct);
+
+    /// <summary>The tour in <paramref name="language"/>; <see langword="null"/> is MentorOptions.Language, read at the call.</summary>
+    public Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(MentorLanguage? language, CancellationToken ct = default)
     {
-        if (_cached is { } ready) return ready;
+        var lang = language ?? _options.Language;
+        if (Volatile.Read(ref _cached[(int)lang]) is { } ready) return Task.FromResult(ready);
 
-        await _gate.WaitAsync(ct);
-        try
+        // One generation for every visitor: several first-time visitors can arrive together, and
+        // generation is a model call — one of them should pay for it, not all of them. It does not
+        // run on any visitor's token, which only stops that visitor waiting: run on the first one's,
+        // a visitor who closed the page while the model wrote turned the generation into the
+        // built-in tour, kept for the life of the process (BUG-207). A build that threw is tried
+        // again by the next visitor, as before. One generation per language.
+        Task<IReadOnlyList<MentorTourStep>> building;
+        lock (_gate)
         {
-            // Re-check: several first-time visitors can arrive together, and generation is a
-            // model call — one of them should pay for it, not all of them.
-            if (_cached is { } warmed) return warmed;
-
-            var discovered = _discovery.Discover();
-            var pages = discovered.Pages;
-            if (pages.Count == 0)
-            {
-                _logger.LogInformation(
-                    "[MentorAgent:Tour] No [MentorPage] found — the onboarding tour has nothing to show.");
-                return _cached = [];
-            }
-
-            var steps = await GenerateAsync(discovered, ct) ?? BuildFallback(discovered);
-            _cached = steps;
-
-            _logger.LogInformation("[MentorAgent:Tour] {N} step(s) ready.", steps.Count);
-            return steps;
+            if (!_building.TryGetValue(lang, out building!) || building.IsFaulted)
+                _building[lang] = building = BuildAsync(lang);
         }
-        finally
-        {
-            _gate.Release();
-        }
+        return building.WaitAsync(ct);
     }
 
-    private async Task<IReadOnlyList<MentorTourStep>?> GenerateAsync(DiscoveryResult discovered, CancellationToken ct)
+    private async Task<IReadOnlyList<MentorTourStep>> BuildAsync(MentorLanguage language)
+    {
+        // Off the caller's thread, so the lock above is not held while discovery runs.
+        await Task.Yield();
+
+        var discovered = _discovery.Discover();
+        var pages = discovered.Pages;
+        if (pages.Count == 0)
+        {
+            _logger.LogInformation(
+                "[MentorAgent:Tour] No [MentorPage] found — the onboarding tour has nothing to show.");
+            return _cached[(int)language] = [];
+        }
+
+        var steps = await GenerateAsync(discovered, language) ?? BuildFallback(discovered);
+        Volatile.Write(ref _cached[(int)language], steps);
+
+        _logger.LogInformation("[MentorAgent:Tour] {N} step(s) ready.", steps.Count);
+        return steps;
+    }
+
+    private async Task<IReadOnlyList<MentorTourStep>?> GenerateAsync(DiscoveryResult discovered, MentorLanguage language)
     {
         if (_options.ChatClient is null) return null;   // Path B — fall back, do not warn twice
 
         var prompt = BuildPrompt(discovered);
         var instructions =
-            $"You write short in-app onboarding tours. Answer in {_options.Language}. " +
+            $"You write short in-app onboarding tours. Answer in {language}. " +
             "One step per screen that is worth showing, at most 6 steps, plus a one-line welcome " +
             "step first. Each step: a Title of a few words, a Body of one or two plain sentences, " +
             "the Url of the screen it describes (empty for the welcome step), and TryAsking — a " +
@@ -96,7 +111,7 @@ internal sealed class MentorTourService : IMentorTour
 
         try
         {
-            var plan = await _structured.GenerateAsync<TourPlan>(prompt, instructions, ct);
+            var plan = await _structured.GenerateAsync<TourPlan>(prompt, instructions, CancellationToken.None);
             var steps = Sanitize(plan, discovered);
             if (steps.Count > 0) return steps;
 
@@ -123,8 +138,11 @@ internal sealed class MentorTourService : IMentorTour
               .AppendLine(string.IsNullOrWhiteSpace(p.Description) ? "" : " — " + p.Description);
 
         // The tool list is what makes TryAsking concrete. Descriptions only: names are internal
-        // and a user would never type "get_all_orders".
+        // and a user would never type "get_all_orders". Only the actions that need no role (BUG-206):
+        // the tour is one for every visitor, and /mentor/tour answers anyone — an action some of them
+        // may not run is not one to suggest, and the MCP server describes it to nobody without the role.
         var tools = discovered.Level1Methods
+            .Where(m => m.RequiredRoles.Length == 0)
             .Select(m => m.Description)
             .Where(d => !string.IsNullOrWhiteSpace(d))
             .Distinct(StringComparer.OrdinalIgnoreCase)

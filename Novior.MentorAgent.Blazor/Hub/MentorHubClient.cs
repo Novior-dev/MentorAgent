@@ -127,6 +127,10 @@ public sealed class MentorHubClient : IAsyncDisposable
     public Task SendMessageAsync(string text, IReadOnlyList<MentorAttachment>? attachments, CancellationToken ct = default)
         => _connection.InvokeAsync("SendMessage", text, attachments, ct);
 
+    /// <summary>Sends a user turn with its images and its language, to the hub's <c>SendUserMessage</c>.</summary>
+    public Task SendUserMessageAsync(MentorUserMessage message, CancellationToken ct = default)
+        => _connection.InvokeAsync("SendUserMessage", message, ct);
+
     public Task CancelRequestAsync(CancellationToken ct = default)
         => _connection.InvokeAsync("CancelRequest", ct);
 

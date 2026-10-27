@@ -1,8 +1,11 @@
 using FluentAssertions;
 using Novior.MentorAgent.Abstractions.Models;
+using Novior.MentorAgent.Attributes;
+using Novior.MentorAgent.Tests.App;
 using Novior.MentorAgent.Tests.Fakes;
 using Novior.MentorAgent.Tests.Harness;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Novior.MentorAgent.Tests.Cards;
@@ -201,14 +204,12 @@ public sealed class CardEmissionTests
     }
 
     [Fact]
-    public async Task A_hosts_own_record_with_a_kind_property_is_drawn_as_a_card()
+    public async Task A_hosts_own_record_with_a_kind_property_stays_text_and_reaches_the_model_whole()
     {
-        // The other side of structural detection, pinned as it stands: a card is recognised by its shape, not
-        // by its .NET type, so an application record that happens to carry a non-empty string `kind` is one.
-        // Its card properties reach the screen, URL included, and every other field is lost to the model,
-        // which is told a card is displayed instead. Kept for 1.0.0, documented in the README with the way
-        // out (rename the property, or return the records inside an object without a `kind`); the result
-        // arrives as JSON, as AIFunctionFactory marshals a tool's return value.
+        // Up to 1.1.0 a card was recognised by its shape alone, so an application record that happened to carry a
+        // non-empty string `kind` was one: its card properties reached the screen, URL included, and every other
+        // field was lost to the model, told a card was displayed instead (BUG-212). The result arrives as JSON, as
+        // AIFunctionFactory marshals a tool's return value; the method behind count_open_orders returns no card.
         await using var host = MentorHostFixture.Create(
             o => o.OnToolResult = (_, _) => System.Text.Json.JsonSerializer.SerializeToElement(
                 new { kind = "invoice", title = "Invoice 42", imageUrl = "https://files.example/invoice-42.png", amount = 120.5 },
@@ -218,12 +219,10 @@ public sealed class CardEmissionTests
 
         await host.RunTurnAsync("show invoice 42");
 
-        var card = CardsShown(host).Should().ContainSingle().Which;
-        card.Kind.Should().Be("invoice");
-        card.ImageUrl.Should().Be("https://files.example/invoice-42.png", "the record's URL is drawn on the card");
+        CardsShown(host).Should().BeEmpty("the record's URL is not drawn on a card");
         var results = ToolResults(host);
-        results.Should().Contain("ALREADY DISPLAYED");
-        results.Should().NotContain("120.5", "a field that is not a card property never reaches the model");
+        results.Should().NotContain("ALREADY DISPLAYED");
+        results.Should().Contain("120.5", "every field of the record reaches the model");
     }
 
     // ── Ordering against the redaction hook ─────────────────────────────────────
@@ -308,16 +307,77 @@ public sealed class CardEmissionTests
         // The shape a tool result really has: AIFunctionFactory marshals return values through
         // JSON with web (camelCase) naming. Detection reads the `kind` property by that exact
         // name, so this is the contract between the two — and the reason a method declared as
-        // returning MentorCard works at all.
+        // returning MentorCard works at all. Read for a method that returns cards: JSON alone makes
+        // none (BUG-212).
         await using var host = MentorHostFixture.Create(
             o => o.OnToolResult = (_, _) => System.Text.Json.JsonSerializer.SerializeToElement(
                 new MentorCard("order") { Title = "Order #9" },
                 new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)),
             withRecorder: true);
-        host.Chat!.CallTool("count_open_orders").Say("ok");
+        host.Chat!.CallTool("show_order_card", new { orderId = 9 }).Say("ok");
 
         await host.RunTurnAsync("show order 9");
 
         CardsShown(host).Should().ContainSingle().Which.Title.Should().Be("Order #9");
+    }
+
+    // ── Only a card type makes a card (BUG-212) ─────────────────────────────────
+
+    /// <summary>A record of the application's that happens to have a card's fields: a kind, a title, a labelled link.</summary>
+    public sealed record SupportTicket(string Kind, string Title, string Subtitle, IReadOnlyList<TicketLink> Actions);
+
+    /// <summary>A link stored with the ticket, by whoever wrote it.</summary>
+    public sealed record TicketLink(string Label, string Kind, string Value);
+
+    private sealed class SupportTickets
+    {
+        [MentorAction(Description = "Reads a support ticket", ReadOnly = true)]
+        public SupportTicket ReadSupportTicket(int ticketId)
+            => new("ticket", $"Ticket #{ticketId}", "Opened by a customer",
+                   [new("Open the attachment", "Navigate", "https://attacker.example/invoice")]);
+
+        [MentorAction(Description = "Lists the open support tickets", ReadOnly = true)]
+        public object ListSupportTickets() => new[] { new { kind = "ticket", title = "Ticket #1" } };
+
+        [MentorAction(Description = "Shows the open support tickets as cards", ReadOnly = true)]
+        public Task<IReadOnlyList<MentorCard>> ShowTicketCards()
+            => Task.FromResult<IReadOnlyList<MentorCard>>([new MentorCard("ticket") { Title = "Ticket #1" }]);
+    }
+
+    private static async Task<MentorHostFixture> TicketTurnAsync(string tool, object? arguments = null)
+    {
+        var host = MentorHostFixture.Create(o =>
+        {
+            o.MemoryAutoCapture = false;
+            o.ScanAssemblies = [typeof(TestOrderService).Assembly, typeof(SupportTickets).Assembly];
+        }, services => services.AddScoped<SupportTickets>(), withRecorder: true);
+        host.Chat!.CallTool(tool, arguments).Say("Here it is.");
+
+        await host.RunTurnAsync("show me the ticket");
+        return host;
+    }
+
+    [Theory]
+    [InlineData("read_support_ticket")]   // a record with a card's fields
+    [InlineData("list_support_tickets")]  // an object shaped like a list of cards
+    public async Task A_result_shaped_like_a_card_from_a_method_that_returns_no_card_stays_text(string tool)
+    {
+        // BUG-212: a "kind" was enough. A record of the application's, a support ticket a customer wrote with a link
+        // in it, became a card on screen, and its link a button.
+        await using var host = await TicketTurnAsync(tool, tool == "read_support_ticket" ? new { ticketId = 7 } : null);
+
+        CardsShown(host).SelectMany(c => c.Actions ?? []).Select(a => a.Value)
+            .Should().BeEmpty("a link stored in the application's data is never a button");
+        CardsShown(host).Should().BeEmpty("only a method that returns MentorCard makes cards");
+        ToolResults(host).Should().Contain("Ticket #")
+            .And.NotContain("ALREADY DISPLAYED", "the model is given the data itself, to answer from");
+    }
+
+    [Fact]
+    public async Task A_method_that_returns_its_cards_through_a_task_still_shows_them()
+    {
+        await using var host = await TicketTurnAsync("show_ticket_cards");
+
+        CardsShown(host).Should().ContainSingle().Which.Title.Should().Be("Ticket #1");
     }
 }

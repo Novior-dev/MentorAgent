@@ -33,13 +33,21 @@ public sealed class ToolFilterTests(ITestOutputHelper output)
     /// <summary>Axis 1 = everything unrelated.</summary>
     private const int Unrelated = 1;
 
+    /// <summary>
+    /// A host whose user holds every role of the test application: these tests are about what the filter keeps, so no
+    /// action is left out for a role the user lacks (BUG-200), and one the filter drops is dropped by the filter.
+    /// </summary>
     private static MentorHostFixture WithFilter(
         Action<Novior.MentorAgent.Options.MentorOptions>? configure = null)
-        => MentorHostFixture.Create(o =>
+    {
+        var host = MentorHostFixture.Create(o =>
         {
             o.EnableToolFiltering = true;
             configure?.Invoke(o);
         }, withEmbeddings: true);
+        host.Auth.SignIn("ada", "Manager", "Admin");
+        return host;
+    }
 
     /// <summary>
     /// Pins the query on the relevant axis and <b>every</b> tool on the unrelated one, then moves
@@ -722,6 +730,7 @@ public sealed class ToolFilterTests(ITestOutputHelper output)
     {
         await using var host = MentorHostFixture.Create(
             o => o.EnableToolFiltering = false, withEmbeddings: true);
+        host.Auth.SignIn("ada", "Manager", "Admin");   // every role: no action is left out for one (BUG-200)
         host.Chat!.SayRepeatedly("ok", times: 2);
 
         await host.RunTurnAsync("something unrelated");

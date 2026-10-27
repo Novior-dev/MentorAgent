@@ -5,7 +5,8 @@
 @using Novior.MentorAgent.Abstractions.Models
 @inject IOptions<MentorWidgetOptions> Options
 
-<div class="bm-bubble @(IsUser ? "bm-bubble--user" : "bm-bubble--assistant") @(IsStreaming ? "bm-bubble--streaming" : "")">
+<div class="bm-bubble @(IsUser ? "bm-bubble--user" : "bm-bubble--assistant") @(IsStreaming ? "bm-bubble--streaming" : "")"
+     data-ai-generated="@(IsAiGenerated ? "true" : null)">
 
     @if (!IsUser)
     {
@@ -55,6 +56,23 @@
 
     private bool IsUser => Message.Role == ChatRole.User;
 
+    // ── The marker of AI-generated text (EU AI Act, article 50) ──────────────────
+    // A reply the model wrote, finished or still streaming, carries data-ai-generated="true". The widget's own
+    // messages — an error, a send that failed — have the assistant's role and no marker: they are the library's words.
+
+    /// <summary>The message property that marks a reply the model wrote.</summary>
+    internal const string AiGeneratedProperty = "mentoragent.aiGenerated";
+
+    /// <summary>Marks <paramref name="message"/> as a reply the model wrote, and returns it.</summary>
+    internal static ChatMessage MarkAiGenerated(ChatMessage message)
+    {
+        (message.AdditionalProperties ??= new())[AiGeneratedProperty] = true;
+        return message;
+    }
+
+    private bool IsAiGenerated
+        => !IsUser && (IsStreaming || Message.AdditionalProperties?.ContainsKey(AiGeneratedProperty) == true);
+
     // ── Attached images (#13) ────────────────────────────────────────────────────
     // Reads the message's own content parts, so the bubble mirrors exactly what was sent
     // to the model: DataContent.Uri is already a data: URI, UriContent is a remote link.
@@ -84,9 +102,10 @@
 
     // ── Safe minimal Markdown → HTML (Generative UI, Level 1) ────────────────────
     // Renders GitHub-flavoured Markdown tables, bullet/numbered lists, fenced/inline
-    // code and bold/italic. EVERY piece of model text is HTML-encoded before any tag
-    // is emitted (see RenderInline / the code-block extraction), so the model can only
-    // supply DATA, never markup — no raw HTML reaches the DOM (XSS-safe by construction).
+    // code, bold/italic and links to http(s) addresses. EVERY piece of model text is
+    // HTML-encoded before any tag is emitted (see RenderInline / the code-block extraction),
+    // so the model can only supply DATA, never markup — no raw HTML reaches the DOM
+    // (XSS-safe by construction).
     private static string RenderMarkdown(string text)
     {
         if (string.IsNullOrEmpty(text)) return string.Empty;
@@ -135,9 +154,14 @@
         var html = sb.ToString();
 
         // 3) Restore code blocks.
-        html = Regex.Replace(html, @"@@BMCODE(\d+)@@", m => codeBlocks[int.Parse(m.Groups[1].Value)]);
-        return html;
+        return Restore(html, "BMCODE", codeBlocks);
     }
+
+    // Puts back what each placeholder stands for. One with no such number stays as it is: the model's text can
+    // hold the same characters, and a number out of range threw out of the render (BUG-217).
+    private static string Restore(string html, string kind, List<string> parts)
+        => Regex.Replace(html, $@"@@{kind}(\d+)@@", m =>
+            int.TryParse(m.Groups[1].Value, out var n) && n < parts.Count ? parts[n] : m.Value);
 
     // A separator row is made only of '|', '-', ':' and spaces, and has at least one '|' and '-'.
     private static bool IsTableSeparator(string line)
@@ -218,26 +242,69 @@
         return i;
     }
 
+    // A run of items. An ordered list starts at its first item's number, so one that resumes after a paragraph
+    // keeps counting instead of starting again from 1 (BUG-216): start is an attribute, which a strict CSP allows.
+    // A line indented under an item, a code block included, stays inside that item.
     private static int AppendList(StringBuilder sb, string[] lines, int start)
     {
         var ordered = IsOrdered(lines[start]);
-        sb.Append(ordered ? "<ol class=\"bm-list\">" : "<ul class=\"bm-list\">");
+        var first = ordered && int.TryParse(Regex.Match(lines[start], @"\d+").Value, out var n) ? n : 1;
+        sb.Append(!ordered ? "<ul class=\"bm-list\">"
+                : first == 1 ? "<ol class=\"bm-list\">"
+                : $"<ol class=\"bm-list\" start=\"{first}\">");
         var i = start;
-        for (; i < lines.Length && IsListItem(lines[i]); i++)
+        while (i < lines.Length && IsListItem(lines[i]))
         {
             var content = Regex.Replace(lines[i], @"^\s*([-*+]|\d+\.)\s+", string.Empty);
-            sb.Append($"<li>{RenderInline(content)}</li>");
+            sb.Append("<li>").Append(RenderInline(content));
+            for (i++; i < lines.Length && IsContinuation(lines[i]); i++)
+            {
+                var line = lines[i].Trim();
+                if (!Regex.IsMatch(line, @"^@@BMCODE\d+@@$")) sb.Append("<br/>");
+                sb.Append(RenderInline(line));
+            }
+            sb.Append("</li>");
         }
         sb.Append(ordered ? "</ol>" : "</ul>");
         return i;
     }
 
+    // A line that belongs to the item above it: indented, not blank, and not an item of its own.
+    private static bool IsContinuation(string line)
+        => line.Length > 0 && char.IsWhiteSpace(line[0]) && !string.IsNullOrWhiteSpace(line) && !IsListItem(line);
+
+    // [text](address), with an absolute http or https address and one level of parentheses at most; or inline code,
+    // which is matched first and left alone, so a link inside it stays code. Read from the encoded text: a quote or
+    // an angle bracket in the address is already an entity there, and stays inside the href (BUG-215).
+    private static readonly Regex LinkOrCode = new(
+        @"<code class=""bm-inline-code"">.*?</code>|\[(?<text>[^\[\]]+)\]\((?<url>(?i:https?)://(?:[^\s()]|\([^\s()]*\))+)\)",
+        RegexOptions.Compiled);
+
     // Inline formatting for a single text run. HTML-encodes first (XSS-safe), then applies
-    // inline code, bold and italic. Code-block placeholders pass through untouched.
+    // inline code, links, bold and italic. Code-block placeholders pass through untouched.
     private static string RenderInline(string text)
     {
         text = WebUtility.HtmlEncode(text);
         text = Regex.Replace(text, @"`([^`]+)`", "<code class=\"bm-inline-code\">$1</code>");
+
+        // A link is set aside while bold and italic run, so an underscore or an asterisk in its address stays
+        // there; its text gets them on its own. Any other scheme, javascript: and data: included, and a relative
+        // address do not match and stay text. An address with a placeholder in it would have a code block put
+        // back inside the href, so it stays text too.
+        var links = new List<string>();
+        text = LinkOrCode.Replace(text, m =>
+        {
+            var url = m.Groups["url"].Value;
+            if (!m.Groups["url"].Success || url.Contains("@@", StringComparison.Ordinal)) return m.Value;
+            links.Add($"<a href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer nofollow\">{Emphasis(m.Groups["text"].Value)}</a>");
+            return $"@@BMLINK{links.Count - 1}@@";
+        });
+
+        return Restore(Emphasis(text), "BMLINK", links);
+    }
+
+    private static string Emphasis(string text)
+    {
         text = Regex.Replace(text, @"\*\*(.+?)\*\*|__(.+?)__", m => $"<strong>{m.Groups[1].Value}{m.Groups[2].Value}</strong>");
         text = Regex.Replace(text, @"\*(.+?)\*|_(.+?)_", m => $"<em>{m.Groups[1].Value}{m.Groups[2].Value}</em>");
         return text;

@@ -2,7 +2,9 @@ using System.Runtime.CompilerServices;
 using A2A;
 using FluentAssertions;
 using Novior.MentorAgent.Core;
+using Novior.MentorAgent.Tests.Harness;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Novior.MentorAgent.Tests.Federation;
@@ -33,6 +35,7 @@ public sealed class A2AChatClientTests
         internal List<SendMessageRequest> Sent { get; } = [];
         internal Func<SendMessageRequest, SendMessageResponse>? OnSend { get; set; }
         internal List<StreamResponse> StreamEvents { get; } = [];
+        internal int Streams { get; private set; }
 
         public Task<SendMessageResponse> SendMessageAsync(
             SendMessageRequest request, CancellationToken cancellationToken = default)
@@ -45,22 +48,43 @@ public sealed class A2AChatClientTests
             SendMessageRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            Streams++;
             Sent.Add(request);
+            if (Opening is { } opening) await opening(cancellationToken);
             foreach (var evt in StreamEvents)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return evt;
             }
+            if (Hold is { } hold) await hold(cancellationToken);
             await Task.CompletedTask;
+        }
+
+        /// <summary>Awaited before the scripted events: a peer slow to say anything.</summary>
+        internal Func<CancellationToken, Task>? Opening { get; set; }
+
+        /// <summary>Awaited after the scripted events: a peer still working on the task.</summary>
+        internal Func<CancellationToken, Task>? Hold { get; set; }
+
+        /// <summary>The tasks the adapter asked the peer to cancel (BUG-210).</summary>
+        internal List<string> Cancelled { get; } = [];
+
+        /// <summary>Awaited before the cancel is answered: a peer slow to take it.</summary>
+        internal Func<CancellationToken, Task>? OnCancel { get; set; }
+
+        public async Task<AgentTask> CancelTaskAsync(CancelTaskRequest r, CancellationToken ct = default)
+        {
+            Cancelled.Add(r.Id);
+            if (OnCancel is { } slow) await slow(ct);
+            return new AgentTask { Id = r.Id, Status = new A2A.TaskStatus { State = TaskState.Canceled } };
         }
 
         public Task<AgentTask> GetTaskAsync(GetTaskRequest r, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<ListTasksResponse> ListTasksAsync(ListTasksRequest r, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<AgentTask> CancelTaskAsync(CancelTaskRequest r, CancellationToken ct = default) => throw new NotSupportedException();
         public IAsyncEnumerable<StreamResponse> SubscribeToTaskAsync(SubscribeToTaskRequest r, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<TaskPushNotificationConfig> CreateTaskPushNotificationConfigAsync(CreateTaskPushNotificationConfigRequest r, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<TaskPushNotificationConfig> CreateTaskPushNotificationConfigAsync(TaskPushNotificationConfig c, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<TaskPushNotificationConfig> GetTaskPushNotificationConfigAsync(GetTaskPushNotificationConfigRequest r, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<ListTaskPushNotificationConfigResponse> ListTaskPushNotificationConfigAsync(ListTaskPushNotificationConfigRequest r, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigsAsync(ListTaskPushNotificationConfigsRequest r, CancellationToken ct = default) => throw new NotSupportedException();
         public Task DeleteTaskPushNotificationConfigAsync(DeleteTaskPushNotificationConfigRequest r, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<AgentCard> GetExtendedAgentCardAsync(GetExtendedAgentCardRequest r, CancellationToken ct = default) => throw new NotSupportedException();
     }
@@ -391,6 +415,165 @@ public sealed class A2AChatClientTests
         await foreach (var update in Client(fake).GetStreamingResponseAsync(
                            UserSays("hi"), cancellationToken: Deadline()))
             update.Role.Should().Be(ChatRole.Assistant);
+    }
+
+    // ── A turn stopped during the delegation (BUG-210) ──────────────────────────
+
+    private static StreamResponse Working(string taskId)
+        => new() { Task = new AgentTask { Id = taskId, Status = new A2A.TaskStatus { State = TaskState.Working } } };
+
+    [Fact]
+    public async Task A_peer_that_never_takes_the_cancel_holds_the_stopped_turn_two_seconds_at_most()
+    {
+        var fake = new FakeA2AClient
+        {
+            Hold = ct => Task.Delay(Timeout.Infinite, ct),
+            OnCancel = ct => Task.Delay(Timeout.Infinite, ct),
+        };
+        fake.StreamEvents.Add(Working("t7"));
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        var read = Task.Run(async () =>
+        {
+            await foreach (var _ in Client(fake).GetStreamingResponseAsync(UserSays("refund order 7"), cancellationToken: stop.Token)) { }
+        });
+
+        (await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(4))) == read)
+            .Should().BeTrue("the cancel is bounded, not the stopped turn's to wait for");
+        await FluentActions.Awaiting(() => read).Should().ThrowAsync<OperationCanceledException>();
+        fake.Cancelled.Should().Equal(["t7"], "the task of the stream is the one cancelled");
+    }
+
+    [Fact]
+    public async Task A_stop_before_the_peers_first_event_still_cancels_the_task_it_names()
+    {
+        // Stopped before anything named the task, the caller has no id to cancel it by. Dropped at once, the request
+        // left the task running; it stays open a moment longer, for the event that names it.
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fake = new FakeA2AClient
+        {
+            Opening = async ct => { await stopped.Task; await Task.Delay(100, ct); },
+            Hold = ct => Task.Delay(Timeout.Infinite, ct),
+        };
+        fake.StreamEvents.Add(Working("t10"));
+        using var stop = new CancellationTokenSource();
+
+        var read = Task.Run(async () =>
+        {
+            await foreach (var _ in Client(fake).GetStreamingResponseAsync(UserSays("refund order 10"), cancellationToken: stop.Token)) { }
+        });
+        await Until(() => fake.Streams == 1);
+        stop.Cancel();
+        stopped.SetResult();   // the peer's first event comes after the Stop
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        await FluentActions.Awaiting(() => read).Should().ThrowAsync<OperationCanceledException>();
+        fake.Cancelled.Should().Equal(["t10"], "the event that came after the Stop named the task to cancel");
+        clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1),
+            "the stream ends with the event that names the task, not when the wait for it runs out");
+    }
+
+    private static async Task Until(Func<bool> condition)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (!condition())
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10);
+        }
+    }
+
+    [Fact]
+    public async Task A_read_that_fails_once_the_turn_is_stopped_is_reported_as_the_stop()
+    {
+        // The connection is torn down under the stopped read, which then fails with an IOException rather than a
+        // cancellation; above, the workflow would read it as a peer that failed.
+        var fake = new FakeA2AClient
+        {
+            Hold = async ct =>
+            {
+                try { await Task.Delay(Timeout.Infinite, ct); }
+                catch (OperationCanceledException) { throw new IOException("The response ended prematurely."); }
+            },
+        };
+        fake.StreamEvents.Add(Working("t8"));
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var read = async () =>
+        {
+            await foreach (var _ in Client(fake).GetStreamingResponseAsync(UserSays("refund order 8"), cancellationToken: stop.Token)) { }
+        };
+
+        (await read.Should().ThrowAsync<OperationCanceledException>()).WithInnerException<IOException>();
+        fake.Cancelled.Should().Equal(["t8"]);
+    }
+
+    [Fact]
+    public async Task A_stream_that_reaches_its_answer_cancels_nothing()
+    {
+        var fake = new FakeA2AClient();
+        fake.StreamEvents.Add(Working("t9"));
+        fake.StreamEvents.Add(new StreamResponse
+        {
+            StatusUpdate = new TaskStatusUpdateEvent
+            {
+                TaskId = "t9",
+                Status = new A2A.TaskStatus { State = TaskState.Completed, Message = AgentSays("order 9 refunded") },
+            },
+        });
+
+        var text = new System.Text.StringBuilder();
+        await foreach (var update in Client(fake).GetStreamingResponseAsync(UserSays("refund order 9"), cancellationToken: Deadline()))
+            text.Append(update.Text);
+
+        text.ToString().Should().Be("order 9 refunded");
+        fake.Cancelled.Should().BeEmpty("a task that ended is not cancelled");
+    }
+
+    // ── A peer that does not stream (BUG-197) ───────────────────────────────────
+
+    private static async Task<string> StreamText(A2AChatClient client)
+    {
+        var text = new System.Text.StringBuilder();
+        await foreach (var update in client.GetStreamingResponseAsync(UserSays("is invoice 41 paid"), cancellationToken: Deadline()))
+            text.Append(update.Text);
+        return text.ToString();
+    }
+
+    [Fact]
+    public async Task A_peer_whose_card_declares_no_streaming_is_asked_without_a_stream()
+    {
+        // From A2A 1.0.0-preview3 a server refuses a streamed request unless its agent declares streaming, and the
+        // SDK's client reads the refusal as a stream with nothing in it. The handoff workflow always streams, so a
+        // turn delegated to such a peer came back with no answer and no error.
+        var fake = new FakeA2AClient { OnSend = _ => FromMessage(AgentSays("41 is paid")) };
+        var client = A2AChatClient.ForCard(new AgentCard { Name = "billing" }, fake, "billing", LoggerFactory.Create(_ => { }).CreateLogger("test"));
+
+        (await StreamText(client)).Should().Be("41 is paid");
+        fake.Streams.Should().Be(0, "the peer does not stream");
+    }
+
+    [Fact]
+    public async Task A_peer_whose_card_declares_streaming_is_streamed()
+    {
+        var fake = new FakeA2AClient();
+        fake.StreamEvents.Add(new StreamResponse { Message = AgentSays("41 is paid") });
+        var card = new AgentCard { Name = "billing", Capabilities = new AgentCapabilities { Streaming = true } };
+
+        (await StreamText(A2AChatClient.ForCard(card, fake, "billing", LoggerFactory.Create(_ => { }).CreateLogger("test"))))
+            .Should().Be("41 is paid");
+        fake.Streams.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_stream_that_ends_without_an_answer_is_logged()
+    {
+        var logs = new TestLogCollector();
+        var logger = LoggerFactory.Create(b => b.AddProvider(new TestLoggerProvider(logs))).CreateLogger("test");
+        var client = new A2AChatClient(new FakeA2AClient(), "billing", streaming: true, logger);
+
+        (await StreamText(client)).Should().BeEmpty();
+        logs.HasWarning("'billing' ended its stream without an answer").Should().BeTrue(logs.WarningText);
     }
 
     // ── Identity ────────────────────────────────────────────────────────────────

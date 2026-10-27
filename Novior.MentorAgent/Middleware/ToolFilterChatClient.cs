@@ -682,9 +682,10 @@ internal sealed class ToolFilterChatClient : DelegatingChatClient
 
     /// <summary>
     /// The first request of a turn with only <paramref name="tools"/> declared and a call to one of them required.
-    /// The marker tells <see cref="UIActionsMiddleware"/> to add none of its own, and is removed there.
+    /// The marker tells <see cref="UIActionsMiddleware"/> to add none of its own, and is removed there. Also the
+    /// forced read without filtering (<see cref="ForcedReadChatClient"/>).
     /// </summary>
-    private static ChatOptions Forced(ChatOptions options, List<AITool> tools, string? notice)
+    internal static ChatOptions Forced(ChatOptions options, List<AITool> tools, string? notice)
     {
         var first = CloneWithTools(options, tools, notice);
         first.ToolMode = ChatToolMode.RequireAny;

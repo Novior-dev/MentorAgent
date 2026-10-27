@@ -123,7 +123,8 @@ public static class ServerEndpointExtensions
                     return denied;
             }
 
-            var answered = await AnswerAsync(stateService, store, actionId, approved);
+            // Who answered goes with the answer: the gate's decision names them (story 180).
+            var answered = await AnswerAsync(stateService, store, actionId, approved, http.User);
 
             owners.Forget(actionId);
             return answered ? Results.Ok() : Results.NotFound();
@@ -249,11 +250,13 @@ public static class ServerEndpointExtensions
         // which have no access to the discovery data the tour is generated from.
         //
         // Deliberately unauthenticated and safe to be: the payload is the same public screen names
-        // and capability descriptions the assistant already states in conversation, it is identical
-        // for every user, and it carries no metrics, no counts and no per-user data. Generation
-        // happens once per process, so this cannot be used to run up model cost either.
-        endpoints.MapGet("/mentor/tour", async (IMentorTour tour, CancellationToken ct) =>
-            Results.Ok(await tour.GetStepsAsync(ct)));
+        // and capability descriptions the assistant already states in conversation — of the actions
+        // that need no role only (BUG-206) — it is identical for every user, and it carries no
+        // metrics, no counts and no per-user data. Generation
+        // happens once per process and language, so this cannot be used to run up model cost either.
+        // ?language= is the page's (story 536): the name or the ISO code, anything else is MentorOptions.Language.
+        endpoints.MapGet("/mentor/tour", async (IMentorTour tour, string? language, CancellationToken ct) =>
+            Results.Ok(await tour.GetStepsAsync(MentorTurnLanguage.Parse(language), ct)));
 
         return endpoints;
     }
@@ -330,10 +333,10 @@ public static class ServerEndpointExtensions
     /// Answers a confirmation and reports whether a turn was still waiting for it (BUG-128, BUG-129).
     /// </summary>
     private static async Task<bool> AnswerAsync(
-        IMentorStateService stateService, MentorApprovalStore store, Guid actionId, bool approved)
+        IMentorStateService stateService, MentorApprovalStore store, Guid actionId, bool approved, ClaimsPrincipal? by)
     {
         if (stateService is MentorStateService local)
-            return local.Answer(actionId, approved);
+            return local.Answer(actionId, approved, by?.Identity?.IsAuthenticated == true ? by : null);
 
         // A state service of the host's own answers through the interface, which says nothing back;
         // the store says whether anybody was waiting.

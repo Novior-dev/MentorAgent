@@ -21,6 +21,16 @@ window.MentorAgent = {
         }
     },
 
+    // ── Theme (BUG-213) ───────────────────────────────────────────────────────
+    //
+    // PrimaryColor's variables, on <html> as the inline :root block had them. A Content-Security-Policy
+    // without style-src 'unsafe-inline' refuses a <style> element and a style attribute; style.setProperty
+    // it allows.
+    setRootVars: (vars) => {
+        const root = document.documentElement.style;
+        for (const name in vars) root.setProperty(name, vars[name]);
+    },
+
     // ── Persistent flags (roadmap #18) ───────────────────────────────────────
     //
     // localStorage throws in some privacy modes and inside sandboxed iframes rather than returning

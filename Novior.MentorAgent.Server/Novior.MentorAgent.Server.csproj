@@ -7,7 +7,7 @@
     <PackageId>Novior.MentorAgent.Server</PackageId>
     <Title>Novior.MentorAgent.Server</Title>
     <Description>Expose MentorAgent as a universal AI backend from any ASP.NET Core application. Adds a SignalR hub (/mentor-hub), SSE streaming endpoint (/mentor/chat), MCP server, and A2A agent — no Blazor required.</Description>
-    <PackageTags>aspnetcore;webapi;minimal-api;signalr;sse;server-sent-events;ai;chatbot;assistant;agent;multi-agent;mcp;model-context-protocol;a2a;agent-to-agent;react;angular;vue;mobile;maui;headless;blazor;blazor-wasm;blazor-auto;openai;azure-openai;ollama;rag;memory;skills;mentor;dotnet;csharp</PackageTags>
+    <PackageTags>aspnetcore;webapi;minimal-api;signalr;sse;server-sent-events;ai;ai-agents;llm;chatbot;assistant;agent;multi-agent;human-in-the-loop;tool-calling;mcp;model-context-protocol;a2a;agent-to-agent;react;angular;vue;mobile;maui;headless;blazor;blazor-wasm;blazor-auto;openai;azure-openai;ollama;rag;memory;skills;mentor;dotnet;csharp</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>IconMA.png</PackageIcon>
     <IsPackable>true</IsPackable>
@@ -35,8 +35,8 @@
          compiling. A2A.AspNetCore, not Microsoft.Agents.AI.Hosting.A2A.AspNetCore which the core used to
          reference: the endpoints only call the A2A SDK's own AddA2AAgent / MapA2A / MapWellKnownAgentCard,
          and the Agent Framework hosting packages would add nothing but preview dependencies. -->
-    <PackageReference Include="A2A.AspNetCore" Version="1.0.0-preview2" />
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.3.0" />
+    <PackageReference Include="A2A.AspNetCore" Version="1.0.0-preview3" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.3.0" />
   </ItemGroup>
 
 </Project>

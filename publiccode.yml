@@ -4,8 +4,8 @@ publiccodeYmlVersion: "0.7"
 name: Novior.MentorAgent
 url: "https://github.com/Novior-dev/MentorAgent"
 landingURL: "https://mentoragent.net/"
-softwareVersion: "1.0.0"
-releaseDate: "2026-10-13"
+softwareVersion: "1.2.0"
+releaseDate: "2026-10-27"
 
 platforms:
   - web
@@ -54,7 +54,7 @@ description:
       - `Novior.MentorAgent.Blazor`, for Blazor WebAssembly and Auto clients;
       - `Novior.MentorAgent.Declarative`, for specialist agents defined in YAML;
       - `Novior.MentorAgent.Abstractions`, shared by the others.
-    documentation: "https://github.com/Novior-dev/MentorAgent#readme"
+    documentation: "https://docs.mentoragent.net"
     features:
       - A chat widget for Blazor, with themes, voice input and output, and image input
       - C# methods as AI tools, with a confirmation before actions that change data
@@ -98,7 +98,7 @@ description:
       - `Novior.MentorAgent.Blazor`, per i client Blazor WebAssembly e Auto;
       - `Novior.MentorAgent.Declarative`, per gli agenti specialisti definiti in YAML;
       - `Novior.MentorAgent.Abstractions`, comune agli altri.
-    documentation: "https://github.com/Novior-dev/MentorAgent#readme"
+    documentation: "https://docs.mentoragent.net"
     features:
       - Widget di chat per Blazor, con temi, voce in ingresso e in uscita e immagini in ingresso
       - Metodi C# come strumenti AI, con una conferma prima delle azioni che cambiano dati

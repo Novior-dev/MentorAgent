@@ -21,6 +21,7 @@ internal sealed class MentorStateService : IMentorStateService, IApprovalStore
     public event Action<string>?                              OnStreamingChunk;
     public event Action?                                      OnStreamingCompleted;
     public event Action<string>?                              OnActionExecuting;
+    public event Action<MentorActionStarted>?                 OnActionStarted;
     public event Action<string>?                              OnActionCompleted;
     public event Action<string>?                              OnActionFailed;
     public event Action<bool>?                                OnBusyChanged;
@@ -57,7 +58,10 @@ internal sealed class MentorStateService : IMentorStateService, IApprovalStore
         => OnActionFailed?.Invoke($"{toolName}: {error}");
 
     public void NotifyActionExecuting(string toolName, string? displayName = null)
-        => OnActionExecuting?.Invoke(displayName ?? toolName);
+    {
+        OnActionExecuting?.Invoke(displayName ?? toolName);
+        OnActionStarted?.Invoke(new MentorActionStarted { ToolName = toolName, DisplayName = displayName ?? toolName });
+    }
 
     public void NotifyRagSourcesReady(IReadOnlyList<MentorRagResult> sources)
         => OnRagSourcesReady?.Invoke(sources);
@@ -83,6 +87,16 @@ internal sealed class MentorStateService : IMentorStateService, IApprovalStore
         return _store.RegisterAndWaitAsync(actionId, cancellationToken);
     }
 
+    /// <summary>
+    /// As <see cref="WaitForConfirmationAsync"/>, with who answered and when (story 180), and no longer than
+    /// <paramref name="timeout"/> from when the banner was shown (story 176).
+    /// </summary>
+    internal Task<MentorApprovalAnswer> WaitForAnswerAsync(Guid actionId, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        _logger.LogDebug("[MentorAgent:Approval] WaitForConfirmationAsync — ActionId={Id}", actionId);
+        return _store.RegisterAndWaitForAnswerAsync(actionId, timeout, cancellationToken);
+    }
+
     // -- Confirm / Cancel (called by the UI on the Blazor thread) ---------------
 
     public Task ConfirmAsync(Guid actionId)
@@ -99,12 +113,12 @@ internal sealed class MentorStateService : IMentorStateService, IApprovalStore
     /// a second time is not a decision anything acted on (BUG-129). <c>POST /mentor/approve</c> turns
     /// <see langword="false"/> into a 404.
     /// </summary>
-    internal bool Answer(Guid actionId, bool approved)
+    internal bool Answer(Guid actionId, bool approved, System.Security.Claims.ClaimsPrincipal? by = null)
     {
         var caller = approved ? nameof(ConfirmAsync) : nameof(Cancel);
         _logger.LogDebug("[MentorAgent:Approval] {Caller} — ActionId={Id}", caller, actionId);
 
-        var req = _store.TryResolve(actionId, approved);
+        var req = _store.TryResolve(actionId, approved, by);
         if (req is null)
         {
             _logger.LogWarning(

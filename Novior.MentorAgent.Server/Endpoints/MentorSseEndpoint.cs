@@ -13,11 +13,11 @@ namespace Novior.MentorAgent.Server.Endpoints;
 ///                      "attachments": [ … ] }  a base64 image never fits in a query string.
 ///
 /// Response format: text/event-stream
-///   data: {"type":"chunk","text":"Hello"}
+///   data: {"type":"chunk","text":"Hello","aiGenerated":true}
 ///   data: {"type":"cards","cards":[…]}
 ///   data: {"type":"navigation","url":"/orders"}
 ///   data: {"type":"confirmationRequired","actionId":"…","tool":"…","message":"…"}
-///   data: {"type":"completed"}
+///   data: {"type":"completed","aiGenerated":true}
 ///   data: {"type":"error","message":"..."}
 ///
 /// <para>
@@ -29,7 +29,14 @@ namespace Novior.MentorAgent.Server.Endpoints;
 public static class MentorSseEndpoint
 {
     /// <summary>Request body of <c>POST /mentor/chat</c>.</summary>
-    public sealed record ChatRequest(string Message, IReadOnlyList<MentorAttachment>? Attachments = null);
+    public sealed record ChatRequest(string Message, IReadOnlyList<MentorAttachment>? Attachments = null)
+    {
+        /// <summary>
+        /// The language of the turn: the name (<c>"Italian"</c>) or the ISO code (<c>"it"</c>) of a
+        /// <c>MentorLanguage</c>, in any case. Anything else, or none, is <c>MentorOptions.Language</c>.
+        /// </summary>
+        public string? Language { get; init; }
+    }
 
     /// <summary>
     /// How structured frames are written. Explicit, because the defaults are wrong for a wire
@@ -44,9 +51,10 @@ public static class MentorSseEndpoint
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>GET /mentor/chat?message=… — text-only streaming.</summary>
+    /// <summary>GET /mentor/chat?message=…&amp;language=… — text-only streaming.</summary>
     public static Task HandleAsync(HttpContext ctx)
-        => StreamAsync(ctx, ctx.Request.Query["message"].ToString(), null);
+        => StreamAsync(ctx, ctx.Request.Query["message"].ToString(), null,
+            MentorTurnLanguage.Parse(ctx.Request.Query["language"].ToString()));
 
     /// <summary>POST /mentor/chat — streaming with optional image attachments (#13).</summary>
     public static async Task HandlePostAsync(HttpContext ctx)
@@ -63,13 +71,14 @@ public static class MentorSseEndpoint
             return;
         }
 
-        await StreamAsync(ctx, body?.Message ?? string.Empty, body?.Attachments);
+        await StreamAsync(ctx, body?.Message ?? string.Empty, body?.Attachments, MentorTurnLanguage.Parse(body?.Language));
     }
 
     private static async Task StreamAsync(
         HttpContext ctx,
         string message,
-        IReadOnlyList<MentorAttachment>? attachments)
+        IReadOnlyList<MentorAttachment>? attachments,
+        MentorLanguage? language)
     {
         // An image-only turn is valid, so blank text is allowed when attachments are present.
         if (string.IsNullOrWhiteSpace(message) && attachments is not { Count: > 0 })
@@ -86,6 +95,7 @@ public static class MentorSseEndpoint
         // Who is calling, recorded for this request's scope before the host's provider is asked (BUG-131):
         // in a Blazor Web App that provider throws outside a circuit.
         ctx.RequestServices.GetRequiredService<MentorTransportUser>().User = ctx.User;
+        ctx.RequestServices.GetRequiredService<MentorTurnContext>().Surface = MentorActionSurface.Sse;   // story 180
 
         var orchestrator = ctx.RequestServices.GetRequiredService<IMentorOrchestrator>();
         var state        = ctx.RequestServices.GetRequiredService<IMentorStateService>();
@@ -116,8 +126,9 @@ public static class MentorSseEndpoint
                 logger.LogWarning("[MentorAgent:SSE] Frame '{Type}' could not be queued.", type);
         }
 
+        // EU AI Act, article 50 — the machine-readable marker of AI-generated text, on every frame of the reply.
         Action<string> onChunk = chunk =>
-            Emit("chunk", $",\"text\":{JsonSerializer.Serialize(chunk)}");
+            Emit("chunk", $",\"text\":{JsonSerializer.Serialize(chunk)},\"aiGenerated\":true");
 
         // #14 L2 — generative cards.
         Action<IReadOnlyList<MentorCard>> onCards = cards =>
@@ -165,11 +176,11 @@ public static class MentorSseEndpoint
             // A turn parked on an approval therefore holds the response open, which is the point:
             // POST /mentor/approve releases it and the stream carries on. If the client goes away
             // instead, RequestAborted cancels the parked wait and the turn unwinds.
-            await orchestrator.SendMessageAsync(message, attachments, ct);
+            await orchestrator.SendMessageAsync(new MentorUserMessage(message, attachments) { Language = language }, ct);
 
             // Queued last, so everything raised during the turn is already ahead of it: completing
             // the writer and awaiting the pump is what guarantees no frame is dropped at the end.
-            frames.Writer.TryWrite("data: {\"type\":\"completed\"}\n\n");
+            frames.Writer.TryWrite("data: {\"type\":\"completed\",\"aiGenerated\":true}\n\n");
             frames.Writer.Complete();
             await pump;
         }

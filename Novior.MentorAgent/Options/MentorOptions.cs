@@ -28,10 +28,45 @@ public sealed class MentorOptions
     /// Propagated to all agents, the Coordinator, and the MentorLocalizer.
     /// Default: English
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The instructions the model could echo into a reply are written in this language too: in the coordinator's
+    /// prompt, the rules with an example sentence (before a confirmation, after a declined one, describing an action,
+    /// outside the configured scope, Proactive's closing rule) and the grounding rule; in the prompts MentorAgent
+    /// generates for specialists and team members, the grounding rule; in the tool results, every instruction
+    /// MentorAgent adds (declined, stopped, not confirmed in time, result withheld, never run, outcome unknown, nobody
+    /// to confirm). The tool names, JSON keys and markers such as <c>not_run</c> in them are the same in every language.
+    /// The notice a request carries when its turn left out an action the user may not run is written in this
+    /// language too, under its English heading (BUG-224).
+    /// </para>
+    /// <para>
+    /// The rest of the instructions stays in English, whatever the language: the headings and the other rules of the
+    /// prompts, the line that names the reply language, the per-request context and the other notices, the prompts
+    /// of the classifiers and of the onboarding tour's generation, the results of a delegation, and the error
+    /// messages of a failed action. In <see cref="MentorHitlMode.Native"/> mode a declined approval also reaches the
+    /// model after a sentence of Microsoft.Extensions.AI's own, in English. The <c>Instructions</c> a host writes for a
+    /// specialist or a team member are sent as written.
+    /// </para>
+    /// <para>
+    /// It is read again on every turn: a change made while the application runs applies to the next turn of every
+    /// session, and to the widget's texts. A page can have a language of its own with <c>ChatWidget.Language</c>,
+    /// which every turn of that widget carries (<c>MentorUserMessage.Language</c>, the hub's <c>SendUserMessage</c>,
+    /// <c>language</c> on <c>/mentor/chat</c>): that turn is answered and written for in the page's language, as above.
+    /// A2A and MCP requests carry none, and are in this language.
+    /// </para>
+    /// </remarks>
     public MentorLanguage Language { get; set; } = MentorLanguage.English;
 
     /// <summary>Proactivity and mentorship level. Default: Standard.</summary>
     public MentorshipLevel MentorshipLevel { get; set; } = MentorshipLevel.Standard;
+
+    /// <summary>
+    /// Whether <see cref="MentorshipLevel.Proactive"/> closes its answers with suggested next steps. Default: false.
+    /// Told to offer only what the request's tools, pages, skills and specialists can do, the model still offered
+    /// steps the application does not have, 3 in 15 measured turns (BUG-074); off, the level asks for no closing
+    /// offers. The other levels ignore it.
+    /// </summary>
+    public bool ProactiveNextSteps { get; set; }
 
     // ── AI Provider ──────────────────────────────────────────────────────────────
 
@@ -81,6 +116,9 @@ public sealed class MentorOptions
     ///
     /// ⚠️ IMPORTANT: ChatHistoryProvider cannot be added post-construction.
     /// Configure it directly in the agent you pass here.
+    ///
+    /// Two calls with one id in a response of your agent's model are not made unique (BUG-225): your agent runs the
+    /// calls before MentorAgent's clients see them.
     /// </summary>
     public AIAgent? Agent { get; set; }
 
@@ -123,6 +161,22 @@ public sealed class MentorOptions
 
     /// <summary>Welcome message when the chat is empty. If null, uses the default.</summary>
     public string? WelcomeMessage { get; set; }
+
+    /// <summary>
+    /// Shows, under the widget's header, a notice that tells people they are talking to an AI assistant, for the
+    /// whole conversation: it does not scroll with the messages and cannot be closed. Default: true. Turning it off
+    /// leaves the machine-readable marker every reply carries (<c>data-ai-generated</c> in the widget,
+    /// <c>aiGenerated</c> on the hub, <c>/mentor/chat</c> and A2A): the two are separate tools for article 50 of the
+    /// EU AI Act, and whether and how it applies is the application's to decide.
+    /// </summary>
+    public bool ShowAiDisclosure { get; set; } = true;
+
+    /// <summary>
+    /// The notice's text, shown as written in every language. If null, the localized default in
+    /// <see cref="Language"/> ("You are talking to an AI assistant: its replies are generated automatically." in
+    /// English).
+    /// </summary>
+    public string? AiDisclosureMessage { get; set; }
 
     /// <summary>
     /// Input box placeholder text. If null, uses the localized default in <see cref="Language"/>
@@ -491,8 +545,44 @@ public sealed class MentorOptions
     /// <see cref="ChatHistoryProvider"/> you configured is ignored. Everything else — tools, memory,
     /// RAG, guardrails, metrics — is unaffected. Default: <see langword="false"/>.
     /// </para>
+    ///
+    /// <para>
+    /// One more: a model response that gives two calls the same id is passed on as it came, with a warning. Without
+    /// the flag MentorAgent gives the later call an id of its own (BUG-225); here the service holds the calls under
+    /// the ids it generated, and a result sent under another id would answer none of them.
+    /// </para>
     /// </summary>
     public bool UseServiceManagedHistory { get; set; }
+
+    /// <summary>
+    /// Where the context of each request goes: the page open, the data it shows (<c>IMentorPageContext</c>), its
+    /// address, the date and time. Default: <see cref="MentorSessionContextPlacement.Instructions"/>, as before.
+    ///
+    /// <para>
+    /// At the end of the instructions they change with every minute and every page, and come before the whole
+    /// conversation: a model that caches the prompt by its prefix, a local engine above all, reads the conversation
+    /// again, which on a CPU can be many seconds before the first word.
+    /// With <see cref="MentorSessionContextPlacement.LastUserMessage"/> they go at the start of the user's last
+    /// message, in a block the instructions name, and the instructions stay the same through the session: what
+    /// changes is read again from the last message only. The user's name and roles, what the assistant
+    /// remembers and the documents of <see cref="UseRag"/> stay in the instructions; with RAG on, a turn with
+    /// documents still changes them.
+    /// </para>
+    ///
+    /// <para>
+    /// The block is put in the request sent to the model only: the conversation keeps the message as the user
+    /// wrote it. A user's text cannot pass for the block: the mark that opens it is neutralised in the user's
+    /// messages sent, and it carries a code only this session's instructions know. The classifiers, the
+    /// specialists and the team members never see it.
+    /// </para>
+    ///
+    /// <para>
+    /// Path A with local history only. With <see cref="UseServiceManagedHistory"/>, where the service would keep
+    /// the block in every message, or with a pre-built <see cref="Agent"/> (Path B), it has no effect, and a
+    /// startup warning says so.
+    /// </para>
+    /// </summary>
+    public MentorSessionContextPlacement SessionContextPlacement { get; set; } = MentorSessionContextPlacement.Instructions;
 
     // ── Wave 5 · #16 Human-in-the-loop tool approval ──────────────────────────
 
@@ -581,10 +671,12 @@ public sealed class MentorOptions
     /// </code>
     ///
     /// Asked whenever MentorAgent needs the answer, not once: while the coordinator is built, then
-    /// again on every call to a tool in <see cref="MentorHitlMode.Blocking"/> and on every turn the
-    /// tool filter matches a tool (a tool whose confirmation is already declared is never asked
-    /// about). Keep it a cheap, pure function of the tool name: read a file or a database once,
-    /// outside it. <see langword="null"/> (default) = only the declared confirmations apply.
+    /// again on every call to a tool — in <see cref="MentorHitlMode.Native"/> too, where a tool it
+    /// gates after the coordinator was built is confirmed at the call — on every <c>tools/list</c>
+    /// and <c>tools/call</c> of the MCP server, on every turn the tool filter matches a tool, and for
+    /// every action an <c>IMentorActionPolicy</c> is asked about. A tool whose confirmation is already
+    /// declared is never asked about. Keep it a cheap, pure function of the tool name: read a file or
+    /// a database once, outside it. <see langword="null"/> (default) = only the declared confirmations apply.
     /// </summary>
     public Func<string, bool>? RequiresApproval { get; set; }
 
@@ -625,6 +717,34 @@ public sealed class MentorOptions
     /// (default) = the action's description followed by its arguments.
     /// </summary>
     public Func<MentorConfirmationContext, string?>? ConfirmationMessage { get; set; }
+
+    /// <summary>
+    /// How long a confirmation waits for its answer, from when the banner is shown. Nobody has answered by then: the
+    /// confirmation counts as rejected, the action does not run (<c>Rejected</c>, <c>confirmation-timeout</c>), and
+    /// the model is told nobody confirmed it in time. An answer that comes later is ignored, as one after Stop is:
+    /// <c>POST /mentor/approve</c> answers 404. The banner goes when the turn ends. The same for a confirmation an
+    /// <c>IMentorActionPolicy</c> asks for, in Blocking and in Native mode, for specialists and team members too.
+    ///
+    /// <para>
+    /// <see cref="TimeSpan.Zero"/> or any negative value (the default) means no limit: the confirmation waits until
+    /// it is answered, until Stop, or until the session ends (the circuit, the hub connection or the request closes).
+    /// MentorAgent does not read it from configuration: set it in code, for example
+    /// <c>options.ConfirmationTimeout = TimeSpan.FromMinutes(5)</c>; a host that binds its own section to these options
+    /// writes <c>"00:05:00"</c>.
+    /// </para>
+    /// </summary>
+    public TimeSpan ConfirmationTimeout { get; set; } = TimeSpan.Zero;
+
+    /// <summary>
+    /// How long each call to an <c>IMentorActionPolicy</c> may take (<c>AddMentorActionPolicy</c>). A policy that
+    /// has not answered by then is no longer awaited, and its token is cancelled: the call it was asked about does
+    /// not run (<c>PolicyFailed</c>, <c>policy-timeout</c>), and when MentorAgent decides what to offer, the action
+    /// is left out. <see cref="TimeSpan.Zero"/> or any negative value means no limit; Stop still cancels the wait.
+    /// Default: 5 seconds. MentorAgent does not read it from configuration: set it in code, for example
+    /// <c>options.ActionPolicyTimeout = TimeSpan.FromSeconds(10)</c>; a host that binds its own section to these
+    /// options writes <c>"00:00:10"</c>.
+    /// </summary>
+    public TimeSpan ActionPolicyTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
     // ── Wave 3 · #7 Middleware suite ──────────────────────────────────────────
 
@@ -881,6 +1001,12 @@ public sealed class MentorOptions
     /// </para>
     ///
     /// <para>
+    /// The question is shown the end of the assistant's last reply, so a short reply is judged with the question it
+    /// answers: seen alone, "Sì" after "Vuoi vedere i dettagli?" was refused (BUG-223). The safety question still
+    /// judges the message alone, and the verdict is kept for the message and that reply together.
+    /// </para>
+    ///
+    /// <para>
     /// With <see cref="EnableSafetyCheck"/> on it travels in the same classifier call; on its own it adds
     /// one small call per turn. The hosted-tool check (<see cref="HostedToolDomainCheck"/>) then asks its
     /// own, strict question — only on a turn where a hosted tool is about to be declared.
@@ -1038,29 +1164,30 @@ public sealed class MentorOptions
     /// Opt-in. When a classifier model says a message asks for a value of your records — a price, a stock
     /// level, an order's status — the assistant's first model call must call one of the actions you declared
     /// read-only (<c>[MentorAction(ReadOnly = true)]</c>, <see cref="IsReadOnlyAction"/>, an MCP tool with
-    /// <c>readOnlyHint</c>) that semantic tool filtering selected for that message — the one that cleared
-    /// <see cref="ToolFilterMinScore"/>, the companions of a confirmation-gated match, or the declared reads
-    /// among the three actions the zero-match fallback sent — or hand the request to a specialist or a team.
-    /// The reply is then written from what it returned. An action that needs a role (<c>RequiredRoles</c>) or a
-    /// confirmation is never required.
+    /// <c>readOnlyHint</c>), or hand the request to a specialist or a team. With semantic tool filtering, one of
+    /// those it selected for that message — the one that cleared <see cref="ToolFilterMinScore"/>, the companions
+    /// of a confirmation-gated match, or the declared reads among the three actions the zero-match fallback sent;
+    /// without it, any of them the user may run. The reply is then written from what it returned. An action that
+    /// needs a role (<c>RequiredRoles</c>) or a confirmation is never required.
     ///
     /// <para>
     /// Why: with the read actions on the turn the model still answered "I can't see the price, shall I
     /// look it up?" about one time in three on the ApiServer sample (BUG-106), and with a read that matched
     /// on its own it could still write "price not available" without calling it; stronger wording in the
     /// prompt made it invent figures instead. Forcing is structural: the first thing the model produces is
-    /// the call.
+    /// the call. It once worked with semantic tool filtering only, and asked in Italian which expenses were still
+    /// waiting for approval, a host without an embedding model got a list the model made up (BUG-222).
     /// </para>
     ///
     /// <para>
     /// What changes: on those turns the reply starts after the result, so a Proactive "I'm looking it
     /// up…" sentence no longer comes first; one small classifier call (<see cref="ClassifierChatClient"/>
     /// when set, bounded by <see cref="SafetyCheckTimeout"/>) is paid on every turn whose selection holds a
-    /// declared read — with filtering's zero-match fallback, that is nearly every turn, greetings included.
-    /// With <see cref="RequireActionForChangeRequests"/> on too, the same call answers both questions.
-    /// Without <see cref="EnableToolFiltering"/>, an <see cref="EmbeddingGenerator"/> and at least one declared
-    /// read-only action that needs no role, or on Path B, it has no effect, and a startup warning says so. A
-    /// classifier that fails or answers anything unreadable leaves the turn as it would be without this.
+    /// declared read — with filtering's zero-match fallback, and without filtering, that is nearly every turn,
+    /// greetings included. With <see cref="RequireActionForChangeRequests"/> on too and filtering on, the same
+    /// call answers both questions. Without at least one declared read-only action that needs no role, or on
+    /// Path B, it has no effect, and a startup warning says so. A classifier that fails or answers anything
+    /// unreadable leaves the turn as it would be without this.
     /// Default: false
     /// </para>
     /// </summary>
@@ -1108,9 +1235,10 @@ public sealed class MentorOptions
     /// What changes: on those turns the banner, or the page, comes before any sentence. One small classifier
     /// call (<see cref="ClassifierChatClient"/> when set, bounded by <see cref="SafetyCheckTimeout"/>) is paid on
     /// every turn while the application has a page or the message selected such an action — shared with
-    /// <see cref="RequireLookupForRecordQuestions"/> when both are on. Without <see cref="EnableToolFiltering"/>
-    /// and an <see cref="EmbeddingGenerator"/>, or on Path B, it has no effect, and a startup warning says so. A
-    /// classifier that fails or answers anything unreadable leaves the turn as it would be without this.
+    /// <see cref="RequireLookupForRecordQuestions"/> when both are on. Unlike that option, without
+    /// <see cref="EnableToolFiltering"/> and an <see cref="EmbeddingGenerator"/>, or on Path B, it has no effect,
+    /// and a startup warning says so. A classifier that fails or answers anything unreadable leaves the turn as it
+    /// would be without this.
     /// Default: false
     /// </para>
     /// </summary>
@@ -1329,7 +1457,9 @@ public sealed class MentorOptions
     /// <see cref="TimeSpan.Zero"/> or any negative value (including
     /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>) means <b>no limit</b>. The user can
     /// still press Stop: a check waiting on the provider is cancelled with the turn, whatever this is.
-    /// From configuration: <c>"SafetyCheckTimeout": "00:01:30"</c>; <c>"00:00:00"</c> for no limit.
+    /// MentorAgent does not read it from configuration: set it in code, for example
+    /// <c>options.SafetyCheckTimeout = TimeSpan.FromSeconds(90)</c>; a host that binds its own section to these
+    /// options writes <c>"00:01:30"</c>, and <c>"00:00:00"</c> for no limit.
     /// </para>
     /// </summary>
     public TimeSpan SafetyCheckTimeout { get; set; } = TimeSpan.FromSeconds(15);

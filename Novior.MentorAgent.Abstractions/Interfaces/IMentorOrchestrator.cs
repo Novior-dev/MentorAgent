@@ -20,6 +20,14 @@ public interface IMentorOrchestrator
     /// </summary>
     Task SendMessageAsync(string userMessage, IReadOnlyList<MentorAttachment>? attachments, CancellationToken ct = default);
 
+    /// <summary>
+    /// Sends a user turn: its text, its images and its <see cref="MentorUserMessage.Language"/>. The turn is
+    /// answered in that language, and the texts the server writes for it are in that language too. An
+    /// implementation written before this method existed gets the call above, and ignores the language.
+    /// </summary>
+    Task SendMessageAsync(MentorUserMessage message, CancellationToken ct = default)
+        => SendMessageAsync(message.Text, message.Attachments, ct);
+
     /// <summary>Cancels the current AI request.</summary>
     void CancelCurrentRequest();
 

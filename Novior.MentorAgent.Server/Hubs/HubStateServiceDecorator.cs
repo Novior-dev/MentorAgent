@@ -91,11 +91,25 @@ public sealed class HubStateServiceDecorator : IDisposable
 
     // â”€â”€ Event forwarders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+    /// <summary>1 once the reply being streamed has had its <c>ReplyStarted</c>; back to 0 when it completes.</summary>
+    private int _replyStarted;
+
     private void OnStreamingChunk(string chunk)
-        => _ = SendAsync("StreamingChunk", chunk);
+    {
+        // EU AI Act, article 50 — the machine-readable marker of AI-generated text. The hub's events carry their
+        // arguments by position, and a .NET client bound to StreamingChunk(string) refuses one with two: the marker is
+        // an event of its own, once before each reply's first chunk. Every reply reaches the client through
+        // StreamingChunk — a streamed one, one written whole, a specialist's or a team's through the coordinator.
+        if (Interlocked.Exchange(ref _replyStarted, 1) == 0)
+            _ = SendAsync("ReplyStarted", new MentorReplyStarted());
+        _ = SendAsync("StreamingChunk", chunk);
+    }
 
     private void OnStreamingCompleted()
-        => _ = SendAsync("StreamingCompleted");
+    {
+        Interlocked.Exchange(ref _replyStarted, 0);
+        _ = SendAsync("StreamingCompleted");
+    }
 
     private void OnBusyChanged(bool busy)
         => _ = SendAsync("BusyChanged", busy);

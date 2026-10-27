@@ -124,10 +124,49 @@ public sealed class GenerativeCardTests
         Novior.MentorAgent.Middleware.MentorCardReader.TryRead(doc.RootElement).Should().BeNull();
     }
 
+    /// <summary>Return types, one per method: whether each one declares cards (BUG-212).</summary>
+    private abstract class Returns
+    {
+        public abstract MentorCard One();
+        public abstract IEnumerable<MentorCard> Sequence();
+        public abstract MentorCard[] Array();
+        public abstract List<MentorCard> List();
+        public abstract Task<MentorCard> OneLater();
+        public abstract ValueTask<IReadOnlyList<MentorCard>> ListLater();
+        public abstract IAsyncEnumerable<MentorCard> Stream();
+        public abstract string Text();
+        public abstract object Anything();
+        public abstract Dictionary<string, object> Record();
+        public abstract Task<string> TextLater();
+        public abstract Task Nothing();
+    }
+
+    [Theory]
+    [InlineData(nameof(Returns.One), true)]
+    [InlineData(nameof(Returns.Sequence), true)]
+    [InlineData(nameof(Returns.Array), true)]
+    [InlineData(nameof(Returns.List), true)]
+    [InlineData(nameof(Returns.OneLater), true)]
+    [InlineData(nameof(Returns.ListLater), true)]
+    [InlineData(nameof(Returns.Stream), true)]
+    [InlineData(nameof(Returns.Text), false)]
+    [InlineData(nameof(Returns.Anything), false)]
+    [InlineData(nameof(Returns.Record), false)]
+    [InlineData(nameof(Returns.TextLater), false)]
+    [InlineData(nameof(Returns.Nothing), false)]
+    public void Only_a_method_that_returns_cards_declares_them(string method, bool declares)
+        => Novior.MentorAgent.Middleware.MentorCardReader.DeclaresCards(typeof(Returns).GetMethod(method))
+            .Should().Be(declares);
+
+    [Fact]
+    public void A_tool_with_no_method_declares_no_cards()
+        => Novior.MentorAgent.Middleware.MentorCardReader.DeclaresCards(null).Should().BeFalse("an MCP tool has no method behind it");
+
     [Fact]
     public void JsonThatOnlyLooksLikeACard_IsAccepted()
     {
-        // A tool is free to return this shape by hand rather than via MentorCard.
+        // The reader goes by shape. Whether a result is read at all goes by the method's declared type: only one that
+        // returns MentorCard makes cards (BUG-212, CardEmissionTests).
         using var doc = JsonDocument.Parse("""[ { "kind": "order", "title": "X" } ]""");
         var cards = Novior.MentorAgent.Middleware.MentorCardReader.TryRead(doc.RootElement);
 

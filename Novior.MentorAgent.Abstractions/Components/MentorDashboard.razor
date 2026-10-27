@@ -86,7 +86,7 @@ else
         @* Conversation-level metrics (model-independent) — only in the "all models" view. *@
         @if (_selectedModel.Length == 0)
         {
-            <div class="bm-dash__grid" style="margin-top:10px;">
+            <div class="bm-dash__grid bm-dash__grid--spaced">
                 <div class="bm-dash__stat">
                     <span class="bm-dash__stat-val">@_snapshot.TurnCount.ToString("N0")</span>
                     <span class="bm-dash__stat-lbl">@_loc.Get("dash.turns")</span>
@@ -118,28 +118,28 @@ else
                 <div class="bm-dash__chartcard">
                     <div class="bm-dash__chart-h">@_loc.Get("dash.chart.tokens")</div>
                     @LineChart(times,
-                        [ ("var(--bm-chart-in)",    v.Series.Select(p => (double)p.InputTokens).ToArray()),
-                          ("var(--bm-chart-out)",   v.Series.Select(p => (double)p.OutputTokens).ToArray()),
-                          ("var(--bm-chart-total)", v.Series.Select(p => (double)p.TotalTokens).ToArray()) ],
+                        [ ("in",    v.Series.Select(p => (double)p.InputTokens).ToArray()),
+                          ("out",   v.Series.Select(p => (double)p.OutputTokens).ToArray()),
+                          ("total", v.Series.Select(p => (double)p.TotalTokens).ToArray()) ],
                         compact: true)
                     <div class="bm-dash__legend">
-                        <span><i style="background:var(--bm-chart-in)"></i>@_loc.Get("dash.legendin")</span>
-                        <span><i style="background:var(--bm-chart-out)"></i>@_loc.Get("dash.legendout")</span>
-                        <span><i style="background:var(--bm-chart-total)"></i>@_loc.Get("dash.legendtotal")</span>
+                        <span><i class="bm-dash__swatch--in"></i>@_loc.Get("dash.legendin")</span>
+                        <span><i class="bm-dash__swatch--out"></i>@_loc.Get("dash.legendout")</span>
+                        <span><i class="bm-dash__swatch--total"></i>@_loc.Get("dash.legendtotal")</span>
                     </div>
                 </div>
 
                 <div class="bm-dash__chartcard">
                     <div class="bm-dash__chart-h">@_loc.Get("dash.chart.requests")</div>
                     @LineChart(times,
-                        [ ("var(--bm-chart-req)", v.Series.Select(p => (double)p.RequestCount).ToArray()) ],
+                        [ ("req", v.Series.Select(p => (double)p.RequestCount).ToArray()) ],
                         compact: false)
                 </div>
 
                 <div class="bm-dash__chartcard">
                     <div class="bm-dash__chart-h">@_loc.Get("dash.chart.latency")</div>
                     @LineChart(times,
-                        [ ("var(--bm-chart-lat)", v.Series.Select(p => p.AvgLatencyMs ?? 0).ToArray()) ],
+                        [ ("lat", v.Series.Select(p => p.AvgLatencyMs ?? 0).ToArray()) ],
                         compact: false)
                 </div>
             </div>
@@ -199,9 +199,9 @@ else
                 {
                     <li>
                         <span class="bm-dash__action">@action.Action</span>
-                        <span class="bm-dash__bar" aria-hidden="true">
-                            <span class="bm-dash__bar-fill" style="width:@(Share(action.Count))%"></span>
-                        </span>
+                        <svg class="bm-dash__bar" viewBox="0 0 100 1" preserveAspectRatio="none" aria-hidden="true">
+                            <rect class="bm-dash__bar-fill" width="@Share(action.Count)" height="1" />
+                        </svg>
                         <span class="bm-dash__count">@action.Count.ToString("N0")</span>
                     </li>
                 }
@@ -330,7 +330,8 @@ else
         long In, long Out, long Requests, double? Lat, double? Ttfb, decimal? Cost, IReadOnlyList<MentorUsagePoint> Series);
 
     // ── Inline SVG line chart (no JS / no libs; theme-aware via CSS vars) ─────────
-    private MarkupString LineChart(DateTimeOffset[] times, (string Color, double[] Vals)[] lines, bool compact)
+    // Series is in, out, total, req or lat: the stylesheet colours .bm-chart__line--<series> with --bm-chart-<series>.
+    private MarkupString LineChart(DateTimeOffset[] times, (string Series, double[] Vals)[] lines, bool compact)
     {
         var ci = CultureInfo.InvariantCulture;
         int n = times.Length;
@@ -358,10 +359,10 @@ else
         }
 
         // Series polylines (crisp stroke regardless of scaling).
-        foreach (var (color, vals) in lines)
+        foreach (var (series, vals) in lines)
         {
             var pts = string.Join(" ", vals.Select((val, i) => $"{X(i).ToString("0.#", ci)},{Y(val).ToString("0.#", ci)}"));
-            sb.Append($"<polyline class=\"bm-chart__line\" style=\"stroke:{color}\" points=\"{pts}\" />");
+            sb.Append($"<polyline class=\"bm-chart__line bm-chart__line--{series}\" points=\"{pts}\" />");
         }
 
         // X-axis labels: first, middle, last.

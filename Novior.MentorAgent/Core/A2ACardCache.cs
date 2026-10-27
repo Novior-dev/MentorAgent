@@ -59,8 +59,12 @@ internal sealed class A2ACardCache(ILogger<A2ACardCache> logger, TimeProvider? t
             _entries[key] = new Entry(card, null, now, TimeSpan.Zero);
             return card;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
+            // A fetch the caller stopped says nothing about the agent, and is not remembered (BUG-211): a Stop during
+            // the first message was logged as "did not answer: The operation was canceled", and the agent was not
+            // asked again for a minute.
+            //
             // Growing backoff, so a permanently dead agent is dialled once a minute rather than once
             // per visitor — and said once, as a message. The stack trace is Debug: the first line
             // already names the agent and the URL, which is what the reader can act on.

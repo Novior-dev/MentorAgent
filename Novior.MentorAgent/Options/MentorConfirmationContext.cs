@@ -23,7 +23,10 @@ public sealed class MentorConfirmationContext
     /// </summary>
     public required IReadOnlyList<MentorConfirmationArgument> Arguments { get; init; }
 
-    /// <summary><see cref="MentorOptions.Language"/>, the language of the widget and of the assistant.</summary>
+    /// <summary>
+    /// The language of the turn: the page's (<c>ChatWidget.Language</c>) when the widget has one, else
+    /// <see cref="MentorOptions.Language"/>. The widget and the assistant speak it.
+    /// </summary>
     public required MentorLanguage Language { get; init; }
 
     /// <summary>The text MentorAgent shows when the function writes none: the description, then the arguments.</summary>

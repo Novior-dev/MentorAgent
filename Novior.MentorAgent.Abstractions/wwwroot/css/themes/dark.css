@@ -1,0 +1,17 @@
+/* MentorTheme.Dark: darker than the baseline, with a near-black panel at 85% instead of 55%, so less of
+   the page shows through. For apps that are already dark, where the default glass looks washed out.
+
+   ChatWidget links this file inside its own markup, after everything in <head>, so these :root values win
+   over the baseline in MentorAgent.css and over a host's :root rule of the same specificity. They were an
+   inline <style> block, which a Content-Security-Policy without style-src 'unsafe-inline' drops; a
+   stylesheet from the page's own origin it allows (BUG-213). Variables only, all declared by MentorAgent.css. */
+:root {
+    --bm-bg-base: #050810;
+    --bm-bg-panel: rgba(5, 8, 16, 0.85);
+    --bm-bg-surface: #0d1117;
+    --bm-bg-elevated: #161b25;
+    --bm-bg-hover: #1c2230;
+    --bm-text-primary: #f0f4ff;
+    --bm-text-secondary: #8b9cc8;
+    --bm-text-muted: #4a567a;
+}

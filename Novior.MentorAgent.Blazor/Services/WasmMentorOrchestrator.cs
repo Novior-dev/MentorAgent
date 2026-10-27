@@ -37,8 +37,16 @@ public sealed class WasmMentorOrchestrator : IMentorOrchestrator, IAsyncDisposab
     public Task SendMessageAsync(string userMessage, CancellationToken ct = default)
         => SendMessageAsync(userMessage, null, ct);
 
-    public async Task SendMessageAsync(string userMessage, IReadOnlyList<MentorAttachment>? attachments, CancellationToken ct = default)
+    public Task SendMessageAsync(string userMessage, IReadOnlyList<MentorAttachment>? attachments, CancellationToken ct = default)
+        => SendMessageAsync(new MentorUserMessage(userMessage, attachments), ct);
+
+    /// <summary>
+    /// Sends a turn. With a language it goes to the hub's <c>SendUserMessage</c>; without one to <c>SendMessage</c>,
+    /// as before, so a page with no language of its own still works with a server older than the method.
+    /// </summary>
+    public async Task SendMessageAsync(MentorUserMessage message, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(message);
         if (!_hub.IsConnected)
         {
             _logger.LogWarning("[MentorAgent.Blazor] Hub not connected. Attempting to connect...");
@@ -48,7 +56,10 @@ public sealed class WasmMentorOrchestrator : IMentorOrchestrator, IAsyncDisposab
         // Send page context before each message so the server has the current state
         var snapshot = _pageContext.BuildSnapshot();
         await _hub.UpdatePageContextAsync(snapshot, ct);
-        await _hub.SendMessageAsync(userMessage, attachments, ct);
+        if (message.Language is null)
+            await _hub.SendMessageAsync(message.Text, message.Attachments, ct);
+        else
+            await _hub.SendUserMessageAsync(message, ct);
     }
 
     /// <summary>

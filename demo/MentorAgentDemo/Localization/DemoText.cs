@@ -44,8 +44,8 @@ public static class DemoText
         ["home.receiptAlt"] = ("A made-up restaurant receipt: total 36.50 euro", "Una ricevuta di ristorante inventata: totale 36,50 euro"),
         ["home.roles"] = ("Switch the role at the top: an employee can look, a manager can approve, an administrator sees everything.",
                           "Cambia ruolo in alto: un dipendente può guardare, un responsabile può approvare, un amministratore vede tutto."),
-        ["home.language"] = ("The EN/IT button changes these pages. The assistant answers in the language set in appsettings.json (MentorAgent:Language).",
-                             "Il pulsante EN/IT cambia queste pagine. L'assistente risponde nella lingua impostata in appsettings.json (MentorAgent:Language)."),
+        ["home.language"] = ("The EN/IT button changes these pages and the assistant: its texts, its answers and its confirmations. The policy handbook and the labels of the expense actions stay in the language set in appsettings.json (MentorAgent:Language).",
+                             "Il pulsante EN/IT cambia queste pagine e l'assistente: i suoi testi, le risposte e le conferme. Il manuale delle spese e le etichette delle azioni restano nella lingua impostata in appsettings.json (MentorAgent:Language)."),
 
         // What to try
         ["nav.try"] = ("What to try", "Cosa provare"),

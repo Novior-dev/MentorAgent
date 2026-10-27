@@ -72,11 +72,14 @@ internal sealed class RagContextProvider : AIContextProvider
         _stateService = stateService;
         _options = options.Value;
         _logger = logger;
-        _citeInstruction = new Novior.MentorAgent.Abstractions.Core.MentorLocalizer(_options.Language).Get("rag.cite");
     }
 
-    /// <summary>How to cite the documents, appended after the host's template.</summary>
-    private readonly string _citeInstruction;
+    /// <summary>The language of the turn, for the citation rule; without it, <c>MentorOptions.Language</c>.</summary>
+    internal MentorTurnLanguage? TurnLanguage { get; init; }
+
+    /// <summary>How to cite the documents, appended after the host's template: in the language of the turn.</summary>
+    private string CiteInstruction
+        => (TurnLanguage?.Localizer ?? new Novior.MentorAgent.Abstractions.Core.MentorLocalizer(_options.Language)).Get("rag.cite");
 
     /// <summary>
     /// Whether a real knowledge base is behind this provider, or the no-op default that
@@ -258,8 +261,8 @@ internal sealed class RagContextProvider : AIContextProvider
         // live on rc.4: the chips showed whatever the retriever returned, so an answer that came
         // from a skill or from the model's own knowledge still carried three "sources" under it.
         // Sources the answer did not use are not sources.
-        // In the configured language, the one the model answers in (BUG-185).
-        instructions += "\n\n" + _citeInstruction;
+        // In the language of the turn, the one the model answers in (BUG-185).
+        instructions += "\n\n" + CiteInstruction;
 
         return ValueTask.FromResult(new AIContext { Instructions = instructions });
     }

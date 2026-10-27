@@ -286,6 +286,9 @@ public sealed class MemoryToolsTests
             o.UseMemoryContext = true;
             o.MemoryAutoCapture = false;
         });
+        // A user with every role: a turn that leaves an action out ends with a notice of its own, MANDATORY too (BUG-200).
+        withCapture.Auth.SignIn("ada", "Manager", "Admin");
+        withTool.Auth.SignIn("ada", "Manager", "Admin");
 
         await withCapture.RunTurnAsync("hello");
         await withTool.RunTurnAsync("hello");

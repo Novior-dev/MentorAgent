@@ -12,7 +12,7 @@
   <ItemGroup>
     <!-- MentorAgent does not bring a provider SDK: the application references the one it uses. -->
     <PackageReference Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
-    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,7 +28,7 @@
 
   <ItemGroup>
     <!-- The library from this repository. In your own application, reference the package instead:
-         <PackageReference Include="Novior.MentorAgent" Version="1.1.0" /> -->
+         <PackageReference Include="Novior.MentorAgent" Version="1.2.0" /> -->
     <ProjectReference Include="..\..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
   </ItemGroup>
 

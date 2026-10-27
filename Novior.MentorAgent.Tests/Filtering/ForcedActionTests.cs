@@ -283,24 +283,42 @@ public sealed class ForcedActionTests
         host.Get<TestOrderService>().Invoked.Should().Contain(nameof(TestOrderService.IssueRefundAsync));
     }
 
-    [Fact]
-    public async Task A_required_action_the_user_may_not_run_is_refused_before_any_banner()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_action_is_required_only_of_a_user_who_may_run_it(bool manager)
     {
-        // cancel_order needs the Manager role, which the anonymous user lacks. Forcing the call grants nothing:
-        // the role is checked before anyone is asked.
+        // BUG-201: cancel_order needs the Manager role. A user without it was still required to call it, and the gate
+        // then refused the call. For that user the action is now neither offered nor shown to the classifier, and a
+        // call the model makes anyway is refused before anyone is asked; a Manager is required to call it, and asked.
         const string cancel = "Annulla l'ordine 1001: è un duplicato";
         await using var host = Host();
+        if (manager) host.Auth.SignIn("ada", "Manager");
+        else host.Auth.SignIn("bob");
         SeedMatch(host, "cancel_order: Cancels an existing order", cancel);
         host.Chat!.Say("ACTION").CallTool("cancel_order", new { orderId = 1001, reason = "duplicato" })
-            .Say("Non hai i permessi per annullarlo.");
-        var banners = AnswerBanners(host, approve: true);
+            .Say("Non è stato annullato.");
+        var banners = AnswerBanners(host, approve: false);
 
         await host.RunTurnAsync(cancel);
 
-        ClassifierCalls(host).Single().SystemText.Should().Contain(
-            "- cancel_order: Cancels an existing order. Inputs: orderId (integer), reason (string).");
-        CoordinatorCalls(host)[0].ToolMode.Should().Be(ChatToolMode.RequireAny);
-        banners().Should().Be(0);
+        var first = CoordinatorCalls(host)[0];
+        if (manager)
+        {
+            ClassifierCalls(host).Single().SystemText.Should().Contain(
+                "- cancel_order: Cancels an existing order. Inputs: orderId (integer), reason (string).");
+            first.ToolMode.Should().Be(ChatToolMode.RequireAny);
+            first.ToolNames.Should().Contain("cancel_order");
+            banners().Should().Be(1, "the required call asks first");
+        }
+        else
+        {
+            ClassifierCalls(host).Should().NotContain(c => c.SystemText.Contains("cancel_order"),
+                "an action this user may not run is never one the message could require");
+            first.ToolMode.Should().NotBe(ChatToolMode.RequireAny);
+            first.ToolNames.Should().NotContain("cancel_order");
+            banners().Should().Be(0, "the role is checked before anyone is asked");
+        }
         host.Get<TestOrderService>().Invoked.Should().NotContain(i => i.StartsWith(nameof(TestOrderService.CancelOrderAsync)));
     }
 

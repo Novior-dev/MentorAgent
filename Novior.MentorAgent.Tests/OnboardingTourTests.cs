@@ -182,6 +182,79 @@ public sealed class OnboardingTourTests
         structured.LastPrompt.Should().Contain("/products");
     }
 
+    [Fact]
+    public async Task The_tour_is_told_only_the_actions_that_need_no_role()
+    {
+        // BUG-206: the tour is one for every visitor, and it suggested actions some of them may not run — an action
+        // that needs a role is not one to suggest to whoever reads it. In the test application cancel_order needs the
+        // Manager role and export_ledger the Admin role.
+        var options = BuildOptions();
+        options.ScanAssemblies = [typeof(Novior.MentorAgent.Tests.App.TestOrderService).Assembly];
+        var structured = new ScriptedStructured(Plan(
+            new MentorTourService.TourPlanStep { Title = "Orders", Body = "…", Url = "/orders" }));
+
+        await BuildService(options, structured).GetStepsAsync();
+
+        structured.LastPrompt.Should().Contain("Counts open orders").And.Contain("Issues a refund",
+            "an action that needs no role, with or without a confirmation, is still one to suggest");
+        structured.LastPrompt.Should().NotContain("Cancels an existing order").And.NotContain("Exports the order ledger");
+    }
+
+    [Fact]
+    public async Task A_visitor_who_stops_waiting_leaves_the_generated_tour_to_everyone_else()
+    {
+        // BUG-207: the generation ran on the first visitor's token. A visitor who closed the page while the model
+        // wrote — or a WASM client whose first load was cut short — cancelled the model call, the structured output
+        // came back empty, and the built-in tour, with no question to try, was kept for the life of the process.
+        var structured = new HeldStructured(Plan(
+            new MentorTourService.TourPlanStep { Title = "Orders", Body = "…", Url = "/orders", TryAsking = "Quanti ordini?" }));
+        var service = BuildService(BuildOptions(), structured);
+        using var leaving = new CancellationTokenSource();
+
+        var first = service.GetStepsAsync(leaving.Token);
+        await structured.Started.WaitAsync(TimeSpan.FromSeconds(10));
+        leaving.Cancel();
+        structured.Release();
+
+        var steps = await service.GetStepsAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        steps.Should().ContainSingle().Which.TryAsking.Should().Be("Quanti ordini?",
+            "the tour the model wrote, not the built-in one");
+        structured.Calls.Should().Be(1, "the generation the first visitor started is the one everyone gets");
+        await FluentActions.Awaiting(() => first).Should().ThrowAsync<OperationCanceledException>(
+            "the visitor who left only stopped waiting");
+    }
+
+    /// <summary>
+    /// A model call held until released, which a cancelled token ends as <c>MentorStructuredService</c> ends it: with
+    /// no result, the exception swallowed.
+    /// </summary>
+    private sealed class HeldStructured(object? plan) : IMentorStructured
+    {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _calls;
+
+        public Task Started => _started.Task;
+        public int Calls => _calls;
+        public void Release() => _release.TrySetResult();
+
+        public async Task<T?> GenerateAsync<T>(string prompt, string? instructions = null, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _calls);
+            _started.TrySetResult();
+            try
+            {
+                await _release.Task.WaitAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return default;
+            }
+            return plan is T typed ? typed : default;
+        }
+    }
+
     private sealed class CountingStructured(object? plan) : IMentorStructured
     {
         private int _calls;

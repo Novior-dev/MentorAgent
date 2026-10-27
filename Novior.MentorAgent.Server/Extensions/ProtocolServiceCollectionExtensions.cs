@@ -82,13 +82,13 @@ public static class ProtocolServiceCollectionExtensions
                     Version = "1.0",
                 };
             })
-            .WithHttpTransport()
+            // Stateful, as up to ModelContextProtocol 1.x: from 2.0 the transport is stateless by default, with no
+            // Mcp-Session-Id and no GET or DELETE on the endpoint, which its documented answers rely on.
+            .WithHttpTransport(t => t.Stateless = false)
+            // tools/list: the tools this caller may see, decided per request, less those the application's policies
+            // do not offer it (stories 311, 153).
             .WithListToolsHandler((ctx, ct) =>
-            {
-                var collection = ctx.Services!.GetRequiredService<MentorAgentMcpToolCollection>();
-                var tools = collection.GetTools().Select(t => t.ProtocolTool).ToList();
-                return new ValueTask<ListToolsResult>(new ListToolsResult { Tools = tools });
-            })
+                ctx.Services!.GetRequiredService<MentorMcpCallHandler>().ListAsync(ctx, ct))
             // tools/call carries the gates every other surface applies — the per-user rate limit, the
             // tool metrics and OnToolResult — and the role decision of THIS request (BUG-103, BUG-107).
             .WithCallToolHandler((ctx, ct) =>
@@ -125,21 +125,51 @@ public static class ProtocolServiceCollectionExtensions
         services.AddSingleton<MentorA2AServerRegistered>();
 
         // Registers the IAgentHandler + A2AServer infrastructure. This card is not the one served:
-        // MapMentorAgentA2A builds the full card (skills, interfaces, provider) when it maps.
+        // MapMentorAgentA2A builds the full card (skills, interfaces, provider) when it maps. Its
+        // capabilities still count: from A2A 1.0.0-preview3 the server refuses a streamed request
+        // ("Streaming is not supported by this agent") unless this card declares streaming, and a
+        // delegated turn is always streamed.
         var agentCard = new A2A.AgentCard
         {
-            Name        = o.AppName,
-            Description = string.IsNullOrEmpty(o.AppDescription)
-                              ? string.Empty : o.AppDescription,
-            Version     = o.AgentCard?.Version ?? "1.0.0",
+            Name         = o.AppName,
+            Description  = string.IsNullOrEmpty(o.AppDescription)
+                               ? string.Empty : o.AppDescription,
+            Version      = o.AgentCard?.Version ?? "1.0.0",
+            Capabilities = new A2A.AgentCapabilities { Streaming = true },
         };
 
         services.AddA2AAgent<MentorAgentA2AHandler>(agentCard);
+
+        // On tasks/cancel the SDK cancels the task's turn before it tells the handler, so the call in progress read
+        // session-ended: MentorAgent's request handler stops the turn as Stop first (BUG-199). MapMentorAgentA2A warns
+        // when a version of the SDK registers its handler so that it cannot be wrapped.
+        WrapA2ARequestHandler(services);
 
         // The caller of each task, from the request (BUG-131): a Blazor Server host serves A2A without
         // AddMentorAgentServer(), and there the host's provider throws outside a circuit.
         Novior.MentorAgent.Server.Auth.HttpContextMentorUser.Register(services);
         return services;
+    }
+
+    /// <summary>
+    /// Puts <see cref="MentorA2ARequestHandler"/> in front of the request handler <c>AddA2AAgent</c> registered: the same
+    /// singleton, built as the SDK builds it. Left as it is when the SDK registers it some other way.
+    /// </summary>
+    private static void WrapA2ARequestHandler(IServiceCollection services)
+    {
+        var sdk = services.LastOrDefault(d => d.ServiceType == typeof(A2A.IA2ARequestHandler) && !d.IsKeyedService);
+        if (sdk is not { Lifetime: ServiceLifetime.Singleton }) return;
+
+        services.Remove(sdk);
+        services.AddSingleton<A2A.IA2ARequestHandler>(sp =>
+        {
+            var inner = (A2A.IA2ARequestHandler)(sdk.ImplementationInstance
+                        ?? sdk.ImplementationFactory?.Invoke(sp)
+                        ?? ActivatorUtilities.CreateInstance(sp, sdk.ImplementationType!));
+            return sp.GetService<A2A.IAgentHandler>() is MentorAgentA2AHandler agent
+                ? new MentorA2ARequestHandler(inner, agent)
+                : inner;
+        });
     }
 
     /// <summary>The options as <c>AddMentorAgent</c> read them, or null when it has not run yet.</summary>

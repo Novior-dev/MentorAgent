@@ -25,6 +25,18 @@ namespace Novior.MentorAgent.Server.Mcp;
 /// tells the caller only "An error occurred" (BUG-101). A refused or unknown call is a result with
 /// <c>isError</c>.
 /// </para>
+///
+/// <para>
+/// Every decision about a tool the server knows reaches the action observers (story 180), and the audit line
+/// says why a call was refused: <c>denied-role</c>, <c>withheld</c> or <c>unknown</c>, which used to be
+/// <c>unknown</c> for all three. The caller is still told the same for all of them.
+/// </para>
+///
+/// <para>
+/// The application's <see cref="IMentorActionPolicy"/> instances decide here too (stories 311, 153): on
+/// <c>tools/list</c>, which tools each caller is offered; on <c>tools/call</c>, after the tool is found and before
+/// it runs, whether the call may run. Nobody can confirm a call here, so a policy's Confirm refuses it.
+/// </para>
 /// </summary>
 internal sealed class MentorMcpCallHandler(
     MentorAgentMcpToolCollection tools,
@@ -32,9 +44,44 @@ internal sealed class MentorMcpCallHandler(
     MentorMetrics metrics,
     IOptions<MentorOptions> options,
     ILogger<MentorMcpCallHandler> logger,
-    MentorTelemetry? telemetry = null)
+    IServiceProvider services,
+    MentorTelemetry? telemetry = null,
+    MentorActionDecisions? decisions = null,
+    MentorActionPolicies? policies = null,
+    Abstractions.Core.MentorLocalizer? localizer = null)
 {
     private readonly MentorOptions _options = options.Value;
+
+    /// <summary>What the caller reads for a call a policy wanted confirmed: nobody can confirm it here.</summary>
+    internal const string NobodyToConfirm =
+        "Not run: this action needs a person to confirm it, and a call to this MCP server has nobody to ask. " +
+        "Say that it has to be done from the application itself.";
+
+    /// <summary>
+    /// The <c>tools/list</c> of this request: the tools the caller may see, less those an <see cref="IMentorActionPolicy"/>
+    /// does not offer this caller.
+    /// </summary>
+    internal async ValueTask<ListToolsResult> ListAsync(
+        RequestContext<ListToolsRequestParams> context, CancellationToken cancellationToken)
+    {
+        // Resolved once for the request, as for a call: the same principal decides the roles and is the policies' user.
+        var rolePrincipal = tools.ResolveCaller();
+        var published = tools.GetTools(rolePrincipal);
+        if (policies is not { Any: true })
+            return new ListToolsResult { Tools = [.. published.Select(t => t.ProtocolTool)] };
+
+        await using var scope = RequestScope.For(context.Services, services);
+        var offered = new List<Tool>(published.Count);
+        foreach (var tool in published)
+        {
+            var name = tool.ProtocolTool.Name;
+            var request = PolicyRequest(MentorActionStage.Offer, name, tool.ProtocolTool.Description,
+                tools.Find(name, rolePrincipal).RequiredRoles, rolePrincipal ?? context.User,
+                context.Server?.SessionId, callId: null, arguments: null, scope.Services);
+            if (await policies.IsOfferedAsync(request, cancellationToken)) offered.Add(tool.ProtocolTool);
+        }
+        return new ListToolsResult { Tools = offered };
+    }
 
     internal async ValueTask<CallToolResult> HandleAsync(
         RequestContext<CallToolRequestParams> context, CancellationToken cancellationToken)
@@ -57,6 +104,9 @@ internal sealed class MentorMcpCallHandler(
             if (!allowed)
             {
                 Audit(name, caller, "rate-limited", started);
+                // A name the server does not know is the caller's text: only a known one is a decision.
+                if (decisions is { HasObservers: true } && tools.Find(name, rolePrincipal) is { Result: not MentorAgentMcpToolCollection.LookupResult.Unknown } known)
+                    Decide(context, known, name!, rolePrincipal, MentorActionOutcome.Denied, MentorActionReasons.RateLimited);
                 return Error(
                     $"Rate limit reached: at most {_options.RateLimitPerUser} tool calls every " +
                     $"{_options.RateLimitWindowSecs} s for this caller. Retry in " +
@@ -67,10 +117,24 @@ internal sealed class MentorMcpCallHandler(
         // A name the server does not list for this caller: a gated action it withholds, one only another
         // role may use, or one that never existed. The same words for all of them, so probing names reveals
         // nothing about gated actions (BUG-101).
-        var tool = tools.FindTool(name, rolePrincipal);
-        if (tool is null)
+        var lookup = tools.Find(name, rolePrincipal);
+        if (lookup.Tool is not { } tool)
         {
-            Audit(name, caller, "unknown", started);
+            Audit(name, caller, lookup.Result switch
+            {
+                MentorAgentMcpToolCollection.LookupResult.RoleMissing or
+                MentorAgentMcpToolCollection.LookupResult.LoginRequired => "denied-role",
+                MentorAgentMcpToolCollection.LookupResult.Withheld      => "withheld",
+                _                                                       => "unknown",
+            }, started);
+
+            if (lookup.Result != MentorAgentMcpToolCollection.LookupResult.Unknown)
+                Decide(context, lookup, name!, rolePrincipal, MentorActionOutcome.Denied, lookup.Result switch
+                {
+                    MentorAgentMcpToolCollection.LookupResult.RoleMissing   => MentorActionReasons.RoleMissing,
+                    MentorAgentMcpToolCollection.LookupResult.LoginRequired => MentorActionReasons.LoginRequired,
+                    _                                                       => MentorActionReasons.Withheld,
+                });
             return Error($"Unknown tool: '{name}'. This server does not offer it; tools/list names the tools it does.");
         }
 
@@ -80,18 +144,197 @@ internal sealed class MentorMcpCallHandler(
         // "mentoragent.tool" is a metric tag dashboards group by, not a namespace: keep it on a rename.
         telemetry?.ToolCalls.Add(1, new KeyValuePair<string, object?>("mentoragent.tool", tool.ProtocolTool.Name));
         using var activity = telemetry?.StartActivity($"mentor.mcp.tool.{tool.ProtocolTool.Name}");
+        var toolName = tool.ProtocolTool.Name;
+
+        // Stories 311, 153 — the application's policies, with the arguments, before the call runs. Allowed comes
+        // only once they let it through.
+        if (policies is { Any: true } && await RefusedByPoliciesAsync(context, lookup, toolName, rolePrincipal, caller,
+                started, activity, cancellationToken) is { } refused)
+            return refused;
+
+        Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Allowed, MentorActionReasons.Allowed, activity);
 
         var outcome = "failed";
         try
         {
             var result = await tool.InvokeAsync(context, cancellationToken);
             outcome = result.IsError == true ? "error" : "ok";
+            // The one error result this server gives is McpToolResultFunction's, when OnToolResult threw: the action
+            // ran and its result was withheld, as on the chat path. An action that throws arrives as an exception.
+            Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Executed,
+                result.IsError == true ? MentorActionReasons.ResultWithheld : MentorActionReasons.Completed, activity);
             return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The client cancelled the call (notifications/cancelled), or the session closed under it.
+            outcome = "cancelled";
+            Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Stopped, MentorActionReasons.Stop, activity);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Failed, MentorActionReasons.Exception,
+                activity, ex.GetType().FullName);
+            throw;
         }
         finally
         {
-            Audit(tool.ProtocolTool.Name, caller, outcome, started);
+            Audit(toolName, caller, outcome, started);
         }
+    }
+
+    /// <summary>
+    /// Asks the policies about the call. When they refuse it, the call gets its last decision and its audit line here,
+    /// and the result is what the caller reads; null when they let it through. A policy's Confirm refuses it as a
+    /// declared confirmation would: <c>nobody-to-confirm</c>, with the policy's reason in the decision's detail.
+    /// </summary>
+    private async ValueTask<CallToolResult?> RefusedByPoliciesAsync(RequestContext<CallToolRequestParams> context,
+        MentorAgentMcpToolCollection.Lookup lookup, string toolName, ClaimsPrincipal? rolePrincipal, string? caller,
+        long started, Activity? activity, CancellationToken cancellationToken)
+    {
+        PolicyCheck check;
+        await using (var scope = RequestScope.For(context.Services, services))
+        {
+            try
+            {
+                check = await policies!.CheckCallAsync(PolicyRequest(MentorActionStage.Call, toolName, lookup.Description,
+                    lookup.RequiredRoles, rolePrincipal ?? context.User, context.Server?.SessionId,
+                    context.JsonRpcRequest?.Id.ToString(), context.Params?.Arguments, scope.Services),
+                    allowedOnly: false, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Audit(toolName, caller, "cancelled", started);
+                Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Stopped, MentorActionReasons.Stop, activity);
+                throw;
+            }
+        }
+
+        (MentorActionOutcome Outcome, string Reason, string Audit, string Text)? refusal = check.Result switch
+        {
+            // The same words as for a role this caller lacks: probing names reveals nothing (BUG-101).
+            PolicyResult.NotAllowed => (MentorActionOutcome.Denied, MentorActionReasons.NotAuthorized, "denied-policy",
+                $"Unknown tool: '{toolName}'. This server does not offer it; tools/list names the tools it does."),
+            PolicyResult.Stop       => (MentorActionOutcome.Blocked, MentorActionReasons.Policy, "blocked",
+                string.Format(Text("action.stopped.rule", "Stopped by a rule: {0}"), check.Reason)),
+            PolicyResult.Confirm    => (MentorActionOutcome.Denied, MentorActionReasons.NobodyToConfirm, "nobody-to-confirm",
+                NobodyToConfirm),
+            PolicyResult.Failed     => (MentorActionOutcome.PolicyFailed, check.ReasonCode ?? MentorActionReasons.PolicyException,
+                "policy-failed", Text("action.stopped.rule.failed", "Stopped: the check before this action could not be completed.")),
+            _                       => null,
+        };
+        if (refusal is not { } r) return null;
+
+        Audit(toolName, caller, r.Audit, started);
+        Decide(context, lookup, toolName, rolePrincipal, r.Outcome, r.Reason, activity, check.ExceptionType,
+            detail: check.Result is PolicyResult.Stop or PolicyResult.Confirm ? check.Reason : null);
+        return Error(r.Text);
+    }
+
+    /// <summary>The localized text, in the language of the application, or the English one without a localizer.</summary>
+    private string Text(string key, string english) => localizer?.Get(key) ?? english;
+
+    /// <summary>What a policy is asked about a tool of this server.</summary>
+    private static MentorActionRequest PolicyRequest(MentorActionStage stage, string toolName, string? description,
+        string[] roles, ClaimsPrincipal? user, string? sessionId, string? callId,
+        IDictionary<string, System.Text.Json.JsonElement>? arguments, IServiceProvider scopeServices)
+        => new()
+        {
+            Stage         = stage,
+            ToolName      = toolName,
+            Description   = string.IsNullOrWhiteSpace(description) ? null : description,
+            Arguments     = stage == MentorActionStage.Offer ? null
+                : new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(
+                    arguments?.ToDictionary(a => a.Key, a => (object?)a.Value) ?? []),
+            User          = user?.Identity?.IsAuthenticated == true ? user : null,
+            Surface       = MentorActionSurface.Mcp,
+            SessionId     = sessionId is { Length: > 0 } ? "mcp#" + Fingerprint(sessionId) : null,
+            CallId        = callId,
+            RequiredRoles = roles,
+            Services      = scopeServices,
+        };
+
+    /// <summary>
+    /// The services of this request's scope, for the policies — never the application's root services (story 311):
+    /// the SDK's, which it creates for every request; the HTTP request's when it gives none; else a scope of the
+    /// call's own, closed after it.
+    /// </summary>
+    private sealed class RequestScope : IAsyncDisposable
+    {
+        private readonly AsyncServiceScope? _owned;
+
+        private RequestScope(IServiceProvider services, AsyncServiceScope? owned)
+        {
+            Services = services;
+            _owned   = owned;
+        }
+
+        internal IServiceProvider Services { get; }
+
+        internal static RequestScope For(IServiceProvider? requestServices, IServiceProvider root)
+        {
+            if (requestServices is not null && !ReferenceEquals(requestServices, root))
+                return new(requestServices, null);
+
+            if (root.GetService<IHttpContextAccessor>()?.HttpContext?.RequestServices is { } http && !ReferenceEquals(http, root))
+                return new(http, null);
+
+            var owned = root.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
+            return new(owned.ServiceProvider, owned);
+        }
+
+        public ValueTask DisposeAsync() => _owned?.DisposeAsync() ?? ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// One decision for the action observers, and on the call's span. The session is a fingerprint of the MCP
+    /// session id, never the id: a client sends that id to resume its session, and an audit trail would hand it
+    /// to whoever reads it.
+    /// </summary>
+    private void Decide(RequestContext<CallToolRequestParams> context, MentorAgentMcpToolCollection.Lookup lookup,
+        string toolName, ClaimsPrincipal? rolePrincipal, MentorActionOutcome outcome, string reason,
+        Activity? activity = null, string? exceptionType = null, string? detail = null)
+    {
+        var failed = outcome is MentorActionOutcome.Failed or MentorActionOutcome.PolicyFailed;
+        if (activity is not null)
+        {
+            activity.SetTag("mentoragent.tool", toolName);
+            activity.SetTag("mentoragent.tool.outcome", outcome switch
+            {
+                MentorActionOutcome.Executed     => "executed",
+                MentorActionOutcome.Failed       => "failed",
+                MentorActionOutcome.Stopped      => "stopped",
+                MentorActionOutcome.Denied       => "denied",
+                MentorActionOutcome.Blocked      => "blocked",
+                MentorActionOutcome.PolicyFailed => "policy-failed",
+                _                                => "allowed",
+            });
+            activity.SetTag("mentoragent.tool.reason", reason);
+            activity.SetTag("mentoragent.tool.confirmation", reason == MentorActionReasons.NobodyToConfirm ? "unavailable" : "none");
+            activity.SetTag("mentoragent.surface", "mcp");
+            if (failed)
+                activity.SetStatus(ActivityStatusCode.Error, exceptionType ?? reason);
+        }
+
+        if (decisions is not { HasObservers: true }) return;
+
+        var user = rolePrincipal ?? context.User;
+        decisions.Publish(new MentorActionDecision
+        {
+            Outcome       = outcome,
+            ReasonCode    = reason,
+            ToolName      = toolName,
+            DisplayName   = string.IsNullOrWhiteSpace(lookup.Description) ? toolName : lookup.Description,
+            Surface       = MentorActionSurface.Mcp,
+            SessionId     = context.Server?.SessionId is { Length: > 0 } session ? "mcp#" + Fingerprint(session) : null,
+            CallId        = context.JsonRpcRequest?.Id.ToString(),
+            User          = user?.Identity?.IsAuthenticated == true ? user : null,
+            RequiredRoles = lookup.RequiredRoles,
+            Timestamp     = decisions.Time.GetUtcNow(),
+            ExceptionType = failed ? exceptionType : null,
+            Detail        = detail,
+        });
     }
 
     /// <summary>

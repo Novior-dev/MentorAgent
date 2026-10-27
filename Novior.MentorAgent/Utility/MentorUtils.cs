@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using Novior.MentorAgent.Core;
 
 namespace Novior.MentorAgent.Utility;
 
@@ -98,11 +99,18 @@ internal static class MentorUtils
     /// a rule stated where the case actually occurs beats one sitting in a prompt block next to its
     /// own contradiction.
     /// </para>
+    ///
+    /// <para>
+    /// Every instruction in these results is in <paramref name="language"/> (<see cref="MentorPromptTexts"/>, story
+    /// 191); the keys and markers are the same in every language.
+    /// </para>
     /// </summary>
-    public static string ToolDeclined(string message)
-        => $"{{\"success\":false,{DeclinedMarker},\"message\":\"{EscapeJson(message)}\"," +
-           "\"instruction\":\"The user chose not to run this action in the confirmation dialog, so it did not run: " +
-           "nothing was checked and nothing changed. " + DeclinedRule + "\"}";
+    public static string ToolDeclined(string message, MentorLanguage language)
+    {
+        var texts = MentorPromptTexts.For(language);
+        return $"{{\"success\":false,{DeclinedMarker},\"message\":\"{EscapeJson(message)}\"," +
+               $"\"instruction\":\"{texts.Declined} {texts.DeclinedRule}\"}}";
+    }
 
     /// <summary>What marks a <see cref="ToolDeclined"/> result, for a caller that only sees it as text.</summary>
     internal const string DeclinedMarker = "\"declined_by_user\":true";
@@ -110,11 +118,9 @@ internal static class MentorUtils
     /// <summary>
     /// What the model does after a declined confirmation — the same words wherever the refusal reaches it: the
     /// tool result itself, or the result of a delegation in which a specialist's action was declined (BUG-144).
+    /// The delegation's result is English, like the rest of it, so this is the English rule.
     /// </summary>
-    internal const string DeclinedRule =
-        "Tell the user in one short sentence that you did not proceed. " +
-        "Do not retry, do not give or guess any other reason, do not describe the state of any record, " +
-        "and do not suggest alternatives.";
+    internal static string DeclinedRule => MentorPromptTexts.English.DeclinedRule;
 
     /// <summary>Whether a tool result is a <see cref="ToolDeclined"/> refusal.</summary>
     internal static bool IsDeclined(object? result)
@@ -133,9 +139,18 @@ internal static class MentorUtils
     /// reason as <see cref="ToolDeclined"/>: the user stopped the turn, they did not reject this
     /// particular action, and nothing here needs commenting on.
     /// </summary>
-    public static string ToolStopped(string message)
+    public static string ToolStopped(string message, MentorLanguage language)
         => $"{{\"success\":false,\"stopped_by_user\":true,\"message\":\"{EscapeJson(message)}\"," +
-           "\"instruction\":\"The user stopped the request. Do not continue, retry, or comment.\"}";
+           $"\"instruction\":\"{MentorPromptTexts.For(language).Stopped}\"}}";
+
+    /// <summary>
+    /// Returns <c>{"success":false,"confirmation_timed_out":true,…}</c> — nobody answered the confirmation within
+    /// <c>ConfirmationTimeout</c>, so the action did not run (story 176). Not a <see cref="ToolDeclined"/>: nobody chose
+    /// not to run it, and the model must not tell the user they did.
+    /// </summary>
+    internal static string ToolConfirmationTimedOut(string message, MentorLanguage language)
+        => $"{{\"success\":false,\"confirmation_timed_out\":true,\"message\":\"{EscapeJson(message)}\"," +
+           $"\"instruction\":\"{MentorPromptTexts.For(language).TimedOut}\"}}";
 
     /// <summary>
     /// The action ran, but its result cannot be handed on: <c>OnToolResult</c> threw, and a result the
@@ -143,10 +158,9 @@ internal static class MentorUtils
     /// <c>{"success":true</c> on purpose: a result read as a failure gets an action that already ran run
     /// again.
     /// </summary>
-    internal static string ToolRanResultWithheld(string message)
+    internal static string ToolRanResultWithheld(string message, MentorLanguage language)
         => $"{{\"success\":true,\"result_withheld\":true,\"message\":\"{EscapeJson(message)}\"," +
-           "\"instruction\":\"The action ran, but its result cannot be shown. Do not run it again: " +
-           "tell the user it was done and that its details are not available.\"}";
+           $"\"instruction\":\"{MentorPromptTexts.For(language).ResultWithheld}\"}}";
 
     /// <summary>
     /// The answer to an approval request an earlier turn left open in the conversation and that never ran
@@ -155,23 +169,20 @@ internal static class MentorUtils
     /// is told the action never ran and that the message to answer is the new one. Marked <c>not_run</c>, not
     /// <c>declined_by_user</c>: the rule for a confirmation the user has just answered does not apply to it.
     /// </summary>
-    public static string ToolLeftOpen(bool declined)
-        => "{\"success\":false,\"not_run\":true,\"instruction\":\"" +
-           (declined
-               ? "The user declined this action in an earlier request, and it never ran. "
-               : "This action waited for confirmation in an earlier request that was stopped, and it never ran. ") +
-           "Do not run it again and do not mention it: answer the user's latest message.\"}";
+    public static string ToolLeftOpen(bool declined, MentorLanguage language)
+    {
+        var texts = MentorPromptTexts.For(language);
+        return "{\"success\":false,\"not_run\":true,\"instruction\":\"" +
+               (declined ? texts.LeftOpenDeclined : texts.LeftOpenStopped) + "\"}";
+    }
 
     /// <summary>
     /// The answer to an approval request the user confirmed in an earlier request that then failed or was
     /// stopped before its result was recorded (BUG-116): the action may have run, so it is neither reported as
     /// done nor run a second time.
     /// </summary>
-    public static string ToolOutcomeUnknown()
-        => "{\"outcome_unknown\":true,\"instruction\":\"The user confirmed this action in an earlier request, " +
-           "but that request was interrupted before its result was recorded, so it may or may not have run. " +
-           "Do not run it again. Answer the user's latest message; if they ask about this action, say that its " +
-           "outcome is not known and suggest checking it in the application.\"}";
+    public static string ToolOutcomeUnknown(MentorLanguage language)
+        => "{\"outcome_unknown\":true,\"instruction\":\"" + MentorPromptTexts.For(language).OutcomeUnknown + "\"}";
 
     /// <summary>
     /// Returns <c>{"success":false,"error":"… not found. Available: …"}</c>.

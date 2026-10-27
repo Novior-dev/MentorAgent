@@ -28,18 +28,27 @@ public sealed class ExpenseActions(ExpenseStore store, DemoAuthenticationStatePr
             .Select(e => ExpenseRow.From(e, language))];
 
     [MentorAction(
-        Description = "Shows one expense claim as a card, with a button to open its page and, while it waits, one to approve it.",
+        Description = "Shows one expense claim as a card, with a button to open its page and, while it waits, one to " +
+                      "approve it for a manager or an administrator.",
         ReadOnly = true)]
-    public object ShowExpense([Description("The claim number, for example 1002")] int expenseId)
+    public MentorCard ShowExpense([Description("The claim number, for example 1002")] int expenseId)
     {
+        // Declared MentorCard: MentorAgent shows a card only from a method that returns one, and any other result
+        // stays text. A claim that does not exist is a card too, so the person sees it.
         if (store.Find(expenseId) is not { } e)
-            return $"There is no expense claim {expenseId}.";
+            return new MentorCard("expense")
+            {
+                Title = language.Pick($"There is no expense claim {expenseId}", $"Non c'è la nota spese {expenseId}"),
+                Accent = MentorCardAccent.Danger,
+            };
 
         var actions = new List<MentorCardAction>
         {
             new(language.Pick("Open", "Apri"), MentorCardActionKind.Navigate, $"/expenses/{e.Id}"),
         };
-        if (e.Status == ExpenseStatus.Submitted)
+        // The roles of approve_expense: shown to an employee, the button asked for an approval nobody would run, and
+        // the model offered it.
+        if (e.Status == ExpenseStatus.Submitted && users.Current.Role is DemoRoles.Manager or DemoRoles.Administrator)
             actions.Add(new(language.Pick("Approve", "Approva"), MentorCardActionKind.SendMessage,
                 language.Pick($"Approve expense {e.Id}.", $"Approva la nota spese {e.Id}.")));
 

@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -63,6 +64,28 @@ internal static class MentorCardReader
             // than losing the tool's answer.
             return null;
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="method"/> is declared to return cards: <see cref="MentorCard"/>, or a sequence of them,
+    /// directly or through a task. Only such a result is read for cards (BUG-212): a shape alone was enough, and a record
+    /// of the application's with a <c>kind</c>, a title and a link became a card, the link a button. A tool with no
+    /// method behind it, an MCP tool among them, makes no cards from JSON.
+    /// </summary>
+    public static bool DeclaresCards(MethodInfo? method)
+    {
+        var type = method?.ReturnType;
+        if (type is { IsGenericType: true } && (type.GetGenericTypeDefinition() == typeof(Task<>)
+                                                || type.GetGenericTypeDefinition() == typeof(ValueTask<>)))
+            type = type.GetGenericArguments()[0];
+        if (type is null) return false;
+
+        return typeof(MentorCard).IsAssignableFrom(type)
+               || type.GetInterfaces().Append(type).Any(i =>
+                      i.IsGenericType
+                      && (i.GetGenericTypeDefinition() == typeof(IEnumerable<>)
+                          || i.GetGenericTypeDefinition() == typeof(IAsyncEnumerable<>))
+                      && typeof(MentorCard).IsAssignableFrom(i.GetGenericArguments()[0]));
     }
 
     /// <summary><c>kind</c> is required and must be a non-empty string — that is what makes it a card.</summary>

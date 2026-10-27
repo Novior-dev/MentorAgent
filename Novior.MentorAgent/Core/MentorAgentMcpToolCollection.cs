@@ -41,14 +41,36 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
     /// <summary>1 once the withheld actions are named, so the startup report and the catalogue write it once.</summary>
     private int _withheldLogged;
 
-    /// <summary>A tool and the roles that may see it (empty: everybody).</summary>
-    private sealed record Candidate(McpServerTool Tool, string[] RequiredRoles);
+    /// <summary>A tool, the roles that may see it (empty: everybody), and the method it was built from.</summary>
+    private sealed record Candidate(McpServerTool Tool, string[] RequiredRoles, MethodInfo Method);
 
     private sealed record Catalogue(
         IReadOnlyList<Candidate> All,
         IReadOnlyList<McpServerTool> Ungated,
         IReadOnlyDictionary<string, Candidate[]> ByName,
-        bool HasRoleGated);
+        bool HasRoleGated,
+        IReadOnlyDictionary<string, Withheld> WithheldByName);
+
+    /// <summary>An action the server never publishes, by its tool name: for the log and the gate's decisions.</summary>
+    private sealed record Withheld(string[] RequiredRoles, string? Description);
+
+    /// <summary>Why a <c>tools/call</c> finds its tool or does not (story 180).</summary>
+    internal enum LookupResult
+    {
+        /// <summary>This caller may use it.</summary>
+        Found,
+        /// <summary>Published to callers who hold a role this one does not.</summary>
+        RoleMissing,
+        /// <summary>Published to callers who hold a role, and this one is not signed in.</summary>
+        LoginRequired,
+        /// <summary>Known, and never published: it asks for confirmation, a predicate keeps it back, or no resolver.</summary>
+        Withheld,
+        /// <summary>No action has that name.</summary>
+        Unknown,
+    }
+
+    /// <summary>What <see cref="Lookup"/> found.</summary>
+    internal readonly record struct Lookup(McpServerTool? Tool, LookupResult Result, string[] RequiredRoles, string? Description);
 
     public MentorAgentMcpToolCollection(
         MentorDiscoveryService discovery,
@@ -83,17 +105,18 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
     /// </para>
     /// </summary>
     public IReadOnlyList<McpServerTool> GetTools()
-        => _options.McpCallerPrincipal is null
-            ? _catalogue.Value.Ungated
-            : GetTools(ResolveCaller());
+        => GetTools(_options.McpCallerPrincipal is null ? null : ResolveCaller());
 
-    /// <summary>The tools <paramref name="caller"/> may see, by the one rule <see cref="IsPublishedTo"/>.</summary>
+    /// <summary>
+    /// The tools <paramref name="caller"/> may see, by the one rule <see cref="IsPublishedTo"/>, less those the host's
+    /// <see cref="MentorOptions.RequiresApproval"/> holds back now (<see cref="HeldBack"/>).
+    /// </summary>
     internal IReadOnlyList<McpServerTool> GetTools(System.Security.Claims.ClaimsPrincipal? caller)
     {
         var catalogue = _catalogue.Value;
-        if (!catalogue.HasRoleGated) return catalogue.Ungated;
+        if (!catalogue.HasRoleGated && _options.RequiresApproval is null) return catalogue.Ungated;
 
-        return [.. catalogue.All.Where(c => IsPublishedTo(c, caller)).Select(c => c.Tool)];
+        return [.. catalogue.All.Where(c => !HeldBack(c) && IsPublishedTo(c, caller)).Select(c => c.Tool)];
     }
 
     /// <summary>
@@ -106,9 +129,36 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
 
     /// <inheritdoc cref="FindTool(string?)"/>
     internal McpServerTool? FindTool(string? name, System.Security.Claims.ClaimsPrincipal? caller)
-        => name is not null && _catalogue.Value.ByName.TryGetValue(name, out var candidates)
-            ? candidates.FirstOrDefault(c => IsPublishedTo(c, caller))?.Tool
-            : null;
+        => Find(name, caller).Tool;
+
+    /// <summary>
+    /// The tool a <c>tools/call</c> names, as <see cref="FindTool(string?, System.Security.Claims.ClaimsPrincipal?)"/>,
+    /// and why it is not there when it is not. The caller is told the same for every case (BUG-101); the log and
+    /// the gate's decisions are not (story 180): a refusal for a missing role used to be written as "unknown".
+    /// </summary>
+    internal Lookup Find(string? name, System.Security.Claims.ClaimsPrincipal? caller)
+    {
+        if (name is null) return new(null, LookupResult.Unknown, [], null);
+
+        var catalogue = _catalogue.Value;
+        if (catalogue.ByName.TryGetValue(name, out var candidates))
+        {
+            var first = candidates[0];
+            if (HeldBack(first))
+                return new(null, LookupResult.Withheld, first.RequiredRoles, first.Tool.ProtocolTool.Description);
+
+            if (candidates.FirstOrDefault(c => IsPublishedTo(c, caller)) is { } candidate)
+                return new(candidate.Tool, LookupResult.Found, candidate.RequiredRoles, candidate.Tool.ProtocolTool.Description);
+
+            return new(null,
+                caller?.Identity?.IsAuthenticated == true ? LookupResult.RoleMissing : LookupResult.LoginRequired,
+                first.RequiredRoles, first.Tool.ProtocolTool.Description);
+        }
+
+        return catalogue.WithheldByName.TryGetValue(name, out var withheld)
+            ? new(null, LookupResult.Withheld, withheld.RequiredRoles, withheld.Description)
+            : new(null, LookupResult.Unknown, [], null);
+    }
 
     /// <summary>
     /// Whether <paramref name="caller"/> may see <paramref name="candidate"/>: an ungated action always;
@@ -170,13 +220,19 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
 
         var candidates = new List<Candidate>(methods.Count);
         var withheld = new List<string>();
+        var withheldByName = new Dictionary<string, Withheld>(StringComparer.Ordinal);
         var perCaller = new List<string>();
 
         foreach (var method in methods)
         {
-            if (WithheldReason(method, out var roleGatedForCallers) is { } reason)
-            {
+            // The report says what the predicate holds back now; the catalogue does not keep its answer, which is
+            // asked again for every list and every call (BUG-202).
+            if (WithheldReason(method, out _) is { } reason)
                 withheld.Add(reason);
+
+            if (WithheldReason(method, out var roleGatedForCallers, readPredicate: false) is not null)
+            {
+                withheldByName.TryAdd(method.ToolName, new Withheld([.. method.RequiredRoles], method.Description));
                 continue;
             }
 
@@ -197,7 +253,8 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
                 candidates.Add(new Candidate(
                     McpServerTool.Create(new Mcp.McpToolResultFunction(aiFunc, _options, _logger),
                         readOnly ? new McpServerToolCreateOptions { ReadOnly = true } : null),
-                    roleGatedForCallers ? [.. method.RequiredRoles] : []));
+                    roleGatedForCallers ? [.. method.RequiredRoles] : [],
+                    method.Method));
 
                 if (roleGatedForCallers)
                     perCaller.Add($"{method.ToolName} (roles: {string.Join(", ", method.RequiredRoles)})");
@@ -234,15 +291,17 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
             candidates,
             [.. candidates.Where(c => c.RequiredRoles.Length == 0).Select(c => c.Tool)],
             byName,
-            HasRoleGated: perCaller.Count > 0);
+            HasRoleGated: perCaller.Count > 0,
+            withheldByName);
     }
 
     /// <summary>
     /// Why <paramref name="method"/> is withheld from every MCP caller, or <see langword="null"/> when it is
     /// published: to everyone, or — <paramref name="roleGatedForCallers"/> — per request to the callers
-    /// that hold its role. One rule for the startup report and the catalogue.
+    /// that hold its role. One rule for the startup report and the catalogue; the catalogue leaves the
+    /// predicate out (<paramref name="readPredicate"/>), and <see cref="HeldBack"/> asks it per request.
     /// </summary>
-    private string? WithheldReason(MethodDiscoveryInfo method, out bool roleGatedForCallers)
+    private string? WithheldReason(MethodDiscoveryInfo method, out bool roleGatedForCallers, bool readPredicate = true)
     {
         // Fail closed on anything the author protected.
         //
@@ -261,7 +320,7 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
         // callers: the headless sample gates `update_stock` and `update_order_status` this way and
         // both were live on /mcp (BUG-035). How a host gated an action is not the remote caller's
         // business; that it is gated is.
-        var predicateGated = _options.RequiresApproval?.Invoke(method.ToolName) == true;
+        var predicateGated = readPredicate && _options.RequiresApproval?.Invoke(method.ToolName) == true;
 
         // ROADMAP #32 — an identity, not an override.
         //
@@ -286,6 +345,52 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
                 : predicateGated && !method.RequiresConfirmation
                     ? $"{method.ToolName} (RequiresApproval predicate)"
                     : $"{method.ToolName} (approval)";
+    }
+
+    /// <summary>
+    /// Whether the host's <see cref="MentorOptions.RequiresApproval"/> holds the action back now: asked for every list
+    /// and every call, never kept. The catalogue used to keep the answer it had when it was built, so an action the
+    /// predicate gated after startup stayed published, and ran for an unattended caller (BUG-202). A predicate that
+    /// throws holds it back.
+    /// </summary>
+    private bool HeldBack(Candidate candidate)
+    {
+        if (_options.RequiresApproval is not { } predicate) return false;
+
+        try
+        {
+            return predicate(candidate.Tool.ProtocolTool.Name);
+        }
+        catch (Exception ex)
+        {
+            // The type only: the predicate is the host's code.
+            _logger.LogWarning(
+                "[MentorAgent:MCP] RequiresApproval threw ({Type}) for '{Tool}' — withheld from this request.",
+                ex.GetType().Name, candidate.Tool.ProtocolTool.Name);
+            return true;
+        }
+    }
+
+    /// <summary>Set by <c>MapMentorAgentMcp</c>: the host serves the MCP endpoint.</summary>
+    internal bool Mapped { get; set; }
+
+    /// <summary>
+    /// How the server publishes <paramref name="method"/> now, by the rules of <c>tools/list</c>, for
+    /// <see cref="IMentorActionCatalog"/> (story 153): <see cref="MentorMcpExposure.NotServed"/> when the endpoint is
+    /// not mapped, or the method's class could not be resolved.
+    /// </summary>
+    internal MentorMcpExposure ExposureOf(MethodDiscoveryInfo method)
+    {
+        if (!Mapped) return MentorMcpExposure.NotServed;
+        if (WithheldReason(method, out _, readPredicate: false) is not null) return MentorMcpExposure.Withheld;
+
+        if (!_catalogue.Value.ByName.TryGetValue(method.ToolName, out var candidates)
+            || candidates.FirstOrDefault(c => c.Method == method.Method) is not { } candidate)
+            return MentorMcpExposure.NotServed;
+
+        return HeldBack(candidate) ? MentorMcpExposure.Withheld
+            : candidate.RequiredRoles.Length > 0 ? MentorMcpExposure.PublishedToRoles
+            : MentorMcpExposure.Published;
     }
 
     /// <summary>The warning that names the withheld actions, written once: at startup, or by the first catalogue.</summary>

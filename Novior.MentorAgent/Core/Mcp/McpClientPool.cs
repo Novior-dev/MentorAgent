@@ -69,9 +69,11 @@ internal sealed class McpClientPool(
 
         while (true)
         {
-            var entry = _entries.GetOrAdd(key, _ => new Entry(
+            // Whether this call made the entry, and so opens its session (BUG-198, below).
+            var mine = new Entry(
                 new Lazy<Task<IMcpSession>>(() => ConnectAsync(server), LazyThreadSafetyMode.ExecutionAndPublication),
-                _time.GetUtcNow()));
+                _time.GetUtcNow());
+            var entry = _entries.GetOrAdd(key, mine);
 
             // A failure that has served its time is replaced *before* anyone waits on it again,
             // otherwise the first caller after the window would only clear the entry and still be
@@ -105,6 +107,22 @@ internal sealed class McpClientPool(
             // Alive? A shared session outlives the visitor who opened it, so the answer can change
             // between one visitor and the next.
             if (await session.IsAliveAsync(ct)) return session;
+
+            // BUG-198: a session this call has just opened that does not answer ping is a failed connect.
+            // Reopened like a cached session that died, it was opened and dropped again in a loop, for as
+            // long as the caller waited, and the turn never reached the model.
+            if (ReferenceEquals(entry, mine))
+            {
+                logger.LogWarning(
+                    "[MentorAgent:MCP] '{Name}' connected but does not answer ping — left out for {Seconds} s, " +
+                    "like a server that is down.", server.Name, FailureBackoff.TotalSeconds);
+
+                var failure = new InvalidOperationException($"MCP server '{server.Name}' connected but does not answer ping.");
+                var failed = new Entry(new Lazy<Task<IMcpSession>>(Task.FromException<IMcpSession>(failure)), _time.GetUtcNow());
+                if (_entries.TryUpdate(key, failed, entry))
+                    await SafeDisposeAsync(session);
+                throw new McpSessionUnavailableException(server.Name, failure);
+            }
 
             logger.LogWarning(
                 "[MentorAgent:MCP] The shared session for '{Name}' is no longer answering — reconnecting.",

@@ -39,6 +39,17 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     private readonly MentorMetrics _metrics;
     private readonly Observability.MentorTelemetry? _telemetry;
     private readonly MentorLocalizer _localizer;
+
+    /// <summary>The language of this scope's turn (story 536), set at the start of every turn.</summary>
+    private MentorTurnLanguage? TurnLanguage => _turnLanguage ??= _sp.GetService<MentorTurnLanguage>();
+    private MentorTurnLanguage? _turnLanguage;
+
+    /// <summary>The language of the turn: of the tool results, the errors and the instructions sent for it.</summary>
+    private MentorLanguage Lang => TurnLanguage?.Current ?? _options.Language;
+
+    /// <summary>The widget's texts in the language of the turn.</summary>
+    private MentorLocalizer L => TurnLanguage?.Localizer ?? _localizer;
+
     private readonly IServiceProvider _sp;
     private readonly ILogger<MentorOrchestrator> _logger;
 
@@ -75,10 +86,31 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     private (AgentSession Session, List<(ToolApprovalRequestContent Request, string Result)> Requests)? _unansweredApprovals;
 
     /// <summary>The coordinator's model router, when installed — told when a user turn begins.</summary>
-    private RoutingChatClient? _router;
+    private Middleware.RoutingChatClient? _router;
 
     /// <summary>The coordinator's tool filter, when installed — told when a conversation starts over.</summary>
     private ToolFilterChatClient? _toolFilter;
+
+    /// <summary>
+    /// The forced read without semantic tool filtering (BUG-222), when installed — told when a user turn begins. Never
+    /// beside <see cref="_toolFilter"/>, which decides the read itself.
+    /// </summary>
+    private ForcedReadChatClient? _forcedRead;
+
+    /// <summary>
+    /// The coordinator's actions that need a role, with the roles the gate asks for (BUG-200). Empty when none does:
+    /// the user is then never read for it.
+    /// </summary>
+    private (string Name, string[] Roles)[] _roleGated = [];
+
+    /// <summary>The actions this turn's user may not run, by name, decided when the turn starts (BUG-200, BUG-201).</summary>
+    private IReadOnlySet<string> _leftOutThisTurn = new HashSet<string>();
+
+    /// <summary>What this turn's instructions end with when it left an action out; null when it left none out.</summary>
+    private string? _noticeThisTurn;
+
+    /// <summary>Path A: the client that leaves those actions out of the coordinator's requests, when one needs a role.</summary>
+    private RoleFilterChatClient? _roleFilter;
 
     /// <summary>
     /// The assistants a message may address, for the request classifier — read with the coordinator; null when
@@ -235,6 +267,9 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     {
         if (_currentCts is null) return;
 
+        // A cancelled turn is the user's Stop, not the session ending, for the gate's decisions (story 180).
+        if (Turn is { } turn) turn.StopRequested = true;
+
         // Notify the UI immediately — don't wait for the HTTP abort to propagate.
         // The background task will catch OperationCanceledException and exit cleanly.
         _stateService.NotifyStreamingCompleted();
@@ -246,7 +281,18 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     public Task SendMessageAsync(string userMessage, CancellationToken ct = default)
         => SendMessageAsync(userMessage, null, ct);
 
-    public async Task SendMessageAsync(string userMessage, IReadOnlyList<MentorAttachment>? attachments, CancellationToken ct = default)
+    public Task SendMessageAsync(string userMessage, IReadOnlyList<MentorAttachment>? attachments, CancellationToken ct = default)
+        => SendTurnAsync(userMessage, attachments, language: null, ct);
+
+    /// <summary>A turn in the language of its page, when it carries one (story 536): see <see cref="MentorTurnLanguage"/>.</summary>
+    public Task SendMessageAsync(MentorUserMessage message, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        return SendTurnAsync(message.Text, message.Attachments, message.Language, ct);
+    }
+
+    private async Task SendTurnAsync(
+        string userMessage, IReadOnlyList<MentorAttachment>? attachments, MentorLanguage? language, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(userMessage);
         // #13 — an image-only turn is valid (AF: a ChatMessage may carry image content with no text),
@@ -254,12 +300,16 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         if (string.IsNullOrWhiteSpace(userMessage) && attachments is not { Count: > 0 })
             throw new ArgumentException("The message cannot be empty unless at least one attachment is provided.", nameof(userMessage));
 
+        // The language of this turn, before anything is written for it: the page's, or MentorOptions.Language.
+        if (TurnLanguage is { } turnLanguage) turnLanguage.Requested = language;
+
         GroundingActivityInLastTurn = 0;
 
         // Create the CTS immediately so CancelCurrentRequest() works from the very first
         // await — including during EnsureInitializedAsync (MCP connections, first call).
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _currentCts = cts;
+        Turn?.BeginTurn(cts.Token);   // a new turn id for the gate's decisions (story 180)
 
         // Show the loading indicator immediately — before EnsureInitializedAsync, which can
         // take several seconds on the first call (MCP server connections, skills discovery).
@@ -298,7 +348,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         if (_options.MaxMessageLength > 0 && userMessage.Length > _options.MaxMessageLength)
         {
             _stateService.NotifyError(
-                string.Format(_localizer.Get("message.toolong"), _options.MaxMessageLength));
+                string.Format(L.Get("message.toolong"), _options.MaxMessageLength));
             _stateService.NotifyBusyChanged(false);
             _currentCts = null;
             return;
@@ -313,12 +363,16 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             {
                 var secs = _rateLimiter.GetSecondsUntilReset(userId);
                 _stateService.NotifyError(
-                    string.Format(_localizer.Get("ratelimit.error"), secs));
+                    string.Format(L.Get("ratelimit.error"), secs));
                 _stateService.NotifyBusyChanged(false);
                 _currentCts = null;
                 return;
             }
         }
+
+        // What the scope question is shown of the assistant's last reply: a short reply is judged with the question it
+        // answers. Read once, before this turn's reply replaces it.
+        var replyContext = _options.RefuseOutOfScope ? OutOfScopeRefusal.ReplyContext(_lastReply) : null;
 
         // -- 3. Input guardrail (#7) — built-in LLM check or custom InputGuardrail --
         // Runs when EnableSafetyCheck is on, OR whenever a custom InputGuardrail is configured.
@@ -331,7 +385,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             var check = await SafetyCheckRunner.RunAsync(
                 token => _options.InputGuardrail is { } customGuardrail
                     ? customGuardrail(userMessage, token)
-                    : CheckMessageSafetyAsync(userMessage, token),
+                    : CheckMessageSafetyAsync(userMessage, replyContext, token),
                 _options.SafetyCheckTimeout, cts.Token);
 
             // Stop: CancelCurrentRequest has already cleared the busy flag and closed the stream.
@@ -352,7 +406,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             {
                 _metrics.RecordGuardrailBlock();
                 _telemetry?.GuardrailBlocks.Add(1);
-                _stateService.NotifyError(_localizer.Get(refusal));
+                _stateService.NotifyError(L.Get(refusal));
                 _stateService.NotifyBusyChanged(false);
                 _currentCts = null;
                 return;
@@ -362,7 +416,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // RefuseOutOfScope on its own (safety check off) still needs the verdict: one small call.
         if (_options.RefuseOutOfScope)
         {
-            await EnsureRefusalVerdictAsync(userMessage, cts.Token);
+            await EnsureRefusalVerdictAsync(userMessage, replyContext, cts.Token);
 
             // Stop during the check: CancelCurrentRequest has already cleared the busy flag, as for the
             // safety check — the turn is over and nothing is counted.
@@ -378,12 +432,12 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // nothing more. A refusal, not an error: the user simply asked the wrong assistant. Counted as a
         // guardrail block, like a message the safety check refuses, so an operator can see how often it
         // fires (BUG-105: it counted nowhere).
-        if (_options.RefuseOutOfScope && IsRefused(userMessage))
+        if (_options.RefuseOutOfScope && IsRefused(userMessage, replyContext))
         {
             _logger.LogInformation("[MentorAgent] Out of scope — refused without calling the model.");
             _metrics.RecordGuardrailBlock();
             _telemetry?.GuardrailBlocks.Add(1);
-            _stateService.NotifyError(_localizer.Get("guardrail.outofscope"));
+            _stateService.NotifyError(L.Get("guardrail.outofscope"));
             _stateService.NotifyBusyChanged(false);
             _currentCts = null;
             return;
@@ -449,7 +503,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             _telemetry?.Errors.Add(1);
             var restoreLost = await RecoverStaleRestoreAsync(ex, turnSession);
             _stateService.NotifyError(restoreLost
-                ? _localizer.Get("session.restore.lost")
+                ? L.Get("session.restore.lost")
                 : FriendlyError(ex));   // Wave 3 #7 — mapped/custom error
             _stateService.NotifyStreamingCompleted();
             Fault(ex, "[MentorAgent] Error in Coordinator.", error: true);
@@ -473,8 +527,24 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     /// </summary>
     private async Task RunTurnAsync(ChatMessage userTurn, AgentSession session, CancellationToken ct)
     {
+        try
+        {
+            await RunApprovalRoundsAsync(userTurn, session, ct);
+        }
+        finally
+        {
+            EndConfirmedCallsLeft(ct);
+        }
+    }
+
+    private async Task RunApprovalRoundsAsync(ChatMessage userTurn, AgentSession session, CancellationToken ct)
+    {
+        // Before the filter is told the turn begins: what it ranks and requires is what this user may run (BUG-200,
+        // BUG-201). And before the requests left open are taken: a Stop while the user is read must not lose them.
+        await LeaveOutWhatTheUserMayNotRunAsync(ct);
+
         // One reporter per turn: hosted-tool citations and images accumulate across approval rounds.
-        var hosted = new HostedToolActivityReporter(_stateService, _localizer, _options, _logger, _hostedBudget);
+        var hosted = new HostedToolActivityReporter(_stateService, L, _options, _logger, _hostedBudget);
 
         // BUG-116: a request the previous turn left open in the stored conversation is answered first, with
         // the result recorded for it. Without the answer the conversation ends on an approval request with no
@@ -500,8 +570,9 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // The function-invoking client puts those answers AFTER the new message, so this turn's first request
         // ends on a tool result and would read as the continuation of the stopped turn: the filter and the
         // router are told a user turn begins, so they decide it on the new message.
-        _toolFilter?.BeginUserTurn(left?.Select(r => (r.Request.ToolCall as FunctionCallContent)?.Name)
-                                        .OfType<string>().ToList());
+        var leftOpenTools = left?.Select(r => (r.Request.ToolCall as FunctionCallContent)?.Name).OfType<string>().ToList();
+        _toolFilter?.BeginUserTurn(leftOpenTools);
+        _forcedRead?.BeginUserTurn(leftOpenTools);
         _router?.BeginUserTurn();
 
         List<ToolApprovalRequestContent> pending;
@@ -513,7 +584,11 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         {
             // A run that throws is not stored (the framework skips its history on failure), answers included:
             // the requests are still open. An in-stream error completed the run, which was stored.
-            if (left is not null) _unansweredApprovals = (session, left);
+            if (left is not null)
+            {
+                _unansweredApprovals = (session, left);
+                NoteLeftOpenFailure(left, ex);
+            }
             throw;
         }
 
@@ -530,11 +605,16 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                     if (answer is ToolApprovalResponseContent { Approved: true }) approved.Add(request);
                     answers.Add(answer);
                 }
+
+                // A Stop after the last answer: nothing is sent, so nothing runs, and the next turn closes the requests
+                // as never run. Sent, the answers went to a run that failed, and an action that never ran was told to
+                // the next turn as one that may have (BUG-204).
+                ct.ThrowIfCancellationRequested();
             }
             catch
             {
                 // Nothing was sent for this round: every request in it is still open, and none ran.
-                _unansweredApprovals = (session, [.. pending.Select(r => (r, MentorUtils.ToolLeftOpen(declined: false)))]);
+                _unansweredApprovals = (session, [.. pending.Select(r => (r, MentorUtils.ToolLeftOpen(declined: false, Lang)))]);
                 throw;
             }
 
@@ -549,8 +629,8 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 // of it was stored and the requests are open again. An approved action may already have run:
                 // it is never approved a second time.
                 _unansweredApprovals = (session, [.. answered.Select(r => (r, approved.Contains(r)
-                    ? MentorUtils.ToolOutcomeUnknown()
-                    : MentorUtils.ToolLeftOpen(declined: true)))]);
+                    ? MentorUtils.ToolOutcomeUnknown(Lang)
+                    : MentorUtils.ToolLeftOpen(declined: true, Lang)))]);
                 throw;
             }
         }
@@ -558,11 +638,48 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         if (pending.Count > 0)
         {
             // Never shown to the user, so never run: answered at the start of the next turn like the others.
-            _unansweredApprovals = (session, [.. pending.Select(r => (r, MentorUtils.ToolLeftOpen(declined: false)))]);
+            _unansweredApprovals = (session, [.. pending.Select(r => (r, MentorUtils.ToolLeftOpen(declined: false, Lang)))]);
             _logger.LogWarning(
                 "[MentorAgent] Native HITL: gave up after {Rounds} approval rounds with {Count} request(s) " +
                 "still pending — check for a tool the model keeps re-requesting.", MaxApprovalRounds, pending.Count);
         }
+    }
+
+    /// <summary>
+    /// The last failure of a turn that closed the requests an earlier turn left open, and whether it was logged as a
+    /// conversation that cannot go on (<see cref="NoteLeftOpenFailure"/>).
+    /// </summary>
+    private (List<(ToolApprovalRequestContent Request, string Result)> Requests, string Error, bool Logged)? _leftOpenFailure;
+
+    /// <summary>
+    /// BUG-225: a turn sends the answers to the requests left open first, and a failure keeps them for the next turn
+    /// (BUG-116). When the failure comes from the answers themselves — two of one id, before the ids were made unique
+    /// — every later turn fails the same way, and nothing said why. Two failures in a row with the same requests and
+    /// the same error are logged, once, as a conversation that may not go on. A Stop, a timeout and the errors of the
+    /// provider or of the network are not that.
+    /// </summary>
+    private void NoteLeftOpenFailure(List<(ToolApprovalRequestContent Request, string Result)> left, Exception ex)
+    {
+        if (ex is OperationCanceledException or TimeoutException or System.Net.Http.HttpRequestException
+            or System.ClientModel.ClientResultException)
+        {
+            _leftOpenFailure = null;
+            return;
+        }
+
+        var error = $"{ex.GetType().Name}: {ex.Message}";
+        if (_leftOpenFailure is not { } before || !ReferenceEquals(before.Requests, left) || before.Error != error)
+        {
+            _leftOpenFailure = (left, error, false);
+            return;
+        }
+
+        if (before.Logged) return;
+        _leftOpenFailure = before with { Logged = true };
+        _logger.LogError(
+            "[MentorAgent] Two turns in a row failed the same way while closing the approval requests an earlier " +
+            "turn left open ({Error}). The conversation may not be able to go on: if the next turn fails too, start a " +
+            "new conversation (ResetSessionAsync).", error);
     }
 
     /// <summary>
@@ -603,18 +720,35 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 ? new ChatClientAgentRunOptions(new ChatOptions { ToolMode = toolMode })
                 : null;
 
+        var leftOut = _leftOutThisTurn;
+        var notice  = _noticeThisTurn;
+        var providers = _pathBContextProviders is { Length: > 0 } p ? p : null;
         return new ChatClientAgentRunOptions(new ChatOptions
         {
-            Tools    = [.. tools],
+            // BUG-200: only what this turn's user may run.
+            Tools    = [.. tools.Where(t => t is not AIFunction f || !leftOut.Contains(f.Name))],
             ToolMode = toolMode,
         })
         {
             // Decorates the host agent's own chat client for this invocation only. The providers
             // add their instructions on top of whatever the agent already carries — the host's
-            // persona is untouched.
-            ChatClientFactory = _pathBContextProviders is { Length: > 0 } providers
-                ? inner => inner.AsBuilder().UseAIContextProviders(providers).Build()
-                : null,
+            // persona is untouched. The notice of an action left out comes after them, at the end
+            // (BUG-200): the client added first is the outer one.
+            ChatClientFactory = providers is null && notice is null
+                ? null
+                : inner =>
+                {
+                    var builder = inner.AsBuilder();
+                    if (providers is not null) builder = builder.UseAIContextProviders(providers);
+                    if (notice is not null)
+                        builder = builder.Use(c =>
+                        {
+                            var filter = new RoleFilterChatClient(c);
+                            filter.BeginUserTurn(leftOut, null, notice);
+                            return filter;
+                        });
+                    return builder.Build();
+                },
         };
     }
 
@@ -625,6 +759,9 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         var pending = new List<ToolApprovalRequestContent>();
         ErrorContent? providerError = null;
         var wroteText = false;
+        // The reply of this run: what it wrote after its last tool result. A sentence before a call stays when nothing
+        // follows it, as when the call waits for a person's approval: it is the last thing the user read.
+        var reply = new System.Text.StringBuilder();
 
         await foreach (var update in _coordinator!.RunStreamingAsync(
                            turn, session, BuildRunOptions(), cancellationToken: ct))
@@ -639,12 +776,12 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 {
                     case FunctionCallContent call:
                         if (!NonGroundingTools.Contains(call.Name)) GroundingActivityInLastTurn++;
-                        _logger.LogDebug("[MentorAgent] Tool call: {Name}", call.Name);
                         wroteText = false;   // a sentence before acting is not the answer
                         break;
                     case FunctionResultContent result:
                         _logger.LogDebug("[MentorAgent] Tool result: {CallId}", result.CallId);
                         wroteText = false;
+                        reply.Clear();
                         break;
                     case ToolApprovalRequestContent approval:
                         GroundingActivityInLastTurn++;
@@ -661,6 +798,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                         break;
                     case TextContent text:
                         if (!string.IsNullOrWhiteSpace(text.Text)) wroteText = true;
+                        reply.Append(text.Text);
                         break;
                     case TextReasoningContent or UsageContent:
                         break;
@@ -685,10 +823,13 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         if (providerError is not null && !wroteText && pending.Count == 0)
         {
             if (string.Equals(providerError.ErrorCode, "Refusal", StringComparison.OrdinalIgnoreCase))
-                _stateService.NotifyError(_localizer.Get("guardrail.blocked"));
+                _stateService.NotifyError(L.Get("guardrail.blocked"));
             else
                 throw new ProviderStreamException(providerError);
         }
+
+        // The conversation now ends on this run's reply. A turn that never ran, refused or failed, leaves the last one.
+        _lastReply = reply.ToString();
 
         return pending;
     }
@@ -697,6 +838,12 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     /// Shows the confirmation banner for one Agent Framework approval request and blocks until the user
     /// answers, then returns the <c>ToolApprovalResponseContent</c> to send back. The banner text and the
     /// client protocol are identical to the blocking flow, so no client needs to know which mode is active.
+    ///
+    /// <para>
+    /// The gate's decisions for the call (story 180) start here, in the order the middleware gives them in
+    /// Blocking mode: allowed, confirmation asked, the answer. A call that ends here — refused, rejected, stopped —
+    /// has its one <c>mentor.tool.*</c> span opened here; a confirmed one goes on through the middleware.
+    /// </para>
     /// </summary>
     private async Task<AIContent> AnswerApprovalAsync(ToolApprovalRequestContent request, CancellationToken ct)
     {
@@ -723,29 +870,72 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 break;
         }
 
+        var started = DateTimeOffset.UtcNow;
+        var local = request.ToolCall is FunctionCallContent;
+        var call = new Middleware.GateCall
+        {
+            ToolName  = toolName,
+            // The copy the coordinator offers: the one the check at invocation has (BUG-188). The check before the
+            // banner used to look the roles up by name.
+            Method    = local ? OfferedMethod(toolName) : null,
+            CallId    = request.ToolCall.CallId,
+            AgentKind = MentorAgentKind.Coordinator,
+            AgentName = _coordinator?.Name,
+        };
+
         // Role gate first, exactly as in the blocking flow. The framework stops before the call reaches
         // the middleware that checks roles, so without this a user who lacks the role is shown the
         // banner, approves, and is refused only afterwards — asked to approve something they can never
         // do (BUG-063). The refusal travels as the reason, so the model explains permission rather
         // than a choice the user never made. The invocation-time check remains the enforcing one.
-        if (request.ToolCall is FunctionCallContent
-            && await _uiMiddleware.CheckRolesAsync(toolName, ct) is { } roleError)
+        if (local)
         {
-            _logger.LogDebug("[MentorAgent] Native HITL: '{Tool}' refused before approval — {Reason}", toolName, roleError);
-            return request.CreateResponse(false, roleError);
+            var roles = await _uiMiddleware.CheckRolesAsync(toolName, ct, call.Method);
+            call.Roles = roles.Roles;
+            call.User  = roles.User;
+            if (!roles.Allowed)
+            {
+                // The same Warning as in Blocking mode: this was a Debug line only (story 180).
+                _uiMiddleware.LogDenied(toolName, roles);
+                EndBeforeTheGate(call, MentorActionOutcome.Denied, roles.Reason, started);
+                return request.CreateResponse(false, roles.Error!);
+            }
+        }
+
+        // Stories 311, 153 — the application's policies, after the roles and before the banner, as in the gate: a call
+        // they stop shows no banner. The approved call is asked about again when it comes back through the gate.
+        var policies = _uiMiddleware.Policies is { Any: true } registered
+                       && _uiMiddleware.IsApplicationAction(toolName, MentorAgentKind.Coordinator) ? registered : null;
+        call.User ??= policies is not null
+            ? await _uiMiddleware.ReadUserAsync(ct)
+            : await _uiMiddleware.ReadUserForDecisionsAsync(ct);
+
+        var policy = PolicyCheck.Proceed;
+        if (policies is not null)
+        {
+            var refused = await RefusedByPoliciesAsync(policies, request, call, arguments, allowedOnly: false, started, ct);
+            if (refused.Response is { } response) return response;
+            policy = refused.Check;
         }
 
         // A task from another agent has nobody to answer the banner: waiting held the task until the
-        // calling agent gave up. Refuse at once, with the reason for the model.
+        // calling agent gave up. Refuse at once, with the reason for the model — before Allowed, as in Blocking mode
+        // and on the MCP server: Denied alone.
         if (_sp.GetService<MentorTurnOrigin>()?.FromAnotherAgent == true)
         {
             _logger.LogInformation(
                 "[MentorAgent:A2A] Native HITL: '{Tool}' needs confirmation; a task from another agent has nobody to ask — not run.",
                 toolName);
-            return request.CreateResponse(false, MentorTurnOrigin.NobodyToConfirm);
+            call.Confirmation = "unavailable";
+            EndBeforeTheGate(call, MentorActionOutcome.Denied, MentorActionReasons.NobodyToConfirm, started,
+                detail: policy.Reason);
+            return request.CreateResponse(false, MentorPromptTexts.For(Lang).NobodyToConfirm);
         }
 
-        var message = _confirmations.BuildMessage(toolName, arguments, _sp);
+        _uiMiddleware.Decide(call, MentorActionOutcome.Allowed, MentorActionReasons.Allowed);
+
+        // The copy offered, as in Blocking mode: by name, the text was the first copy's, built or not (BUG-208).
+        var message = _confirmations.BuildMessage(toolName, arguments, _sp, call.Method);
 
         var actionId = Guid.NewGuid();
         var req = new ConfirmationRequest
@@ -756,6 +946,11 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             Message  = server is null ? message : $"{message} · {server}",
         };
 
+        call.ConfirmationId = actionId;
+        call.Confirmation   = "requested";
+        _uiMiddleware.Decide(call, MentorActionOutcome.ConfirmationRequested, MentorActionReasons.Operator,
+            detail: policy.Reason);
+
         // The run has already ended, so the middleware flipped busy off and committed the streamed
         // text. Turn it back on while the human decides: the widget then keeps the Stop button and a
         // disabled composer, exactly as in the blocking flow.
@@ -764,15 +959,128 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
         _logger.LogDebug("[MentorAgent] Native HITL: approval requested for '{Tool}' (ActionId={Id}).", toolName, actionId);
 
-        var approved = await _approvalStore.WaitForConfirmationAsync(actionId, ct);
+        MentorApprovalAnswer answer;
+        try
+        {
+            answer = _approvalStore is MentorStateService state
+                ? await state.WaitForAnswerAsync(actionId, _options.ConfirmationTimeout, ct)
+                : new(await _approvalStore.WaitForConfirmationAsync(actionId, ct), null, DateTimeOffset.UtcNow);
+        }
+        catch (OperationCanceledException)
+        {
+            // Logged as in Blocking mode, where Native wrote nothing (story 180).
+            _logger.LogDebug(
+                "[MentorAgent] Native HITL: confirmation for '{Tool}' was cancelled (Stop pressed, or the connection or circuit closed).",
+                toolName);
+            EndBeforeTheGate(call, MentorActionOutcome.Stopped, Turn?.StopReason ?? MentorActionReasons.Stop, started);
+            throw;
+        }
+
+        // Story 176 — nobody answered within ConfirmationTimeout: rejected, and told as a rejection nobody gave.
+        if (answer.TimedOut)
+        {
+            _uiMiddleware.LogConfirmationTimedOut(toolName);
+            call.Confirmation = "timed-out";
+            EndBeforeTheGate(call, MentorActionOutcome.Rejected, MentorActionReasons.ConfirmationTimeout, started, answer.At);
+            return request.CreateResponse(false, MentorUtils.ToolConfirmationTimedOut(L.Get("confirm.timeout"), Lang));
+        }
 
         _logger.LogDebug("[MentorAgent] Native HITL: '{Tool}' {Verdict} by the user.",
-            toolName, approved ? "approved" : "rejected");
+            toolName, answer.Approved ? "approved" : "rejected");
+
+        if (answer.Approved)
+        {
+            call.Confirmation = "confirmed";
+            // Not with the turn's token: the answer has to be recorded even when Stop follows it (story 177).
+            call.ConfirmedBy  = answer.By ?? (call.User ??= await _uiMiddleware.ReadUserAsync(CancellationToken.None));
+            call.ConfirmedAt  = answer.At;
+            _uiMiddleware.Decide(call, MentorActionOutcome.Confirmed, MentorActionReasons.Operator,
+                confirmedBy: call.ConfirmedBy, at: answer.At);
+
+            // The approved call comes back through the gate, which runs it and gives the rest of its decisions.
+            // A provider-side MCP call runs at the provider: the confirmation is the last decision it gets here,
+            // once the policies still allow it, as the gate asks them again for a local one.
+            if (local) Turn?.Confirmed(call);
+            else if (policies is not null
+                     && (await RefusedByPoliciesAsync(policies, request, call, arguments, allowedOnly: true, started, ct))
+                         .Response is { } refusedAfter)
+                return refusedAfter;
+        }
+        else
+        {
+            call.Confirmation = "rejected";
+            EndBeforeTheGate(call, MentorActionOutcome.Rejected, MentorActionReasons.Operator, started, answer.At);
+        }
 
         // AF carries an optional reason back to the model alongside the verdict: the same result the Blocking
         // flow gives (BUG-031, BUG-115) — the user's decision, marked as such, with the instruction that belongs
         // to it — not a bare localized sentence the model has to interpret.
-        return request.CreateResponse(approved, approved ? null! : MentorUtils.ToolDeclined(_localizer.Get("confirm.denied")));
+        return request.CreateResponse(answer.Approved, answer.Approved ? null! : MentorUtils.ToolDeclined(L.Get("confirm.denied"), Lang));
+    }
+
+    /// <summary>The turn the gate's decisions belong to (story 180).</summary>
+    private MentorTurnContext? Turn => _turnContext ??= _sp.GetService<MentorTurnContext>();
+    private MentorTurnContext? _turnContext;
+
+    /// <summary>The method of the function the coordinator offers under <paramref name="toolName"/>: one per name (BUG-195).</summary>
+    private MethodInfo? OfferedMethod(string toolName)
+        => _warmTools?.OfType<AIFunction>().FirstOrDefault(t => t.Name == toolName)?.UnderlyingMethod;
+
+    /// <summary>
+    /// Asks the policies about a call the framework stopped for (stories 311, 153). When they refuse it, the call
+    /// gets its last decision here, and the response refuses it with what the model reads; a Stop meanwhile ends it
+    /// as the banner's wait does.
+    /// </summary>
+    private async Task<(PolicyCheck Check, AIContent? Response)> RefusedByPoliciesAsync(
+        MentorActionPolicies policies, ToolApprovalRequestContent request, Middleware.GateCall call,
+        IEnumerable<KeyValuePair<string, object?>>? arguments, bool allowedOnly, DateTimeOffset started, CancellationToken ct)
+    {
+        PolicyCheck check;
+        try
+        {
+            var description = _warmTools?.OfType<AIFunction>().FirstOrDefault(t => t.Name == call.ToolName)?.Description;
+            check = await policies.CheckCallAsync(
+                _uiMiddleware.PolicyRequest(call, arguments, description, requiresConfirmation: true), allowedOnly, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            EndBeforeTheGate(call, MentorActionOutcome.Stopped, Turn?.StopReason ?? MentorActionReasons.Stop, started);
+            throw;
+        }
+
+        if (_uiMiddleware.PolicyRefusal(call, check) is not { } text) return (check, null);
+
+        EndBeforeTheGate(call, Middleware.MentorAgentUIMiddleware.PolicyOutcome(check.Result),
+            check.ReasonCode ?? MentorActionReasons.Policy, started,
+            detail: check.Result == PolicyResult.Stop ? check.Reason : null, exceptionType: check.ExceptionType);
+        return (check, request.CreateResponse(false, text));
+    }
+
+    /// <summary>
+    /// The last decision of a call that never reaches the gate, with its one span, opened from when the request
+    /// arrived: in Blocking mode the middleware's span covers the same wait.
+    /// </summary>
+    private void EndBeforeTheGate(Middleware.GateCall call, MentorActionOutcome outcome, string reason,
+        DateTimeOffset started, DateTimeOffset? at = null, string? detail = null, string? exceptionType = null)
+    {
+        using var span = _telemetry?.ActivitySource.StartActivity(
+            $"mentor.tool.{call.ToolName}", System.Diagnostics.ActivityKind.Internal,
+            default(System.Diagnostics.ActivityContext), startTime: started);
+        call.Span = span;
+        _uiMiddleware.Decide(call, outcome, reason, at: at, exceptionType: exceptionType, detail: detail);
+        call.Span = null;
+    }
+
+    /// <summary>
+    /// Every call the user confirmed that the run never brought to the gate — it failed or was stopped after the
+    /// answers were sent — gets its last decision here, so each confirmation ends in exactly one outcome.
+    /// </summary>
+    private void EndConfirmedCallsLeft(CancellationToken ct)
+    {
+        if (Turn is not { } turn) return;
+        foreach (var call in turn.TakeConfirmedLeft())
+            EndBeforeTheGate(call, MentorActionOutcome.Stopped,
+                ct.IsCancellationRequested ? turn.StopReason : MentorActionReasons.TurnEnded, DateTimeOffset.UtcNow);
     }
 
     /// <summary>
@@ -844,7 +1152,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         if (_options.OnException?.Invoke(ex) is { } custom && !string.IsNullOrWhiteSpace(custom))
             return custom;
 
-        return ProviderErrorClassifier.Describe(ex, _localizer);
+        return ProviderErrorClassifier.Describe(ex, L);
     }
 
     public async Task ResetSessionAsync(CancellationToken ct = default)
@@ -862,6 +1170,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
         await _sessionManager.ResetAsync(_coordinator!, ct);
         _toolFilter?.ForgetPreviousTurn();
+        _lastReply = null;
         _ragContextProvider.ForgetConversation();
 
         // One line per reset, on every transport (widget, hub, host code): without it "the assistant
@@ -901,6 +1210,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
         // A new conversation, like a reset: nothing from the failed message travels into it.
         _toolFilter?.ForgetPreviousTurn();
+        _lastReply = null;
         _unansweredApprovals = null;
 
         _logger.LogWarning(
@@ -922,7 +1232,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     private bool SaysTheConversationIsUnknown(Exception ex, int status)
     {
         if (status is not (400 or 404)) return false;
-        if (ProviderErrorClassifier.Describe(ex, _localizer) != _localizer.Get("error.generic")) return false;
+        if (ProviderErrorClassifier.Describe(ex, L) != L.Get("error.generic")) return false;
 
         for (var e = ex; e is not null; e = e.InnerException)
         {
@@ -1039,6 +1349,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         var left = OpenApprovalsIn(snapshot);
         await _sessionManager.RestoreSessionAsync(_coordinator!, snapshot, ct);
         _toolFilter?.ForgetPreviousTurn();
+        _lastReply = null;
         _ragContextProvider.ForgetConversation();
 
         // BUG-187: the restored conversation's open requests are answered on its first turn, as they would have
@@ -1227,13 +1538,16 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             return [];
         }
 
-        var gated = BuildLevel1Tools(discovery)
-            .Select(t => Middleware.GatedAIFunction.Wrap(t, _uiMiddleware))
+        var gated = OneToolPerName.Keep(BuildLevel1Tools(discovery), "An agent of an IMentorAgentSource", BuildLog)
+            .Select(t => Middleware.GatedAIFunction.Wrap(t, _uiMiddleware, MentorAgentKind.AgentSource))
             .OfType<AIFunction>()
             .ToList();
 
-        // The metered client: an agent a source builds makes billed calls like any other (BUG-077).
-        var context = new MentorAgentSourceContext(GetSpecialistChatClient() ?? _options.ChatClient, gated);
+        // The metered client: an agent a source builds makes billed calls like any other (BUG-077). Offered only the
+        // tools this turn's user may run, as the coordinator is (BUG-205).
+        var context = new MentorAgentSourceContext(
+            Middleware.AgentRoleFilterChatClient.For(GetSpecialistChatClient() ?? _options.ChatClient, gated, _uiMiddleware),
+            gated);
         var agents = new List<AIAgent>();
 
         foreach (var source in sources)
@@ -1262,6 +1576,15 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     {
         var tools = BuildAllTools(discovery);
             _warmTools = tools;   // kept for WarmUpAtStartup (C3)
+
+        // BUG-200: the roles of each tool the coordinator offers, as the gate reads them for the call — the offered
+        // copy's method (BUG-188), on both paths.
+        _roleGated =
+        [
+            .. tools.OfType<AIFunction>()
+                .Select(f => (f.Name, Roles: _uiMiddleware.GetRequiredRoles(f.Name, f.UnderlyingMethod)))
+                .Where(g => g.Roles.Length > 0),
+        ];
 
         AIAgent baseCoordinator;
 
@@ -1360,7 +1683,20 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             var uiActionsLogger = loggerFactory.CreateLogger<UIActionsMiddleware>();
 
             // Pipeline (model-ward → out): raw → [routing] → [OTel] → [compaction ← copies] → token counter → UI actions → [tool filter]
-            IChatClient pipeline = _options.ChatClient;
+            // SessionContextPlacement.LastUserMessage: the context of each request goes at the start of the user's last
+            // message, on the coordinator's own provider clients — wrappers of this pipeline, never the host's ChatClient,
+            // which the classifiers, memory extraction, the specialists and the team members use too.
+            var sessionContext = SessionContextInTurn();
+            IChatClient Coordinators(IChatClient client)
+            {
+                // BUG-225: next to the provider, so that every wrapper above it, and the function-invoking client, see
+                // each call of a response under an id of its own.
+                client = UniqueCallIds(client);
+                return sessionContext is null
+                    ? client
+                    : new SessionContextChatClient(client, sessionContext, loggerFactory.CreateLogger<SessionContextChatClient>());
+            }
+            IChatClient pipeline = Coordinators(_options.ChatClient);
 
             // Wave 4 #9 — meter the embedding model so its tokens/latency reach the per-model dashboard.
             // Wrap the shared generator once (idempotent) so every consumer — tool filtering, RAG, memory,
@@ -1399,14 +1735,16 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
                 if (canRoute)
                 {
-                    pipeline = _router = new RoutingChatClient(
-                        _options.ChatClient, _options.StrongChatClient, strategy,
-                        loggerFactory.CreateLogger<RoutingChatClient>(),
+                    pipeline = _router = new Middleware.RoutingChatClient(
+                        pipeline, Coordinators(_options.StrongChatClient), strategy,
+                        loggerFactory.CreateLogger<Middleware.RoutingChatClient>(),
                         custom: custom,
                         embeddings: _options.EmbeddingGenerator,
                         exemplars: _options.RoutingComplexExemplars,
                         threshold: _options.RoutingThreshold,
-                        classifier: _options.RoutingClassifierClient,
+                        // The cheap model is the classifier unless the host gave one: the host's own client, never
+                        // the coordinator's wrapper that adds the session context.
+                        classifier: _options.RoutingClassifierClient ?? _options.ChatClient,
                         exemplarCache: _sp.GetService<MentorEmbeddingCache>(),
                         queryEmbedding: _sp.GetService<TurnQueryEmbedding>(),
                         faults: _sp.GetService<TurnFaultLog>());
@@ -1566,11 +1904,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                     forcibleAction,
                     navigationTool,
                     forcing ? ClassifyRequestAsync : null,
-                    // The ways out of a forced read or action when the request was meant for another assistant:
-                    // the specialists, remote and declarative agents behind route_to_specialist, and the teams.
-                    forcing ? new HashSet<string>(
-                        ["route_to_specialist", .. discovery.Level3Teams.Select(t => MentorUtils.ToSnakeCase(t.Attribute.Name))],
-                        StringComparer.OrdinalIgnoreCase) : null);
+                    forcing ? WaysOut(discovery) : null);
 
                 if (forcibleRead is not null)
                     BuildLog.LogInformation(
@@ -1612,6 +1946,23 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
             }
 
+            // BUG-222 — the read was required inside the semantic filter only, and a host without an embedding model got
+            // nothing from the option: the demo, which has none, answered "Which expenses are still waiting for approval?"
+            // in Italian with a list the model made up, about one time in three. Where the filter is not installed the same
+            // classifier decides the same read, among every declared read the user may run: no ranking chose among them.
+            if (!(_options.EnableToolFiltering && _options.EmbeddingGenerator is not null)
+                && _options.RequireLookupForRecordQuestions
+                && IsForcibleRead(discovery) is { } everyRead)
+            {
+                _otherAssistantNames = [.. OtherAssistantNames(discovery)];
+                pipeline = _forcedRead = new ForcedReadChatClient(
+                    pipeline, everyRead, ClassifyRequestAsync, WaysOut(discovery),
+                    loggerFactory.CreateLogger<ForcedReadChatClient>());
+                BuildLog.LogInformation(
+                    "[MentorAgent] Questions about a value of the records are answered after a read (RequireLookupForRecordQuestions), " +
+                    "chosen among every declared read: there is no semantic tool filtering to select among them.");
+            }
+
             // Fail-open, loudly. Every hosted-tool cost control lives inside ToolFilterChatClient, which
             // is only installed when semantic tool filtering is available. A control that is switched on
             // but never runs is worse than one that is off: it buys confidence and delivers nothing, so
@@ -1642,20 +1993,13 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                     "[MentorAgent] Hosted-tool budget: {Max} call(s) per session, then they stop being declared.",
                     _options.MaxHostedToolCallsPerSession);
 
-            // The forced calls run inside the semantic tool filter: a switch that is on and never runs is worse
-            // than one that is off.
-            if (!_options.EnableToolFiltering || _options.EmbeddingGenerator is null)
-            {
-                var missing = !_options.EnableToolFiltering ? "options.EnableToolFiltering is off" : "no EmbeddingGenerator is configured";
-                if (_options.RequireLookupForRecordQuestions)
-                    _logger.LogWarning(
-                        "[MentorAgent] RequireLookupForRecordQuestions is on but {Missing}, and it runs inside the semantic " +
-                        "tool filter — it has no effect.", missing);
-                if (_options.RequireActionForChangeRequests)
-                    _logger.LogWarning(
-                        "[MentorAgent] RequireActionForChangeRequests is on but {Missing}, and it runs inside the semantic " +
-                        "tool filter — it has no effect.", missing);
-            }
+            // The forced actions and pages run inside the semantic tool filter: a switch that is on and never runs is
+            // worse than one that is off. The forced read runs without it (above).
+            if ((!_options.EnableToolFiltering || _options.EmbeddingGenerator is null) && _options.RequireActionForChangeRequests)
+                _logger.LogWarning(
+                    "[MentorAgent] RequireActionForChangeRequests is on but {Missing}, and it runs inside the semantic " +
+                    "tool filter — it has no effect.",
+                    !_options.EnableToolFiltering ? "options.EnableToolFiltering is off" : "no EmbeddingGenerator is configured");
 
             // Memory relevance ranking is also semantic-only (embedding cosine). Without an
             // embedding model it silently uses recency (last-N); warn so the misconfig is visible.
@@ -1673,6 +2017,12 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 BuildLog.LogInformation(
                     "[MentorAgent] Reliable memory auto-capture active (post-turn extraction; remember tool omitted).");
 
+            // BUG-200, BUG-201 — the actions the user may not run are left out of every request, outside the tool
+            // filter, so it ranks, keeps and requires only the others. Only when an action needs a role, or the
+            // application's policies may leave one out (stories 311, 153).
+            if (_roleGated.Length > 0 || _uiMiddleware.Policies is { Any: true })
+                pipeline = _roleFilter = new RoleFilterChatClient(pipeline);
+
             // Wave 3 #7 — public extension point: let the app add its own DelegatingChatClient /
             // AF middleware outermost (logging, caching, extra guardrails) via the builder.
             // Built with the host's services: MEAI's UseLogging (the READMEs' own example), caching
@@ -1681,12 +2031,25 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             if (_options.ConfigureChatClientPipeline is { } configurePipeline)
                 pipeline = configurePipeline(pipeline.AsBuilder()).Build(_sp);
 
+            // Story 536 — a turn in another language than the one the instructions are built in is sent the builder's
+            // own instructions for that language, kept per session and language. Outermost: the swap compares the
+            // instructions with the ones built here, so it comes before the role filter rewrites the count of the
+            // actions, and before any middleware of the host could change them.
+            var builtLanguage = _options.Language;
+            var externalAgents = _externalAgents;
+            var offerRemoteAgents = _offerRemoteAgents;
+            var instructions = _promptBuilder.BuildCoordinatorInstructions(discovery, builtLanguage, externalAgents, offerRemoteAgents);
+            if (TurnLanguage is { } turnLanguage)
+                pipeline = new TurnLanguageChatClient(pipeline, turnLanguage, builtLanguage, instructions,
+                    language => _promptBuilder.BuildCoordinatorInstructions(discovery, language, externalAgents, offerRemoteAgents),
+                    "main_coordinator", _logger);
+
             baseCoordinator = pipeline.AsAIAgent(new ChatClientAgentOptions
             {
                 Name = "main_coordinator",
                 ChatOptions = new ChatOptions
                 {
-                    Instructions = _promptBuilder.BuildCoordinatorInstructions(discovery, _externalAgents, _offerRemoteAgents),
+                    Instructions = instructions,
                     Tools        = tools,
                     ToolMode     = ChatToolMode.Auto,
                 },
@@ -1728,6 +2091,11 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             // nothing of theirs is replaced. What is deliberately NOT applied is MentorAgent's own
             // coordinator prompt: on Path B the agent's persona is the host's to write.
             _pathBContextProviders = BuildContextProviders();
+
+            if (_options.SessionContextPlacement == MentorSessionContextPlacement.LastUserMessage)
+                _logger.LogWarning(
+                    "[MentorAgent] SessionContextPlacement is LastUserMessage, but the coordinator is a pre-built Agent " +
+                    "(Path B): the context of each request stays at the end of the instructions.");
 
             BuildLog.LogInformation("[MentorAgent] Coordinator built via pre-built AIAgent: {Type}",
                 _options.Agent!.GetType().Name);
@@ -2167,7 +2535,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         if (_options.ChatClient is not { } raw) return null;
 
         return _specialistClient ??= new TokenUsageChatClient(
-            raw,
+            UniqueCallIds(raw),
             _sp.GetRequiredService<MentorTokenUsage>(),
             _metrics,
             _sp.GetRequiredService<ILoggerFactory>().CreateLogger<TokenUsageChatClient>());
@@ -2175,6 +2543,14 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
     /// <summary>Metered wrapper around the main client for the agents under the coordinator.</summary>
     private IChatClient? _specialistClient;
+
+    /// <summary>
+    /// <paramref name="client"/> with each call of a response under an id of its own (BUG-225): what the coordinator's
+    /// provider clients and the agents under it run on.
+    /// </summary>
+    private UniqueCallIdChatClient UniqueCallIds(IChatClient client)
+        => new(client, rename: !_options.UseServiceManagedHistory,
+               _sp.GetRequiredService<ILoggerFactory>().CreateLogger<UniqueCallIdChatClient>());
 
     /// <summary>
     /// What <c>route_to_specialist</c> hands back to the coordinator: what the specialists
@@ -2566,6 +2942,80 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     }
 
     /// <summary>
+    /// Decides, as a turn starts, which of the coordinator's actions its user may not run, by the gate's rule and the
+    /// MCP server's: an action that needs a role is run only for a signed-in user who holds one of its roles. Nothing
+    /// to decide, and nobody read, when no action needs a role. The user is read once, so every request of the turn
+    /// is offered the same tools — a turn that changed them midway would drop the tool whose result it carries — and
+    /// the agents under the coordinator are offered theirs from the same reading (BUG-205).
+    ///
+    /// <para>
+    /// BUG-200: the model was offered and told about every action, and announced one the gate then refused.
+    /// BUG-201: with <see cref="MentorOptions.RequireActionForChangeRequests"/> the first call could be required to
+    /// be one. Decided per turn, not when the coordinator is built: a user signs in during a session, and on the
+    /// MAUI app another one can.
+    /// </para>
+    /// </summary>
+    private async Task LeaveOutWhatTheUserMayNotRunAsync(CancellationToken ct)
+    {
+        var policies = _uiMiddleware.Policies is { Any: true } registered ? registered : null;
+        if (_roleGated.Length == 0 && policies is null && Turn?.AgentsHoldRoleGatedTools != true) return;
+
+        // Null when nobody is signed in, when the application registers no authentication, and when its provider
+        // cannot answer here: the gate refuses each of them an action that needs a role.
+        var user = await _uiMiddleware.ReadUserAsync(ct);
+        var leftOut = new HashSet<string>(
+            _roleGated.Where(g => user is null || !g.Roles.Any(user.IsInRole)).Select(g => g.Name),
+            StringComparer.Ordinal);
+
+        // Signing in can only help with an action left out for its roles, for nobody signed in, where a person can sign
+        // in: not on a task from another agent, and not for an action only a policy left out. Live, the sentence was
+        // given to A2A callers and after a policy's Stop.
+        var canSignIn = user is null && _uiMiddleware.HasAuthentication
+                        && Turn?.Surface is not (MentorActionSurface.A2A or MentorActionSurface.Mcp)
+                        && _sp.GetService<MentorTurnOrigin>()?.FromAnotherAgent != true;
+        var signInMayHelp = canSignIn && leftOut.Count > 0;
+
+        // BUG-224: the notice is in the turn's language, the coordinator's and its agents' alike.
+        var language = Lang;
+
+        // BUG-205: the agents under the coordinator are offered their tools from the same reading of the user.
+        Turn?.DecideOffer(user, canSignIn, language);
+
+        // Stories 311, 153 — an action the application's policies do not offer this user, whatever its roles: asked
+        // with no arguments, for each of the application's actions the coordinator offers. One that fails is left out.
+        if (policies is not null)
+            foreach (var function in _warmTools?.OfType<AIFunction>() ?? [])
+                if (!leftOut.Contains(function.Name)
+                    && _uiMiddleware.IsApplicationAction(function.Name, MentorAgentKind.Coordinator)
+                    && !await policies.IsOfferedAsync(_uiMiddleware.OfferRequest(function, user, _coordinator?.Name), ct))
+                    leftOut.Add(function.Name);
+
+        _leftOutThisTurn = leftOut;
+        // The model is told that something is missing, or it may claim what it has no tool for.
+        _noticeThisTurn = leftOut.Count > 0 ? RoleFilterChatClient.Notice(signInMayHelp, language) : null;
+
+        if (_roleFilter is not null)
+        {
+            (string, string)? countLine = null;
+            if (_discoveryResult is { Level1Methods.Count: > 0 } discovery)
+            {
+                var all = discovery.Level1Methods.Count;
+                var mayRun = discovery.Level1Methods.Count(m => !leftOut.Contains(m.ToolName));
+                if (mayRun != all)
+                    // With none left, no sentence: "0 direct actions" invites an apology for being of no use.
+                    countLine = (_promptBuilder.DirectActionsLine(all), mayRun > 0 ? _promptBuilder.DirectActionsLine(mayRun) : "");
+            }
+            _roleFilter.BeginUserTurn(leftOut, countLine, _noticeThisTurn);
+        }
+
+        if (leftOut.Count > 0)
+            _logger.LogDebug(
+                "[MentorAgent] {Count} action(s) not offered on this turn to {Caller}, who holds none of the roles they " +
+                "require or whom an action policy does not allow them ({Names}). Notice in {Language}.",
+                leftOut.Count, MentorUserKey.LogTag(user), string.Join(", ", leftOut), language);
+    }
+
+    /// <summary>
     /// Which actions tool filtering may send on a turn where none cleared the threshold (BUG-106): an
     /// application action that needs no confirmation (attribute, <c>RequiresApproval</c> predicate) and no
     /// role, or an MCP tool its server marks <c>readOnlyHint</c> — its own word that it changes nothing.
@@ -2630,11 +3080,12 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     /// (<see cref="MentorOptions.RequireActionForChangeRequests"/>): those that will ask a person first — declared
     /// confirmation, with <see cref="MentorOptions.RequireConfirmation"/> on. A forced call then shows the banner
     /// before anything runs — with <see cref="MentorHitlMode.Native"/> too, where no auto-approval rule is consulted
-    /// for it (<see cref="NeverForForcedCalls"/>). Null when there is none.
+    /// for it (<see cref="NeverForForcedCalls"/>). Null when there is none. Never one this turn's user may not run
+    /// (BUG-201): the role filter already leaves it out of the turn, and this says so where the forcing is decided.
     /// </summary>
     private Func<string, bool>? IsForcibleAction(DiscoveryResult discovery)
     {
-        bool Forcible(string name) => _confirmations.RequiresApproval(name);
+        bool Forcible(string name) => !_leftOutThisTurn.Contains(name) && _confirmations.RequiresApproval(name);
 
         return discovery.Level1Methods.Any(m => Forcible(m.ToolName))
                || _mcpTools.OfType<AIFunction>().Any(t => Forcible(t.Name))
@@ -2653,6 +3104,40 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         => ctx => _toolFilter?.ForcedActions?.Contains(ctx.FunctionCallContent.Name) == true
             ? ValueTask.FromResult(false)
             : rule(ctx);
+
+    /// <summary>
+    /// The scope's session context when the coordinator sends it at the start of the user's last message
+    /// (<see cref="MentorOptions.SessionContextPlacement"/>), turned on; null when it stays in the instructions. Not with
+    /// service-managed history, where the service keeps every message as it was sent and the block would stay in each.
+    /// </summary>
+    private MentorSessionContext? SessionContextInTurn()
+    {
+        if (_options.SessionContextPlacement != MentorSessionContextPlacement.LastUserMessage) return null;
+
+        if (_options.UseServiceManagedHistory)
+        {
+            _logger.LogWarning(
+                "[MentorAgent] SessionContextPlacement is LastUserMessage, but UseServiceManagedHistory is on: the service " +
+                "would keep the block in every message, so the context of each request stays at the end of the instructions.");
+            return null;
+        }
+
+        if (_sp.GetService<MentorSessionContext>() is not { } context) return null;
+        context.InTurn = true;
+        BuildLog.LogInformation(
+            "[MentorAgent] The context of each request (the page, its data, the address, the date and time) is sent at the " +
+            "start of the user's last message (SessionContextPlacement.LastUserMessage): the instructions stay the same " +
+            "through the session.");
+        return context;
+    }
+
+    /// <summary>
+    /// The ways out of a forced read or action when the request was meant for another assistant: the specialists,
+    /// remote and declarative agents behind <c>route_to_specialist</c>, and the teams.
+    /// </summary>
+    private static HashSet<string> WaysOut(DiscoveryResult discovery)
+        => new(["route_to_specialist", .. discovery.Level3Teams.Select(t => MentorUtils.ToSnakeCase(t.Attribute.Name))],
+               StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The assistants a message may address by name — specialists, teams, declarative and remote agents —
@@ -2788,19 +3273,30 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
     /// <summary>
     /// The classifier's verdicts for the turn's message: the hosted-tool gate's (<c>InScope</c>, asked with
-    /// the safety check when the refusal is off) and the refusal's (<c>Refuse</c>). Null for a question
-    /// that was not asked, or whose label could not be read.
+    /// the safety check when the refusal is off) and the refusal's (<c>Refuse</c>), asked with <c>Context</c>, the
+    /// end of the reply the message answers. Null for a question that was not asked, or whose label could not be
+    /// read.
     /// </summary>
-    private (string Message, bool? InScope, bool? Refuse)? _turnVerdict;
+    private (string Message, string? Context, bool? InScope, bool? Refuse)? _turnVerdict;
+
+    /// <summary>
+    /// The assistant's last reply in this conversation, for the scope question (<see cref="OutOfScopeRefusal.ReplyContext"/>).
+    /// Taken from the stream, so service-managed history has it too; null in a new or restored conversation.
+    /// </summary>
+    private string? _lastReply;
 
     private bool? TryGetScopeVerdict(string message)
         => _turnVerdict is { } v && string.Equals(v.Message, message, StringComparison.Ordinal)
             ? v.InScope
             : null;
 
-    /// <summary>Whether the refusal question was asked for this message and answered REFUSE.</summary>
-    private bool IsRefused(string message)
-        => _turnVerdict is { Refuse: true } v && string.Equals(v.Message, message, StringComparison.Ordinal);
+    /// <summary>
+    /// Whether the refusal question was asked for this message after this reply and answered REFUSE: the same "Sì" can
+    /// answer two questions.
+    /// </summary>
+    private bool IsRefused(string message, string? context)
+        => _turnVerdict is { Refuse: true } v && string.Equals(v.Message, message, StringComparison.Ordinal)
+                                              && string.Equals(v.Context, context, StringComparison.Ordinal);
 
     // -- Build All Tools (L1 + L2 + L3 + UI + nav + memory) ------------------
 
@@ -2916,6 +3412,10 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             tools.Add(BuildForgetTool());
         }
 
+        // BUG-195: one tool per name, or the framework fails every turn. Before the markers, which then mark
+        // the copies that stay.
+        tools = OneToolPerName.Keep(tools, "The coordinator", BuildLog);
+
         // Roadmap #16 — Native HITL: tag the gated tools with the Agent Framework marker so the
         // framework's function-invoking chat client stops before invoking them. Must be the LAST
         // step so every source is covered (L1 actions, MCP tools, skills, teams, memory).
@@ -2962,6 +3462,9 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             gated.Add(fn.Name);
         }
 
+        // The gate asks for the calls the framework did not stop for: a confirmation declared after this (BUG-203).
+        _uiMiddleware.ApprovalMarked = new HashSet<string>(gated, StringComparer.Ordinal);
+
         if (gated.Count > 0)
             BuildLog.LogInformation(
                 "[MentorAgent] Native HITL (#16): {Count} tool(s) require approval — {Tools}.",
@@ -2996,11 +3499,12 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     /// only on a turn where a hosted tool is about to be declared.
     /// </para>
     /// </summary>
-    private async Task EnsureRefusalVerdictAsync(string message, CancellationToken ct)
+    private async Task EnsureRefusalVerdictAsync(string message, string? context, CancellationToken ct)
     {
         if (_refusalScope is not { Length: > 0 } scope) return;
         if (string.IsNullOrWhiteSpace(message)) return;
-        if (_turnVerdict is { Refuse: not null } v && string.Equals(v.Message, message, StringComparison.Ordinal)) return;
+        if (_turnVerdict is { Refuse: not null } v && string.Equals(v.Message, message, StringComparison.Ordinal)
+            && string.Equals(v.Context, context, StringComparison.Ordinal)) return;
         if (GetChatClientForAux() is not { } classifier) return;
 
         // Bounded like the safety check (SafetyCheckTimeout, BUG-084): a slow classifier must not hold the
@@ -3012,7 +3516,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         try
         {
             var response = await classifier.GetResponseAsync(
-                OutOfScopeRefusal.Question(scope, DescribeConfiguredCapabilities()) +
+                OutOfScopeRefusal.Question(scope, DescribeConfiguredCapabilities(), context) +
                 $"\nAnswer with ONE word only: ANSWER or REFUSE.\nUSER MESSAGE: {message}",
                 new ChatOptions { MaxOutputTokens = 16, Temperature = 0f },
                 bounded.Token);
@@ -3025,7 +3529,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                     TurnClassifierLabels.Shown(response.Text));
                 return;
             }
-            _turnVerdict = (message, null, refuse.Value);
+            _turnVerdict = (message, context, null, refuse.Value);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -3043,7 +3547,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         }
     }
 
-    private async Task<bool> CheckMessageSafetyAsync(string message, CancellationToken ct)
+    private async Task<bool> CheckMessageSafetyAsync(string message, string? context, CancellationToken ct)
     {
         try
         {
@@ -3105,7 +3609,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 ? $"""
 
                    Then answer a SECOND, independent question about the same message.
-                   {OutOfScopeRefusal.Question(_refusalScope!, configured)}
+                   {OutOfScopeRefusal.Question(_refusalScope!, configured, context)}
                    A request that is UNSAFE can still be ANSWER, and a perfectly safe one can be REFUSE —
                    decide the two separately.
 
@@ -3168,7 +3672,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             if (asksRefusal)
             {
                 var refuse = TurnClassifierLabels.Read(result, 1, "REFUSE", "ANSWER");
-                _turnVerdict = (message, null, refuse == true);
+                _turnVerdict = (message, context, null, refuse == true);
                 _logger.LogDebug("[MentorAgent] Turn classifier → {Safe} · {Label} (one call; classifier said '{Raw}').",
                     isSafe ? "SAFE" : "UNSAFE",
                     refuse switch { true => "REFUSE", false => "ANSWER", null => "unreadable, answered" },
@@ -3177,7 +3681,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             else if (asksScope)
             {
                 var inScope = TurnClassifierLabels.Read(result, 1, "IN", "OUT");
-                _turnVerdict = (message, inScope, null);
+                _turnVerdict = (message, null, inScope, null);
                 _logger.LogDebug("[MentorAgent] Turn classifier → {Safe} · {Scope} (one call; classifier said '{Raw}').",
                     isSafe ? "SAFE" : "UNSAFE",
                     inScope switch { true => "IN scope", false => "OUT of scope", null => "scope unreadable" },

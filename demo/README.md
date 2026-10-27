@@ -37,10 +37,11 @@ for example `dotnet run -- --Demo:Model=gpt-4.1`.
   Administrator only. The data is kept in memory and seeded at startup, so a restart brings the seed back.
 - **Users and roles:** there is no sign-in. The selector at the top switches between three made-up users:
   Giulia Rossi (Employee), Marco Bianchi (Manager) and Sara Conti (Administrator).
-- **Languages:** the EN/IT button changes the demo's pages. The widget and the assistant stay in the language of
-  `MentorAgent:Language` in `appsettings.json`, `English` by default. For an Italian widget and assistant, set it
-  to `Italian` there, or start with `dotnet run -- --MentorAgent:Language=Italian`. MentorAgent has one language
-  for the whole application, read at startup.
+- **Languages:** the EN/IT button changes the demo's pages and the assistant, without a reload: the layout gives
+  the page's language to the widget (`<ChatWidget Language="…" />`), so its texts, the answers and the
+  confirmations follow the button. The policy handbook and the labels of the expense actions are the
+  application's data: they stay in the language of `MentorAgent:Language` in `appsettings.json`, read at startup,
+  `English` by default (`dotnet run -- --MentorAgent:Language=Italian` for Italian).
 - **Theme:** the button next to it switches between light and dark.
 
 ## The tour
@@ -89,12 +90,12 @@ The demo references the library's projects, so it always runs the code of this r
 application, reference the package instead, together with the SDK of the provider you use:
 
 ```xml
-<PackageReference Include="Novior.MentorAgent" Version="1.1.0" />
+<PackageReference Include="Novior.MentorAgent" Version="1.2.0" />
 <PackageReference Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
-<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
+<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
 ```
 
-Then follow the [main README](../README.md).
+Then follow the [main README](../Novior.MentorAgent/README.md).
 
 ## License
 

@@ -4,6 +4,8 @@ using FluentAssertions;
 using Novior.MentorAgent.Abstractions.Models;
 using Novior.MentorAgent.Tests.Harness;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace Novior.MentorAgent.Tests.Server;
@@ -62,6 +64,39 @@ public sealed class ServerEndpointTests
         var steps = await app.Client.GetFromJsonAsync<List<MentorTourStep>>("/mentor/tour");
 
         steps.Should().NotBeNullOrEmpty("the test app has [MentorPage] pages, and nothing else is needed");
+    }
+
+    /// <summary>Writes the tour from the model's prompt itself, so what the model was told reaches the response.</summary>
+    private sealed class PromptEchoingStructured : Novior.MentorAgent.Abstractions.Interfaces.IMentorStructured
+    {
+        public Task<T?> GenerateAsync<T>(string prompt, string? instructions = null, CancellationToken ct = default)
+            => Task.FromResult(new Novior.MentorAgent.Core.MentorTourService.TourPlan
+            {
+                Steps = [new() { Title = "What the model was told", Body = prompt }],
+            } is T plan ? plan : default);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Manager")]
+    public async Task The_tour_anyone_may_read_names_no_action_that_needs_a_role(string? role)
+    {
+        // BUG-206: the tour was written from every action, and /mentor/tour answers anyone, signed in or not. The
+        // descriptions of cancel_order (Manager) and export_ledger (Admin) reached a caller nobody had signed in,
+        // while the MCP server publishes neither to such a caller. The tour is one for every caller: a Manager reads
+        // the same.
+        await using var app = await ServerAppFactory.CreateAsync(
+            userId: role is null ? null : "ada", roles: role is null ? null : [role],
+            configureServices: s =>
+            {
+                s.RemoveAll<Novior.MentorAgent.Abstractions.Interfaces.IMentorStructured>();
+                s.AddSingleton<Novior.MentorAgent.Abstractions.Interfaces.IMentorStructured>(new PromptEchoingStructured());
+            });
+
+        var json = await app.Client.GetStringAsync("/mentor/tour");
+
+        json.Should().Contain("Counts open orders", "an action that needs no role is still one to suggest");
+        json.Should().NotContain("Cancels an existing order").And.NotContain("Exports the order ledger");
     }
 
     // ── GET /mentor/admin/metrics — role gated ───────────────────────────────────

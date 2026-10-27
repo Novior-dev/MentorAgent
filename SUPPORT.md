@@ -9,7 +9,9 @@
 
 Search the issues and the discussions first: the answer may be there already.
 
-We answer as best we can, with no guaranteed response time.
+We answer questions and issues as best we can, with no guaranteed response time. A vulnerability report is
+acknowledged within 5 working days, best effort. Which versions still get fixes, and for how long, is in
+[SECURITY.md](SECURITY.md#supported-versions).
 
 [CONTRIBUTING.md](CONTRIBUTING.md) says what happens to an issue once we confirm it, and why we do not take pull
 requests for now.

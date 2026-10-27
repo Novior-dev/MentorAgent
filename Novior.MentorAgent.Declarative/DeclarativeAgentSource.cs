@@ -2,6 +2,8 @@ using Novior.MentorAgent.Core;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
+using Microsoft.PowerFx;
+using Microsoft.PowerFx.Types;
 
 namespace Novior.MentorAgent.Declarative;
 
@@ -54,15 +56,15 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
             factory = new ChatClientPromptAgentFactory(
                 context.ChatClient,
                 tools,
-                configuration: ResolveConfiguration(),
+                engine: EngineWithConfiguration(),
                 loggerFactory: _loggerFactory);
         }
         catch (ArgumentException ex)
         {
-            // The factory loads the supplied configuration into the Power Fx engine as variables,
-            // in its constructor, so a key that is not a valid Power Fx identifier throws here —
-            // before any definition is even read, and with a message that says nothing about
-            // configuration. Naming the real cause saves a long hunt.
+            // The configuration is loaded into the Power Fx engine as variables before the factory
+            // is built, so a key that is not a valid Power Fx identifier throws here — before any
+            // definition is even read, and with a message that says nothing about configuration.
+            // Naming the real cause saves a long hunt.
             _logger.LogError(ex,
                 "[MentorAgent:Declarative] The agent factory rejected the configuration exposed to " +
                 "YAML ({Section}). Every key in it becomes a Power Fx variable and must be a valid " +
@@ -163,6 +165,24 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
         => string.IsNullOrWhiteSpace(_options.ConfigurationSection) || _configuration is null
             ? null
             : _configuration.GetSection(_options.ConfigurationSection);
+
+    /// <summary>
+    /// The Power Fx engine the definitions are evaluated in: one variable per key of the named section,
+    /// named by its full configuration path, as the README describes. Null, so the factory builds its
+    /// own, when no section is named. From Agent Framework 1.23 the factory loads only the keys a
+    /// definition names through <c>Env</c> and the host lists as allowed, so the variables are loaded
+    /// here, as the factory loaded them up to 1.22. The limits are the factory's own: Power Fx V1 and
+    /// expressions of at most 10,000 characters.
+    /// </summary>
+    private RecalcEngine? EngineWithConfiguration()
+    {
+        if (ResolveConfiguration() is not { } section) return null;
+
+        var engine = new RecalcEngine(new PowerFxConfig(Features.PowerFxV1) { MaximumExpressionLength = 10_000 });
+        foreach (var (key, value) in section.AsEnumerable())
+            engine.UpdateVariable(key, FormulaValue.New(value ?? string.Empty));
+        return engine;
+    }
 
     /// <summary>Reads every definition as (source name, YAML). Inline ones first.</summary>
     private List<(string Name, string Yaml)> LoadDefinitions()

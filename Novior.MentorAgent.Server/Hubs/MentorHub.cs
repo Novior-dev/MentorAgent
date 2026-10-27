@@ -88,6 +88,7 @@ public class MentorHub : Hub
         decorator.SetConnectionId(Context.ConnectionId);
         sp.GetRequiredService<MentorServerUserContext>().User = Context.User;
         sp.GetRequiredService<MentorTransportUser>().User = Context.User;   // read before the host's provider (BUG-131)
+        sp.GetRequiredService<MentorTurnContext>().Surface = MentorActionSurface.Hub;   // story 180
 
         return (sp.GetRequiredService<IMentorOrchestrator>(), decorator);
     }
@@ -130,6 +131,24 @@ public class MentorHub : Hub
             decorator.ApplySnapshot(snapshot);
 
         await orchestrator.SendMessageAsync(text, attachments);
+    }
+
+    /// <summary>
+    /// Sends a user turn: <c>{ "text": "…", "attachments": null, "language": "it" }</c>. The language is the
+    /// name or the ISO code of a <c>MentorLanguage</c>, in any case; anything else, or none, is
+    /// <c>MentorOptions.Language</c>. A method of its own, because <see cref="SendMessage"/> keeps its two
+    /// arguments (BUG-051): one object, which can carry more later without changing the arity again.
+    /// </summary>
+    public async Task SendUserMessage(MentorUserMessage message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        var (orchestrator, decorator) = BindScope();
+
+        var snapshot = _pageContextStore.Get(Context.ConnectionId);
+        if (snapshot is not null)
+            decorator.ApplySnapshot(snapshot);
+
+        await orchestrator.SendMessageAsync(message);
     }
 
     /// <summary>Cancels the current AI request.</summary>

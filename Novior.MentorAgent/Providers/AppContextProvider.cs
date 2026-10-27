@@ -24,22 +24,31 @@ internal sealed class AppContextProvider : AIContextProvider
     private readonly IMentorPageContext _pageContext;
     private readonly MentorMemoryService _memory;
     private readonly MentorOptions _options;
+    private readonly TimeProvider _time;
 
     /// <summary>Who is on the other end of this scope's turns; null in hosts that do not register it.</summary>
     internal MentorTurnOrigin? Origin { get; init; }
+
+    /// <summary>
+    /// Where the context of each request goes when it is not the instructions (<see cref="MentorOptions.SessionContextPlacement"/>);
+    /// null in hosts that do not register it.
+    /// </summary>
+    internal MentorSessionContext? SessionContext { get; init; }
 
     public AppContextProvider(
         IOptions<MentorOptions> options,
         IMentorPageContext pageContext,
         MentorMemoryService memory,
         NavigationManager? nav = null,
-        AuthenticationStateProvider? auth = null)
+        AuthenticationStateProvider? auth = null,
+        TimeProvider? time = null)
     {
         _options = options.Value;
         _pageContext = pageContext;
         _memory = memory;
         _nav = nav;
         _auth = auth;
+        _time = time ?? TimeProvider.System;
     }
 
     protected override async ValueTask<AIContext> ProvideAIContextAsync(
@@ -48,11 +57,17 @@ internal sealed class AppContextProvider : AIContextProvider
     {
         var sb = new System.Text.StringBuilder();
 
+        // With SessionContextPlacement.LastUserMessage the lines that change with every request — the page, its
+        // data, the URL, the clock — go into the block at the start of the user's last message, and the instructions
+        // keep what stays for the session, with the line that names the block last.
+        var inTurn = SessionContext is { InTurn: true };
+        var request = inTurn ? new System.Text.StringBuilder() : sb;
+
         // Per-call (volatile) context only. App identity and the page list live in the
         // static system prompt (MentorPromptBuilder) so the provider can cache that stable
         // prefix; here we keep only what changes per request, with the most volatile data
         // (URL, date/time) emitted last. (Wave 1 #2/#3)
-        sb.AppendLine("## SESSION CONTEXT (changes per request)");
+        sb.AppendLine(inTurn ? "## SESSION CONTEXT (this session)" : "## SESSION CONTEXT (changes per request)");
 
         // -- Who is asking -----------------------------------------------------
         // Only an A2A request sets this. Here, in the per-request block, rather than in the static
@@ -62,7 +77,7 @@ internal sealed class AppContextProvider : AIContextProvider
 
         // -- Page context (name + visible data) --------------------------------
         if (!string.IsNullOrWhiteSpace(_pageContext.PageName))
-            sb.AppendLine($"- Active page: {_pageContext.PageName}");
+            request.AppendLine($"- Active page: {_pageContext.PageName}");
 
         var contextData = _pageContext.ContextData;
         if (contextData.Count > 0)
@@ -74,7 +89,7 @@ internal sealed class AppContextProvider : AIContextProvider
                     : value is string s
                         ? s
                         : JsonSerializer.Serialize(value);
-                sb.AppendLine($"- {key}: {serialized}");
+                request.AppendLine($"- {key}: {serialized}");
             }
         }
 
@@ -141,10 +156,16 @@ internal sealed class AppContextProvider : AIContextProvider
         // every request from another agent into "Error in Coordinator" and an empty reply.
         if (_nav is not null)
         {
-            try { sb.AppendLine($"- Current URL: {_nav.Uri}"); }
+            try { request.AppendLine($"- Current URL: {_nav.Uri}"); }
             catch (InvalidOperationException) { /* no circuit (A2A, MCP): there is no page to report */ }
         }
-        sb.AppendLine($"- Current date/time: {DateTime.Now:dddd, MMMM dd yyyy, HH:mm}");
+        request.AppendLine($"- Current date/time: {_time.GetLocalNow().DateTime:dddd, MMMM dd yyyy, HH:mm}");
+
+        if (inTurn)
+        {
+            sb.AppendLine(SessionContext!.Pointer);
+            SessionContext.Block = SessionContext.Wrap(request.ToString());
+        }
 
         return new AIContext { Instructions = sb.ToString() };
     }

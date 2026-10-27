@@ -57,6 +57,9 @@ public sealed class WasmMentorStateService : IMentorStateService, IAsyncDisposab
 
     private void SubscribeToHub()
     {
+        // EU AI Act, article 50: the marker that a reply is AI-generated. The widget marks every reply it draws itself;
+        // registered so that SignalR does not warn of an event with no handler on every reply.
+        _subscriptions.Add(_hub.On<MentorReplyStarted>("ReplyStarted", _ => { }));
         _subscriptions.Add(_hub.On<string>("StreamingChunk",   t  => OnStreamingChunk?.Invoke(t)));
         _subscriptions.Add(_hub.On("StreamingCompleted",       () => OnStreamingCompleted?.Invoke()));
         _subscriptions.Add(_hub.On<bool>("BusyChanged",        b  =>

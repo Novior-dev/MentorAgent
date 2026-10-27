@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Novior.MentorAgent.Abstractions.Models;
 using Novior.MentorAgent.Attributes;
 using Novior.MentorAgent.Core;
 using Novior.MentorAgent.Models;
@@ -139,7 +140,7 @@ public sealed class TeamMemberToolTests
     [Fact]
     public void A_member_with_a_write_is_not_told_its_tools_are_read_only()
     {
-        var text = Builder().BuildTeamMemberInstructions(Member(Discover(), "Data Analyst"));
+        var text = Builder().BuildTeamMemberInstructions(Member(Discover(), "Data Analyst"), MentorLanguage.English);
 
         text.Should().Contain("read_quarter_revenue").And.NotContain("These tools are read-only.");
     }
@@ -150,7 +151,7 @@ public sealed class TeamMemberToolTests
         var analyst = Member(Discover(), "Data Analyst");
         var readsOnly = analyst with { Tools = [.. analyst.Tools.Where(t => t.ReadOnly)] };
 
-        Builder().BuildTeamMemberInstructions(readsOnly).Should().Contain("These tools are read-only.");
+        Builder().BuildTeamMemberInstructions(readsOnly, MentorLanguage.English).Should().Contain("These tools are read-only.");
     }
 
     [Fact]
@@ -159,9 +160,9 @@ public sealed class TeamMemberToolTests
         // [Description] methods are declared read-only with IsReadOnlyAction.
         var strategist = Member(Discover(), "Strategist");
 
-        Builder().BuildTeamMemberInstructions(strategist).Should().NotContain("These tools are read-only.");
+        Builder().BuildTeamMemberInstructions(strategist, MentorLanguage.English).Should().NotContain("These tools are read-only.");
         Builder(o => o.IsReadOnlyAction = name => name is "submit_expense_report" or "get_policy_for_category")
-            .BuildTeamMemberInstructions(strategist).Should().Contain("These tools are read-only.");
+            .BuildTeamMemberInstructions(strategist, MentorLanguage.English).Should().Contain("These tools are read-only.");
     }
 
     [Fact]
@@ -172,6 +173,6 @@ public sealed class TeamMemberToolTests
         var gatedByName = analyst with { Tools = [readTool] };
 
         Builder(o => o.RequiresApproval = name => name == "read_quarter_revenue")
-            .BuildTeamMemberInstructions(gatedByName).Should().NotContain("These tools are read-only.");
+            .BuildTeamMemberInstructions(gatedByName, MentorLanguage.English).Should().NotContain("These tools are read-only.");
     }
 }

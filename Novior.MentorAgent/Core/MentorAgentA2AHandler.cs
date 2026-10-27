@@ -1,4 +1,6 @@
-﻿using A2A;
+﻿using System.Collections.Concurrent;
+using System.Security.Claims;
+using A2A;
 
 
 namespace Novior.MentorAgent.Core;
@@ -10,14 +12,24 @@ namespace Novior.MentorAgent.Core;
 /// <code>
 /// services.AddA2AAgent&lt;MentorAgentA2AHandler&gt;(agentCard);
 /// </code>
-/// The handler is instantiated per A2A request. A DI scope is created for each
-/// request so that the scoped <see cref="MentorOrchestrator"/> is properly resolved.
+/// The SDK registers the handler as a singleton. Each task runs in a DI scope of its own, so that the scoped
+/// <see cref="MentorOrchestrator"/> is properly resolved.
 /// </summary>
 internal sealed class MentorAgentA2AHandler : IAgentHandler
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<MentorAgentA2AHandler> _logger;
     private readonly IMentorHttpUser? _httpUser;
+
+    /// <summary>The turns running here, by task id: what a <c>tasks/cancel</c> stops (BUG-199).</summary>
+    private readonly ConcurrentDictionary<string, RunningTask> _running = new(StringComparer.Ordinal);
+
+    /// <summary>A task's turn, and whether its caller cancelled it.</summary>
+    private sealed class RunningTask(MentorOrchestrator orchestrator)
+    {
+        public MentorOrchestrator Orchestrator => orchestrator;
+        public volatile bool CancelledByCaller;
+    }
 
     public MentorAgentA2AHandler(
         IServiceScopeFactory scopeFactory,
@@ -36,6 +48,37 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
         AgentEventQueue queue,
         CancellationToken cancellationToken)
     {
+        // Who is calling, read first: once the task is submitted the SDK may answer the caller (ReturnImmediately), the
+        // request ends, and the turn runs on without it. Read after the submit, the request was closing or gone, and an
+        // authenticated peer became anonymous (BUG-226).
+        var caller = _httpUser?.User;
+
+        // Async scope: MentorOrchestrator is IAsyncDisposable only, and disposing a plain scope
+        // that resolved it throws "type only implements IAsyncDisposable" — after the turn had run
+        // and been paid for, turning every answer into "An internal error occurred" (BUG-078).
+        await using var scope = _scopeFactory.CreateAsyncScope();
+
+        // The turn is known by the task's id before the caller is told the id, so a tasks/cancel finds the turn it names.
+        var running = new RunningTask(scope.ServiceProvider.GetRequiredService<MentorOrchestrator>());
+        _running[context.TaskId] = running;
+        try
+        {
+            await RunAsync(context, queue, scope.ServiceProvider, running, caller, cancellationToken);
+        }
+        finally
+        {
+            _running.TryRemove(KeyValuePair.Create(context.TaskId, running));
+        }
+    }
+
+    private async Task RunAsync(
+        RequestContext context,
+        AgentEventQueue queue,
+        IServiceProvider sp,
+        RunningTask running,
+        ClaimsPrincipal? caller,
+        CancellationToken cancellationToken)
+    {
         var userText = context.UserText
             ?? context.Message?.Parts.Select(p => p.Text).FirstOrDefault(t => t is not null)
             ?? string.Empty;
@@ -49,22 +92,18 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
         // received a Working update for a task it had never been given and answered the client
         // "Agent handler did not produce any response events" — on every request (BUG-078).
         var updater = new TaskUpdater(queue, context.TaskId, context.ContextId);
-        await updater.SubmitAsync(cancellationToken);
+        await updater.SubmitAsync(cancellationToken: cancellationToken);
         await updater.StartWorkAsync(
             new Message { Role = A2A.Role.Agent, Parts = [Part.FromText("Processing...")] },
-            cancellationToken);
+            cancellationToken: cancellationToken);
 
-        // Async scope: MentorOrchestrator is IAsyncDisposable only, and disposing a plain scope
-        // that resolved it throws "type only implements IAsyncDisposable" — after the turn had run
-        // and been paid for, turning every answer into "An internal error occurred" (BUG-078).
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var sp           = scope.ServiceProvider;
-        var orchestrator = sp.GetRequiredService<MentorOrchestrator>();
+        var orchestrator = running.Orchestrator;
         var stateService = sp.GetRequiredService<IMentorStateService>();
 
-        // The scope is ours, not the request's: say who is calling, from the request, before anything
-        // reads the user (BUG-131). Blazor's provider, asked here, threw — a peer lost its roles.
-        sp.GetRequiredService<MentorTransportUser>().User = _httpUser?.User;
+        // The scope is ours, not the request's: say who is calling, as the request said when the task started, before
+        // anything reads the user (BUG-131, BUG-226). Blazor's provider, asked here, threw — a peer lost its roles.
+        sp.GetRequiredService<MentorTransportUser>().User = caller;
+        sp.GetRequiredService<MentorTurnContext>().Surface = MentorActionSurface.A2A;   // story 180
 
         // The caller is a program: nobody will answer "would you also like…?" (see MentorTurnOrigin).
         var origin = sp.GetRequiredService<MentorTurnOrigin>();
@@ -94,7 +133,7 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
             // BUG-106: a navigation, a memory write or a skill returns no record, and no longer counts — on
             // the published rc.13 a load_skill call carried "the catalogue does not report the price"
             // (false) past the retry. The judge below stays the net after the second attempt.
-            if (orchestrator.GroundingActivityInLastTurn == 0 && responseBuilder.Length > 0)
+            if (orchestrator.GroundingActivityInLastTurn == 0 && responseBuilder.Length > 0 && !running.CancelledByCaller)
             {
                 _logger.LogDebug(
                     "[MentorAgent:A2A] Task '{TaskId}': the reply was written without calling any tool that " +
@@ -109,7 +148,7 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
                 // A tool-less reply is not wrong in itself ("this application cannot provide it", a
                 // policy from the documents), so a model is asked — not a pattern — whether this one
                 // states a value of the application's records. If it does, nobody looked it up.
-                if (orchestrator.GroundingActivityInLastTurn == 0 && responseBuilder.Length > 0
+                if (orchestrator.GroundingActivityInLastTurn == 0 && responseBuilder.Length > 0 && !running.CancelledByCaller
                     && await orchestrator.ReplyStatesApplicationDataAsync(
                            userText, responseBuilder.ToString(), cancellationToken))
                 {
@@ -134,12 +173,22 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
                     Role  = A2A.Role.Agent,
                     Parts = [Part.FromText($"Error: {ex.Message}")]
                 },
-                cancellationToken);
+                cancellationToken: cancellationToken);
             return;
         }
         finally
         {
             stateService.OnStreamingChunk -= OnChunk;
+        }
+
+        // The caller cancelled the task, and CancelAsync ended it Canceled: a stopped turn reports nothing more — not the
+        // words it wrote before the cancel, not "no reply" as a failure — and asks nothing more: no second attempt for a
+        // grounded answer, no judge (BUG-199).
+        if (running.CancelledByCaller)
+        {
+            _logger.LogDebug("[MentorAgent:A2A] Task '{TaskId}': the caller cancelled it — the turn stopped, nothing more is reported.",
+                context.TaskId);
+            return;
         }
 
         var responseText = responseBuilder.ToString();
@@ -161,18 +210,25 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
                     Role  = A2A.Role.Agent,
                     Parts = [Part.FromText("Error: this agent could not produce a reply to the request.")]
                 },
-                cancellationToken);
+                cancellationToken: cancellationToken);
             return;
         }
 
         await updater.CompleteAsync(
             new Message
             {
-                Role  = A2A.Role.Agent,
-                Parts = [Part.FromText(responseText)]
+                Role     = A2A.Role.Agent,
+                Parts    = [Part.FromText(responseText)],
+                // EU AI Act, article 50 — the machine-readable marker of AI-generated text, on the reply only.
+                Metadata = new() { [AiGeneratedMetadataKey] = AiGenerated },
             },
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
+
+    /// <summary>The metadata key of the marker of AI-generated text on the reply a caller gets.</summary>
+    internal const string AiGeneratedMetadataKey = "aiGenerated";
+
+    private static readonly System.Text.Json.JsonElement AiGenerated = System.Text.Json.JsonSerializer.SerializeToElement(true);
 
     /// <summary>The caller's name for this application, if it sent one as a string. Not yet sanitised.</summary>
     private static string? ReadAddressedAs(Message? message)
@@ -182,12 +238,41 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
             ? value.GetString()
             : null;
 
-    public Task CancelAsync(
+    /// <summary>
+    /// The caller cancelled the task: its turn stops as with Stop, if it has not already, and the task ends
+    /// <c>Canceled</c>. This replaced the SDK's default with a Debug line, so the task was answered <c>Working</c> and
+    /// stayed so (BUG-199).
+    /// </summary>
+    public async Task CancelAsync(
         RequestContext context,
         AgentEventQueue queue,
         CancellationToken cancellationToken)
     {
-        _logger.LogDebug("[MentorAgent:A2A] Task '{TaskId}' cancelled.", context.TaskId);
-        return Task.CompletedTask;
+        StopByCaller(context.TaskId);
+        _logger.LogInformation("[MentorAgent:A2A] Task '{TaskId}' cancelled by the caller.", context.TaskId);
+        await new TaskUpdater(queue, context.TaskId, context.ContextId).CancelAsync(cancellationToken: cancellationToken);
     }
+
+    /// <summary>
+    /// Stops the turn of task <paramref name="taskId"/> as Stop does, when one runs here: the decisions of its calls read
+    /// <c>stop</c>, and nothing of the task is reported after it. <see cref="MentorA2ARequestHandler"/> calls it before
+    /// the SDK cancels the turn's token; <see cref="CancelAsync"/>, after.
+    /// </summary>
+    internal void StopByCaller(string taskId)
+    {
+        if (!_running.TryGetValue(taskId, out var running)) return;
+
+        running.CancelledByCaller = true;
+        try
+        {
+            running.Orchestrator.CancelCurrentRequest();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The turn ended in between.
+        }
+    }
+
+    /// <summary>How many tasks have a turn running here; each one leaves when its task ends, however it ends.</summary>
+    internal int RunningTasks => _running.Count;
 }

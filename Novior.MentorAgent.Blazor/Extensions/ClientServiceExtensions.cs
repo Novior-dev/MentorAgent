@@ -53,7 +53,7 @@ public static class ClientServiceExtensions
         services.AddScoped<IMentorOrchestrator>(sp => sp.GetRequiredService<WasmMentorOrchestrator>());
 
         // Localizer (singleton — uses language from options)
-        services.AddSingleton<MentorLocalizer>(_ => new MentorLocalizer(options.Language));
+        services.AddSingleton<MentorLocalizer>(_ => new MentorLocalizer(() => options.Language));
 
         // #18 — onboarding tour, fetched from the server (the client has no discovery data).
         // TryAdd so a hand-written IMentorTour registered by the app still wins.
@@ -65,6 +65,8 @@ public static class ClientServiceExtensions
             {
                 wOpts.BotName          = cOpts.BotName;
                 wOpts.WelcomeMessage   = cOpts.WelcomeMessage;
+                wOpts.ShowAiDisclosure    = cOpts.ShowAiDisclosure;
+                wOpts.AiDisclosureMessage = cOpts.AiDisclosureMessage;
                 wOpts.AvatarUrl        = cOpts.AvatarUrl;
                 wOpts.InputPlaceholder = cOpts.InputPlaceholder;
                 wOpts.Theme            = cOpts.Theme;

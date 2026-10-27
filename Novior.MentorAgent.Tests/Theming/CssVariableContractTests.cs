@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using FluentAssertions;
+using Novior.MentorAgent.Abstractions.Models;
 using Novior.MentorAgent.Tests.Docs;
 using Xunit;
 
@@ -82,7 +83,7 @@ public sealed class CssVariableContractTests
 
     /// <summary>
     /// Every custom property the five packages actually <em>read</em> — from the stylesheet's own
-    /// rules and from inline styles in the components, which is where the chart series colours live.
+    /// rules and from the components' source.
     /// </summary>
     private static readonly HashSet<string> Consumed =
         [.. Regex.Matches(RepoFiles.SourceText, @"var\(\s*(--bm-[a-z0-9-]+)")
@@ -190,8 +191,7 @@ public sealed class CssVariableContractTests
     public void Every_declared_variable_is_read_by_something()
     {
         // A variable in the reference table that nothing consumes is the same broken promise seen
-        // from the other end: the host sets it, the widget looks identical. Inline styles in the
-        // components count — that is where the chart series colours are read.
+        // from the other end: the host sets it, the widget looks identical.
         var unread = DeclaredAnywhere.Where(v => !Consumed.Contains(v)).Order();
 
         string.Join(", ", unread).Should().BeEmpty();
@@ -199,22 +199,140 @@ public sealed class CssVariableContractTests
 
     // ── Theme overrides land on variables that exist ────────────────────────────
 
+    private static readonly string ThemesDir =
+        Path.Combine(RepoFiles.Root, RepoFiles.Abstractions, "wwwroot", "css", "themes");
+
+    private static string ThemeCss(string file) => File.ReadAllText(Path.Combine(ThemesDir, file + ".css"));
+
+    /// <summary>The variables a theme stylesheet sets; the file is one <c>:root</c> block, checked below.</summary>
+    private static Dictionary<string, string> ThemeVars(string file) => Declarations(Block(ThemeCss(file), ":root"));
+
+    public static TheoryData<string> ThemeFiles => ["dark", "minimal"];
+
     [Fact]
-    public void Every_variable_a_theme_override_emits_is_declared_by_the_stylesheet()
+    public void The_theme_stylesheets_are_the_ones_the_widget_links()
     {
-        // BuildThemeVars writes an inline <style> block. A name that drifted from the stylesheet's
-        // would override nothing at all, and the theme would look like the default — which is
-        // exactly what a reader would assume "Default" means and never question.
-        var widget = RepoFiles.SourceFiles.Single(f => f.EndsWith("ChatWidget.razor.cs", StringComparison.Ordinal));
-        var emitted = Regex.Matches(File.ReadAllText(widget), @"(--bm-[a-z0-9-]+):")
-                           .Select(m => m.Groups[1].Value)
-                           .Distinct()
-                           .Order()
-                           .ToList();
+        // ChatWidget links css/themes/dark.css for Dark and css/themes/minimal.css for Minimal and Auto.
+        Directory.EnumerateFiles(ThemesDir).Select(Path.GetFileName).Order()
+                 .Should().Equal("dark.css", "minimal.css");
+    }
 
-        emitted.Should().HaveCountGreaterThan(10, "the dark and minimal themes both override a palette");
+    [Theory]
+    [MemberData(nameof(ThemeFiles))]
+    public void A_theme_stylesheet_is_one_root_block_of_variables(string file)
+    {
+        // BUG-213: the themes were an inline <style>:root block, which a strict Content-Security-Policy
+        // drops. The widget now links the file where the block was, so :root keeps its place in the cascade.
+        // A rule for anything else would style the widget only under that theme, and another selector would
+        // change which of a host's overrides wins.
+        var css = Regex.Replace(ThemeCss(file), @"/\*.*?\*/", "", RegexOptions.Singleline);
 
-        string.Join(", ", emitted.Where(v => !DeclaredAnywhere.Contains(v))).Should().BeEmpty();
+        css.Should().MatchRegex(@"^\s*:root\s*\{(\s*--bm-[a-z0-9-]+\s*:\s*[^;{}]+;)+\s*\}\s*$");
+    }
+
+    [Theory]
+    [MemberData(nameof(ThemeFiles))]
+    public void Every_variable_a_theme_overrides_is_declared_by_the_stylesheet(string file)
+    {
+        // A name that drifted from the stylesheet's would override nothing at all, and the theme would
+        // look like the default — which is exactly what a reader would assume "Default" means and never
+        // question.
+        var overridden = ThemeVars(file);
+
+        overridden.Should().HaveCountGreaterThan(7, "a theme overrides a palette");
+        string.Join(", ", overridden.Keys.Where(v => !RootVars.ContainsKey(v)).Order()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void The_dark_theme_overrides_the_background_and_text_variables()
+    {
+        var dark = ThemeVars("dark");
+
+        dark["--bm-bg-base"].Should().Be("#050810");
+        dark["--bm-text-primary"].Should().Be("#f0f4ff");
+    }
+
+    [Fact]
+    public void The_minimal_theme_is_light_and_re_tints_the_chips_for_a_white_surface()
+    {
+        // Minimal is the light theme — the pale chip text inherited from dark is unreadable on
+        // white, so it also has to override the hosted and A2A chip colours.
+        var minimal = ThemeVars("minimal");
+
+        minimal["--bm-bg-base"].Should().Be("#ffffff");
+        minimal.Should().ContainKeys("--bm-hosted-text", "--bm-hosted-text-strong", "--bm-a2a-text", "--bm-a2a-text-strong");
+    }
+
+    // ── What each theme looks like, and what it is said to look like ─────────────
+
+    /// <summary>The panel a theme shows: the baseline's colour, unless the theme's stylesheet sets one.</summary>
+    private static string Panel(MentorTheme theme) => theme switch
+    {
+        MentorTheme.Dark    => ThemeVars("dark")["--bm-bg-panel"],
+        MentorTheme.Minimal => ThemeVars("minimal")["--bm-bg-panel"],
+        _                   => RootVars["--bm-bg-panel"],
+    };
+
+    /// <summary>Relative luminance (WCAG) and alpha of a normalised <c>#rrggbb</c> or <c>rgba()</c>.</summary>
+    private static (double Luminance, double Alpha) Measure(string colour)
+    {
+        double[] c;
+        var alpha = 1d;
+        if (Regex.Match(colour, @"^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$") is { Success: true } hex)
+            c = [.. Enumerable.Range(1, 3).Select(i => Convert.ToInt32(hex.Groups[i].Value, 16) / 255d)];
+        else if (Regex.Match(colour, @"^rgba\((\d+),(\d+),(\d+),([\d.]+)\)$") is { Success: true } rgba)
+        {
+            c = [.. Enumerable.Range(1, 3).Select(i => int.Parse(rgba.Groups[i].Value) / 255d)];
+            alpha = double.Parse(rgba.Groups[4].Value, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        else throw new FormatException($"Not a colour this test reads: {colour}");
+
+        var linear = c.Select(v => v <= 0.03928 ? v / 12.92 : Math.Pow((v + 0.055) / 1.055, 2.4)).ToArray();
+        return (0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2], alpha);
+    }
+
+    /// <summary>The XML summary of a <c>MentorTheme</c> member, as one line of text.</summary>
+    private static string Summary(MentorTheme theme)
+    {
+        var source = File.ReadAllText(RepoFiles.SourceFiles.Single(f => f.EndsWith(
+            $"{Path.DirectorySeparatorChar}MentorTheme.cs", StringComparison.Ordinal)));
+        var member = Regex.Match(source, $@"<summary>(?<text>(?:(?!</summary>).)*)</summary>\s*{theme}\s*=", RegexOptions.Singleline);
+        member.Success.Should().BeTrue($"MentorTheme.{theme} should have a summary");
+
+        return Regex.Replace(Regex.Replace(member.Groups["text"].Value, @"\s*///\s*", " "), @"\s+", " ").Trim();
+    }
+
+    [Theory]
+    [InlineData(MentorTheme.Default)]
+    [InlineData(MentorTheme.Dark)]
+    [InlineData(MentorTheme.Minimal)]
+    public void Each_theme_is_documented_as_the_panel_it_shows(MentorTheme theme)
+    {
+        // BUG-214: MentorTheme.Default said "Light theme with blue accents". It is the baseline, a navy panel
+        // at 55% over a blur, which on a light page shows as dark grey with the page behind it. A host picks
+        // a theme from IntelliSense, so the summary opens with Light or Dark, and says when the page shows
+        // through.
+        var (luminance, alpha) = Measure(Panel(theme));
+        var summary = Summary(theme);
+
+        summary.Should().StartWith(luminance > 0.5 ? "Light" : "Dark", $"its panel is {Panel(theme)}");
+        summary.Contains("translucent", StringComparison.OrdinalIgnoreCase).Should().Be(alpha < 0.7,
+            $"its panel is {Panel(theme)}: {summary}");
+    }
+
+    [Theory]
+    [InlineData(MentorTheme.Default)]
+    [InlineData(MentorTheme.Dark)]
+    [InlineData(MentorTheme.Minimal)]
+    public void The_readme_calls_light_only_the_theme_whose_panel_is_light(MentorTheme theme)
+    {
+        // The README's table is where a host reading on a light site looks for the theme to use.
+        var table = Section("### Themes", "### CSS variables — full reference");
+        var row = Regex.Match(table, $@"(?m)^\|\s*`MentorTheme\.{theme}`\s*\|(?<text>.*)\|\s*$");
+        row.Success.Should().BeTrue($"the README's theme table should have a row for {theme}");
+
+        row.Groups["text"].Value.Contains("light theme", StringComparison.OrdinalIgnoreCase)
+           .Should().Be(Measure(Panel(theme)).Luminance > 0.5, row.Groups["text"].Value);
     }
 
     [Fact]
@@ -231,7 +349,7 @@ public sealed class CssVariableContractTests
         var widget = RepoFiles.SourceFiles.Single(f => f.EndsWith("ChatWidget.razor.cs", StringComparison.Ordinal));
         var source = File.ReadAllText(widget);
 
-        string.Join(", ", promised.Where(v => !source.Contains($"{v}:", StringComparison.Ordinal)))
+        string.Join(", ", promised.Where(v => !source.Contains($"[\"{v}\"]", StringComparison.Ordinal)))
               .Should().BeEmpty();
     }
 

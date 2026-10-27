@@ -104,6 +104,31 @@ public sealed class ChangelogTests
                 $"{Path.GetFileName(project)}: the notes come from CHANGELOG.md, one copy for all five packages");
     }
 
+    [Fact]
+    public void Publiccode_names_the_newest_stable_release()
+    {
+        // publiccode.yml describes the software for its reuse (story 154), and its version and date are those of the newest
+        // stable release: the first dated section without a prerelease suffix. At 1.1.0 they stayed at 1.0.0 (story 487).
+        var publiccode = File.ReadAllText(Path.Combine(RepoFiles.Root, "publiccode.yml")).Replace("\r\n", "\n");
+        var versions = Regex.Matches(publiccode, @"^softwareVersion:\s*""(?<v>[^""]+)""\s*$", RegexOptions.Multiline);
+        var dates = Regex.Matches(publiccode, @"^releaseDate:\s*""(?<d>\d{4}-\d{2}-\d{2})""\s*$", RegexOptions.Multiline);
+        versions.Should().ContainSingle("publiccode.yml names one softwareVersion");
+        dates.Should().ContainSingle("publiccode.yml names one releaseDate");
+
+        var (name, tail) = Headings.Skip(1).First(h => Version.Match(h.Name) is { Success: true } m && !m.Groups["pre"].Success);
+        var date = tail[" - ".Length..];
+        var (version, released) = (versions[0].Groups["v"].Value, dates[0].Groups["d"].Value);
+        (version, released).Should().Be((name, date),
+            $"publiccode.yml says {version} of {released}; the newest release in CHANGELOG.md is {name} of {date}: " +
+            "update softwareVersion and releaseDate in the release commit");
+
+        // The repository's README is a short one: the documentation is the site.
+        var documentation = Regex.Matches(publiccode, @"^\s*documentation:\s*""(?<u>[^""]+)""\s*$", RegexOptions.Multiline);
+        documentation.Should().NotBeEmpty();
+        documentation.Select(m => m.Groups["u"].Value).Should().AllSatisfy(u => u.Should().NotContain("#readme",
+            "the README at the repository's root only leads on to the documentation"));
+    }
+
     /// <summary>The body of <c>## [name]</c> without HTML comments, or null when there is no such heading.</summary>
     private static string? Section(string name)
     {

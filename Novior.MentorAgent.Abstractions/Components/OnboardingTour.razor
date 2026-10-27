@@ -1,6 +1,6 @@
 @using Novior.MentorAgent.Abstractions.Core
 @using Novior.MentorAgent.Abstractions.Models
-@inject MentorLocalizer L
+@inject MentorLocalizer ApplicationL
 
 @*
     Guided first-run tour (roadmap #18).
@@ -65,6 +65,10 @@
 </div>
 
 @code {
+    // The localizer of the ChatWidget around this component, in the widget's Language (story 536); the application's
+    // when there is none, or when the component is used on its own.
+    [CascadingParameter(Name = ChatWidget.LocalizerCascade)] private MentorLocalizer? WidgetL { get; set; }
+    private MentorLocalizer L => WidgetL ?? ApplicationL;
     /// <summary>The steps to walk through. An empty list renders nothing.</summary>
     [Parameter, EditorRequired] public IReadOnlyList<MentorTourStep> Steps { get; set; } = [];
 
@@ -95,6 +99,10 @@
 
     protected override void OnInitialized()
         => _index = Math.Clamp(StartIndex, 0, Math.Max(0, Steps.Count - 1));
+
+    // The steps can change while the tour is open, in another language with fewer of them (BUG-228).
+    protected override void OnParametersSet()
+        => _index = Math.Clamp(_index, 0, Math.Max(0, Steps.Count - 1));
 
     private MentorTourStep Current => Steps[Math.Clamp(_index, 0, Steps.Count - 1)];
     private bool IsLast => _index >= Steps.Count - 1;

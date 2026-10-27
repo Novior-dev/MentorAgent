@@ -22,6 +22,15 @@ public sealed class MentorAgentBlazorOptions
     /// <summary>Welcome message shown when the chat is empty.</summary>
     public string? WelcomeMessage { get; set; }
 
+    /// <summary>
+    /// Shows, under the header, the notice that tells people they are talking to an AI assistant, for the whole
+    /// conversation. Default: true. The marker on each reply (<c>data-ai-generated</c>) stays either way.
+    /// </summary>
+    public bool ShowAiDisclosure { get; set; } = true;
+
+    /// <summary>The notice's text, shown as written. If null, uses the localized default in <see cref="Language"/>.</summary>
+    public string? AiDisclosureMessage { get; set; }
+
     /// <summary>Custom avatar URL.</summary>
     public string? AvatarUrl { get; set; }
 

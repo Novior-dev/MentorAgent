@@ -136,6 +136,78 @@ public class PublicSurfaceDocumentedTests
         missing.Should().BeEmpty(Report(missing, $"{optionsType.Name} properties"));
     }
 
+    /// <summary>
+    /// Named somewhere in five READMEs is not in the table a reader scans. The README and the Server README each have
+    /// reference tables of <c>MentorOptions</c>, and the Server README a list of the options it leaves out on purpose:
+    /// the 1.1.0 notes said every option was in one or the other (BUG-163), and <c>ConfirmationMessage</c>, new in
+    /// the same release, was in neither in the Server README (story 128).
+    /// </summary>
+    [Theory]
+    [InlineData("core")]
+    [InlineData("server")]
+    public void Every_MentorOptions_property_is_in_a_reference_table_or_left_out_on_purpose(string readme)
+    {
+        var text = RepoFiles.Readme(readme).Replace("\r\n", "\n");
+        var inTables = Regex.Matches(text, @"^\|\s*`([A-Za-z0-9]+)`\s*\|", RegexOptions.Multiline)
+            .Select(m => m.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        var leftOut = LeftOutOnPurpose(text);
+
+        var missing = typeof(Novior.MentorAgent.Options.MentorOptions)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.SetMethod is { IsPublic: true })
+            .Select(p => p.Name)
+            .Where(n => !inTables.Contains(n) && !leftOut.Contains(n))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        missing.Should().BeEmpty(
+            $"every public option of MentorOptions is a row of a reference table of the {readme} README, or among the " +
+            $"options it does not list on purpose; missing: {string.Join(", ", missing)}");
+    }
+
+    /// <summary>
+    /// The <c>[MentorAction]</c> table of the README and of the Server README: every property of the attribute is a
+    /// row, and <c>Description</c> says it is required (BUG-163, story 128).
+    /// </summary>
+    [Theory]
+    [InlineData("core")]
+    [InlineData("server")]
+    public void The_MentorAction_table_lists_every_property_and_Description_as_required(string readme)
+    {
+        var lines = RepoFiles.Readme(readme).Replace("\r\n", "\n").Split('\n');
+        var required = Array.FindIndex(lines, l => l.StartsWith("| `Description` | **Required.**", StringComparison.Ordinal));
+        required.Should().BeGreaterThanOrEqualTo(0, $"the {readme} README's [MentorAction] table marks Description as required");
+
+        var first = required;
+        while (first > 0 && lines[first - 1].StartsWith('|')) first--;
+        var rows = lines.Skip(first).TakeWhile(l => l.StartsWith('|'))
+            .Select(l => Regex.Match(l, @"^\|\s*`([A-Za-z0-9]+)`\s*\|"))
+            .Where(m => m.Success)
+            .Select(m => m.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var missing = typeof(Novior.MentorAgent.Attributes.MentorActionAttribute)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Select(p => p.Name)
+            .Where(n => !rows.Contains(n))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        missing.Should().BeEmpty($"the {readme} README's [MentorAction] table lists every property of the attribute");
+    }
+
+    /// <summary>The names in the blockquote that starts with <c>**Not listed here on purpose.**</c>, if there is one.</summary>
+    private static HashSet<string> LeftOutOnPurpose(string text)
+    {
+        var lines = text.Split('\n');
+        var start = Array.FindIndex(lines, l => l.StartsWith('>') && l.Contains("**Not listed here on purpose.**"));
+        if (start < 0) return [];
+
+        var block = string.Join('\n', lines.Skip(start).TakeWhile(l => l.StartsWith('>')));
+        return Regex.Matches(block, @"`([A-Za-z0-9]+)`").Select(m => m.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+    }
+
     // ------------------------------------------------------------------ metrics shapes
 
     /// <summary>

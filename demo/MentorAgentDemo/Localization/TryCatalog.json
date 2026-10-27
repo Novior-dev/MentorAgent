@@ -19,12 +19,12 @@
     "id": "card",
     "title": { "en": "A card with buttons", "it": "Una card con i pulsanti" },
     "what": {
-      "en": "An action can return a card. Its buttons are written by the app, not by the model: open the claim, or approve it while it waits.",
-      "it": "Un'azione può restituire una card. I pulsanti li scrive l'app, non il modello: aprire la nota spese, o approvarla finché aspetta."
+      "en": "An action can return a card. Its buttons are written by the app, not by the model: open the claim, or, for a manager, approve it while it waits.",
+      "it": "Un'azione può restituire una card. I pulsanti li scrive l'app, non il modello: aprire la nota spese o, per un responsabile, approvarla finché aspetta."
     },
     "ask": { "en": "Show me expense 1003.", "it": "Mostrami la nota spese 1003." },
     "code": [
-      { "file": "Assistant/ExpenseActions.cs", "lines": [ "public object ShowExpense([Description(\"The claim number, for example 1002\")] int expenseId)" ] },
+      { "file": "Assistant/ExpenseActions.cs", "lines": [ "public MentorCard ShowExpense([Description(\"The claim number, for example 1002\")] int expenseId)" ] },
       { "file": "Program.cs", "lines": [ "options.EnableGenerativeCards = true;" ] }
     ]
   },

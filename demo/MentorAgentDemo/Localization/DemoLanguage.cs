@@ -1,9 +1,10 @@
 namespace MentorAgentDemo.Localization;
 
 /// <summary>
-/// The language of the demo's pages, one per visitor's circuit, switched with the EN/IT button. It does not
-/// change the assistant: MentorAgent has one language for the whole application, read at startup from
-/// <c>MentorAgent:Language</c> in appsettings.json.
+/// The language of the demo's pages, one per visitor's circuit, switched with the EN/IT button. The layout gives
+/// it to the widget as its <c>Language</c>, so the button changes the assistant too: its texts, and the language
+/// of the turns. The policy handbook and the labels of the expense actions stay in <c>MentorAgent:Language</c>
+/// of appsettings.json, read at startup: they are the application's data, not the widget's.
 /// </summary>
 public sealed class DemoLanguage
 {

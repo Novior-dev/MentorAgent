@@ -48,6 +48,29 @@ public sealed class ReleaseReadinessTests
         references.Should().BePositive("the core README shows the PackageReference of a MAUI host");
     }
 
+    /// <summary>
+    /// A host that writes the asset links by hand (a standalone WASM <c>index.html</c>, a surface without
+    /// <c>ChatWidget</c>) copies them from the READMEs. Neither file is fingerprinted, so the <c>?v=</c>
+    /// is the only thing that makes an upgraded visitor's browser fetch them again (BUG-209: it was
+    /// <c>?v=10</c> from the first release on). The widget's own links carry the package version too.
+    /// </summary>
+    [Fact]
+    public void Every_asset_link_in_the_readmes_carries_the_version_being_built()
+    {
+        var link = new Regex(@"MentorAgent\.(?<file>css|js)\?v=(?<v>[^""'\s`)]+)");
+        var links = 0;
+
+        foreach (var (name, path) in RepoFiles.Readmes)
+            foreach (Match m in link.Matches(File.ReadAllText(path)))
+            {
+                links++;
+                m.Groups["v"].Value.Should().Be(Version,
+                    $"{name} README links MentorAgent.{m.Groups["file"].Value} with ?v={m.Groups["v"].Value}");
+            }
+
+        links.Should().BePositive("the READMEs show the two links a standalone WASM host adds");
+    }
+
     [Fact]
     public void A_stable_version_ships_without_the_preview_banner()
     {

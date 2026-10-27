@@ -41,6 +41,9 @@ internal sealed class McpTestSession
         return s;
     }
 
+    /// <summary>The <c>Mcp-Session-Id</c> the server gave, or null when it gave none.</summary>
+    internal string? SessionId => _sessionId;
+
     /// <summary>The <c>initialize</c> response: <c>result.serverInfo</c> names the server.</summary>
     internal JsonElement Initialize { get; private set; }
 

@@ -103,7 +103,7 @@ public sealed class OldPackageNameTests
     [InlineData("builder.Services.AddMentorAgent(options => { });")]
     [InlineData("[MentorAgent(Name = \"ShippingAgent\")]")]
     [InlineData("\"MentorAgent\": { \"Language\": \"Italian\" }")]
-    [InlineData("<script src=\"_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=10\"></script>")]
+    [InlineData("<script src=\"_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.2.0\"></script>")]
     [InlineData("`MentorAgent.css` and `MentorAgent.js` keep their names.")]
     [InlineData("app.UseCors(\"MentorAgentMcp\");")]
     [InlineData("dotnet add package Novior.MentorAgent.Server")]

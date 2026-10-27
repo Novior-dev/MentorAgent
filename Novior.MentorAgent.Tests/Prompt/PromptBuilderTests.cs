@@ -44,8 +44,12 @@ public sealed class PromptBuilderTests
         return new MentorPromptBuilder(Microsoft.Extensions.Options.Options.Create(options));
     }
 
+    /// <summary>The coordinator's instructions in the configured language, as the orchestrator asks for them.</summary>
     private static string Instructions(Action<MentorOptions>? configure = null)
-        => Builder(configure).BuildCoordinatorInstructions(Discovery());
+    {
+        var language = MentorLanguage.English;
+        return Builder(o => { configure?.Invoke(o); language = o.Language; }).BuildCoordinatorInstructions(Discovery(), language);
+    }
 
     // ── The cache prefix ────────────────────────────────────────────────────────
 
@@ -165,7 +169,7 @@ public sealed class PromptBuilderTests
         {
             AppName = "Empty",
             ScanAssemblies = [typeof(Novior.MentorAgent.Abstractions.Models.MentorCard).Assembly],
-        })).BuildCoordinatorInstructions(new DiscoveryResult());
+        })).BuildCoordinatorInstructions(new DiscoveryResult(), MentorLanguage.English);
 
         empty.Should().Contain("No actions configured");
         empty.Should().NotContain("**0 direct actions**");
@@ -192,7 +196,7 @@ public sealed class PromptBuilderTests
         {
             AppName = "Empty",
             ScanAssemblies = [typeof(Novior.MentorAgent.Abstractions.Models.MentorCard).Assembly],
-        })).BuildCoordinatorInstructions(new DiscoveryResult());
+        })).BuildCoordinatorInstructions(new DiscoveryResult(), MentorLanguage.English);
 
         text.Should().NotContain("Application Pages",
             "an empty page list would tell the model navigate_to exists with nowhere to go");
@@ -440,7 +444,7 @@ public sealed class PromptBuilderTests
             },
         };
 
-        Builder().BuildAgentInstructions(custom).Should().Be("You only talk about shipping.");
+        Builder().BuildAgentInstructions(custom, MentorLanguage.English).Should().Be("You only talk about shipping.");
     }
 
     /// <summary>
@@ -465,7 +469,7 @@ public sealed class PromptBuilderTests
     {
         // The specialist speaks to the user directly, so it needs the same discretion as the
         // coordinator.
-        var text = Builder().BuildAgentInstructions(GeneratedPathAgent());
+        var text = Builder().BuildAgentInstructions(GeneratedPathAgent(), MentorLanguage.English);
 
         text.Should().Contain("Never mention internal tool names");
     }
@@ -478,7 +482,7 @@ public sealed class PromptBuilderTests
         // model reads "never mention internal tool names" right after being shown a list of them.
         var agent = GeneratedPathAgent();
 
-        var text = Builder().BuildAgentInstructions(agent);
+        var text = Builder().BuildAgentInstructions(agent, MentorLanguage.English);
 
         text.Should().Contain(agent.Attribute.Name).And.Contain(agent.Attribute.Description);
 
@@ -493,7 +497,7 @@ public sealed class PromptBuilderTests
         var agent = GeneratedPathAgent();
         var builder = Builder();
 
-        builder.BuildAgentInstructions(agent).Should().Be(builder.BuildAgentInstructions(agent));
+        builder.BuildAgentInstructions(agent, MentorLanguage.English).Should().Be(builder.BuildAgentInstructions(agent, MentorLanguage.English));
     }
 
     [Fact]
@@ -504,7 +508,7 @@ public sealed class PromptBuilderTests
         // count them — answered "87". The instance has 5. The number travelled up through two
         // coordinators and reached the user as a table. The coordinator's prompt has always had a
         // rule against inventing; a specialist's had none.
-        var text = Builder().BuildAgentInstructions(GeneratedPathAgent());
+        var text = Builder().BuildAgentInstructions(GeneratedPathAgent(), MentorLanguage.English);
 
         text.Should().Contain("State only facts a tool returned",
             "a specialist answers with data, so the rule against making data up belongs in its prompt");
@@ -516,7 +520,7 @@ public sealed class PromptBuilderTests
     {
         var member = Discovery().Level3Teams.First().Members.First();
 
-        Builder().BuildTeamMemberInstructions(member)
+        Builder().BuildTeamMemberInstructions(member, MentorLanguage.English)
             .Should().Contain("State only facts a tool returned");
     }
 
@@ -525,7 +529,7 @@ public sealed class PromptBuilderTests
     {
         var member = Discovery().Level3Teams.First().Members.First();
 
-        var text = Builder().BuildTeamMemberInstructions(member);
+        var text = Builder().BuildTeamMemberInstructions(member, MentorLanguage.English);
 
         text.Should().Contain(member.Attribute.Instructions);
     }
@@ -545,15 +549,32 @@ public sealed class PromptBuilderTests
     }
 
     [Fact]
+    public void Proactive_closes_with_no_next_steps_unless_the_host_turns_them_on()
+    {
+        // BUG-074: even tied to this request's tools, the closing offers named steps the application does not
+        // have, 3 in 15 measured turns. ProactiveNextSteps is off by default, and then the level asks for none.
+        new MentorOptions { AppName = "x", ScanAssemblies = [] }.ProactiveNextSteps.Should().BeFalse();
+
+        var prompt = Instructions(o => o.MentorshipLevel = MentorshipLevel.Proactive);
+
+        prompt.Should().Contain("Proactive Mentorship");
+        prompt.Should().Contain("Do not close with suggested next steps");
+        prompt.Should().NotContain("suggest 1-3").And.NotContain("If none fits, suggest none");
+        prompt.Should().Contain("ONE short sentence", "the rest of the level is unchanged");
+        prompt.Should().Contain("flag potential issues");
+    }
+
+    [Fact]
     public void Proactive_may_only_offer_what_the_application_can_actually_do()
     {
         // Also live: it offered a tracking link, an email notification and a profile page, none of
         // which exist. The follow-up questions are the most-read part of the answer, so an offer
         // the application cannot honour is the fastest way to lose the user's trust in it.
-        var prompt = Instructions(o => o.MentorshipLevel = MentorshipLevel.Proactive);
+        var prompt = Instructions(o => { o.MentorshipLevel = MentorshipLevel.Proactive; o.ProactiveNextSteps = true; });
 
         prompt.Should().Contain("ONLY things you can actually do");
         prompt.Should().Contain("send an email", "the examples are what make the rule concrete");
+        prompt.Should().NotContain("Do not close with suggested next steps");
     }
 
     [Fact]
@@ -563,11 +584,47 @@ public sealed class PromptBuilderTests
         // — it is told how many actions exist and, with tool filtering, sees about ten of them — and it
         // filled the gap with plausible features (export, stock alerts, variants). The offer is now tied to
         // what THIS request carries, and offering nothing is allowed.
-        var prompt = Instructions(o => o.MentorshipLevel = MentorshipLevel.Proactive);
+        var prompt = Instructions(o => { o.MentorshipLevel = MentorshipLevel.Proactive; o.ProactiveNextSteps = true; });
 
         prompt.Should().Contain("a tool you were given in THIS request");
         prompt.Should().Contain("If none fits, suggest none");
         prompt.Should().Contain("export a file");
+    }
+
+    [Fact]
+    public void With_next_steps_on_the_proactive_block_is_the_one_before_byte_for_byte()
+    {
+        // A host that turns the offers back on gets the block 1.1.0 sent, not a rewording of it: the measured
+        // 3 in 15 belongs to this text, and a new one would need measuring again.
+        const string block1_1_0 = """
+            ## Behavior (Proactive Mentorship)
+            - Before acting, say in ONE short sentence what you are about to do. Not a plan, not a
+              numbered list, not a preamble: the user is waiting for the answer, not for the outline.
+            - After each action, suggest 1-3 concrete next steps — but ONLY things you can actually do
+              here: something a tool you were given in THIS request can do, a page you can navigate to,
+              a skill, or a specialist or team you can hand over to. If none fits, suggest none. Never offer to export a file, send an email, open a ticket,
+              set a reminder or an alert, track a parcel, or anything else none of those can do; an offer
+              you cannot honour is worse than none.
+            - Anticipate user needs based on current context and history.
+            - Explain the "why" behind features and recommendations, not just the "how".
+            - Proactively flag potential issues, risks, or better alternatives when you see them.
+            - If the user seems stuck, offer relevant examples or shortcuts.
+            """;
+
+        var prompt = Instructions(o => { o.MentorshipLevel = MentorshipLevel.Proactive; o.ProactiveNextSteps = true; });
+
+        prompt.Should().Contain(block1_1_0);
+    }
+
+    [Theory]
+    [InlineData(MentorshipLevel.Minimal)]
+    [InlineData(MentorshipLevel.Standard)]
+    public void The_next_steps_option_changes_the_proactive_level_only(MentorshipLevel level)
+    {
+        var off = Instructions(o => o.MentorshipLevel = level);
+        var on = Instructions(o => { o.MentorshipLevel = level; o.ProactiveNextSteps = true; });
+
+        on.Should().Be(off);
     }
 
     [Fact]

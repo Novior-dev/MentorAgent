@@ -122,7 +122,7 @@ internal sealed class A2AAgentBuilder : IDisposable
                 var a2aClient = A2AClientFactory.Create(card, httpClient);
 
                 // Wrap as IChatClient so Agent Framework can use it in Handoff
-                var chatClient = new A2AChatClient(a2aClient, remote.Name);
+                var chatClient = A2AChatClient.ForCard(card, a2aClient, remote.Name, _logger);
 
                 var agent = new ChatClientAgent(
                     chatClient,
@@ -142,8 +142,11 @@ internal sealed class A2AAgentBuilder : IDisposable
                     "[MentorAgent:A2A] Remote agent '{Name}' connected from {Url}.",
                     remote.Name, remote.AgentCardUrl);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
+                // A build the turn stopped is not an agent that is down (BUG-211): it ends here, and the next message
+                // builds the coordinator again, with the agent. Swallowed, the Stop left the session without it.
+                //
                 // The cache already said this once, as a message, with the agent and the URL in it
                 // (and the stack trace at Debug). Repeating it per session was one full stack trace
                 // per visitor for an agent that is simply down.
@@ -178,15 +181,26 @@ internal sealed class A2AAgentBuilder : IDisposable
 internal sealed class A2AChatClient : IChatClient
 {
     private readonly IA2AClient _a2aClient;
+    private readonly bool       _streaming;
+    private readonly ILogger    _logger;
     private string?             _contextId;   // persisted across conversation turns
 
     public ChatClientMetadata Metadata { get; }
 
-    public A2AChatClient(IA2AClient a2aClient, string name)
+    public A2AChatClient(IA2AClient a2aClient, string name, bool streaming = true, ILogger? logger = null)
     {
         _a2aClient = a2aClient;
+        _streaming = streaming;
+        _logger    = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         Metadata   = new ChatClientMetadata(nameof(A2AChatClient), defaultModelId: name);
     }
+
+    /// <summary>
+    /// A client for the peer <paramref name="card"/> describes, streamed only when the card declares streaming
+    /// (BUG-197).
+    /// </summary>
+    internal static A2AChatClient ForCard(AgentCard card, IA2AClient a2aClient, string name, ILogger logger)
+        => new(a2aClient, name, card.Capabilities?.Streaming == true, logger);
 
     /// <summary>
     /// What the peer is sent: the last user message, without the marker <c>route_to_specialist</c>
@@ -219,6 +233,133 @@ internal sealed class A2AChatClient : IChatClient
         },
     };
 
+    // ── Stop (BUG-210) ─────────────────────────────────────────────────────────
+
+    /// <summary>How long a stopped turn waits, at most, for the peer to take its cancel.</summary>
+    private static readonly TimeSpan CancelTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>How often a task the peer is still working on is read again: from a quarter of a second up to one.</summary>
+    private static readonly TimeSpan FirstPoll = TimeSpan.FromMilliseconds(250), LongestPoll = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// BUG-210: the turn that delegated the task ended before its answer — a Stop, a client that went away, a failure —
+    /// and nobody waits for it any more. The peer is told to cancel it rather than finish it: up to 1.1.0 it was told
+    /// nothing, and ran it to the end, actions that ask for no confirmation included. Awaited, because the HTTP client
+    /// that carries the cancel is disposed with the session's scope, but never longer than <see cref="CancelTimeout"/>;
+    /// a peer that does not take it costs a Debug line, not the turn's error.
+    /// </summary>
+    private async Task CancelRemoteTaskAsync(string taskId)
+    {
+        using var timeout = new CancellationTokenSource(CancelTimeout);
+        try
+        {
+            await _a2aClient.CancelTaskAsync(new CancelTaskRequest { Id = taskId }, timeout.Token);
+            _logger.LogInformation(
+                "[MentorAgent:A2A] Task '{TaskId}' of the remote agent '{Name}' cancelled: the turn that delegated it " +
+                "ended before its answer.", taskId, Metadata.DefaultModelId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "[MentorAgent:A2A] Task '{TaskId}' of the remote agent '{Name}' could not be cancelled.",
+                taskId, Metadata.DefaultModelId);
+        }
+    }
+
+    /// <summary>
+    /// The token a request to the peer runs under, in place of the turn's. A Stop cancels it at once when the task's id
+    /// is known, and the task is then cancelled by its id; when it is not known yet — a Stop before the peer's first
+    /// event, or during a request that returns the task — the request stays open <see cref="CancelTimeout"/> longer,
+    /// for the id to arrive. Dropped at once, it left the task running with nothing to cancel it by.
+    /// </summary>
+    private sealed class RemoteTaskWatch : IDisposable
+    {
+        private readonly CancellationTokenSource _request = new();
+        private readonly CancellationTokenRegistration _onStop;
+        private string? _id;
+
+        internal RemoteTaskWatch(CancellationToken turn)
+            => _onStop = turn.Register(() =>
+            {
+                if (Id is null) _request.CancelAfter(CancelTimeout);
+                else _request.Cancel();
+            });
+
+        internal CancellationToken Request => _request.Token;
+
+        /// <summary>The task's id, once something names it; the first one stays.</summary>
+        internal string? Id
+        {
+            get => Volatile.Read(ref _id);
+            set => Interlocked.CompareExchange(ref _id, value, null);
+        }
+
+        public void Dispose()
+        {
+            _onStop.Dispose();
+            _request.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The peer's events, with a read that fails once the turn is stopped reported as the cancellation it is. The
+    /// connection is torn down under a stopped read, which can then surface as an <see cref="IOException"/>, and the
+    /// workflow above would read the Stop as a peer that failed.
+    /// </summary>
+    private static async IAsyncEnumerable<T> AsCancelled<T>(
+        IAsyncEnumerable<T> events, [EnumeratorCancellation] CancellationToken request, CancellationToken turn)
+    {
+        await using var e = events.GetAsyncEnumerator(request);
+        while (true)
+        {
+            bool more;
+            try
+            {
+                more = await e.MoveNextAsync();
+            }
+            catch (Exception ex) when (turn.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("The delegated request was cancelled.", ex, turn);
+            }
+            if (!more) yield break;
+            yield return e.Current;
+        }
+    }
+
+    /// <summary>A state the peer is still working in: the task can be read again, and cancelled.</summary>
+    private static bool InProgress(TaskState? state) => state is TaskState.Submitted or TaskState.Working;
+
+    /// <summary>
+    /// Reads the task until the peer is done with it. Cancelled by the turn, or failing, it cancels the task first.
+    /// </summary>
+    private async Task<AgentTask> UntilDoneAsync(AgentTask task, CancellationToken ct)
+    {
+        var done = false;
+        try
+        {
+            for (var delay = FirstPoll; InProgress(task.Status?.State);
+                 delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, LongestPoll.Ticks)))
+            {
+                await Task.Delay(delay, ct);
+                try
+                {
+                    task = await _a2aClient.GetTaskAsync(new GetTaskRequest { Id = task.Id }, ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ct.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException("The delegated request was cancelled.", ex, ct);
+                }
+            }
+            done = true;
+            return task;
+        }
+        finally
+        {
+            if (!done)
+                await CancelRemoteTaskAsync(task.Id);
+        }
+    }
+
     // ── Non-streaming ──────────────────────────────────────────────────────────
 
     public async Task<ChatResponse> GetResponseAsync(
@@ -226,7 +367,28 @@ internal sealed class A2AChatClient : IChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var response = await _a2aClient.SendMessageAsync(OutboundRequest(messages), cancellationToken);
+        // Told the task at once rather than waiting for the reply (BUG-210): a caller that waits holds no id, and a
+        // Stop could only drop the request while the peer ran the task to its end. A peer that answers at once with
+        // a message, or with the finished task, is read as before.
+        var request = OutboundRequest(messages);
+        request.Configuration = new SendMessageConfiguration { ReturnImmediately = true };
+        SendMessageResponse response;
+        using (var watch = new RemoteTaskWatch(cancellationToken))
+        {
+            try
+            {
+                response = await _a2aClient.SendMessageAsync(request, watch.Request);
+            }
+            catch (Exception ex) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("The delegated request was cancelled.", ex, cancellationToken);
+            }
+        }
+        // A turn stopped while the task was being started reads it no further: UntilDoneAsync cancels it at once.
+        if (response.PayloadCase == SendMessageResponseCase.Task && response.Task is { } started
+            && InProgress(started.Status?.State))
+            response = new SendMessageResponse { Task = await UntilDoneAsync(started, cancellationToken) };
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Keep the context ID alive for follow-up turns
         _contextId = response.PayloadCase switch
@@ -246,43 +408,84 @@ internal sealed class A2AChatClient : IChatClient
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var evt in _a2aClient.SendStreamingMessageAsync(
-            OutboundRequest(messages), cancellationToken))
+        // BUG-197: a peer that does not declare streaming is asked once, without a stream. From A2A
+        // 1.0.0-preview3 its server refuses a streamed request, and the SDK's client reads the refusal as
+        // a stream with nothing in it: the delegated turn came back empty, with no error.
+        if (!_streaming)
         {
-            // A peer answers in one of two shapes, and both are in the specification: a bare
-            // Message, or a Task whose answer arrives on its final status. Only the first was read
-            // here — and a MentorAgent server answers with the second, so MentorAgent's own client
-            // heard nothing from MentorAgent's own server (BUG-078).
-            A2A.Message? answer = null;
-
-            switch (evt.PayloadCase)
-            {
-                case StreamResponseCase.Message when evt.Message is { } msg:
-                    _contextId = msg.ContextId ?? _contextId;
-                    answer = msg;
-                    break;
-
-                case StreamResponseCase.Task when evt.Task is { } task:
-                    _contextId = task.ContextId ?? _contextId;
-                    if (IsFinal(task.Status?.State)) answer = task.Status?.Message;
-                    break;
-
-                case StreamResponseCase.StatusUpdate when evt.StatusUpdate is { } update:
-                    _contextId = update.ContextId ?? _contextId;
-                    // A Working status carries a progress note ("Processing…"), not the answer.
-                    if (IsFinal(update.Status?.State)) answer = update.Status?.Message;
-                    break;
-            }
-
-            if (answer is null) continue;
-
-            var chatMsg = answer.ToChatMessage();
+            var response = await GetResponseAsync(messages, options, cancellationToken);
             yield return new ChatResponseUpdate
             {
                 Role     = ChatRole.Assistant,
-                Contents = [.. chatMsg.Contents],
+                Contents = [.. response.Messages.SelectMany(m => m.Contents)],
             };
+            yield break;
         }
+
+        var answered = false;
+        // The task the stream belongs to, from its first event, and whether the stream got as far as its end: a turn
+        // that leaves it before, a Stop above all, cancels the task (BUG-210).
+        using var watch = new RemoteTaskWatch(cancellationToken);
+        var ended = false;
+        try
+        {
+            await foreach (var evt in AsCancelled(_a2aClient.SendStreamingMessageAsync(
+                OutboundRequest(messages), watch.Request), watch.Request, cancellationToken))
+            {
+                watch.Id = evt.Task?.Id ?? evt.StatusUpdate?.TaskId ?? evt.ArtifactUpdate?.TaskId;
+
+                // Stopped before this event named the task: the stream was kept open for it (RemoteTaskWatch).
+                if (cancellationToken.IsCancellationRequested) break;
+
+                // A peer answers in one of two shapes, and both are in the specification: a bare
+                // Message, or a Task whose answer arrives on its final status. Only the first was read
+                // here — and a MentorAgent server answers with the second, so MentorAgent's own client
+                // heard nothing from MentorAgent's own server (BUG-078).
+                A2A.Message? answer = null;
+
+                switch (evt.PayloadCase)
+                {
+                    case StreamResponseCase.Message when evt.Message is { } msg:
+                        _contextId = msg.ContextId ?? _contextId;
+                        answer = msg;
+                        break;
+
+                    case StreamResponseCase.Task when evt.Task is { } task:
+                        _contextId = task.ContextId ?? _contextId;
+                        if (IsFinal(task.Status?.State)) answer = task.Status?.Message;
+                        break;
+
+                    case StreamResponseCase.StatusUpdate when evt.StatusUpdate is { } update:
+                        _contextId = update.ContextId ?? _contextId;
+                        // A Working status carries a progress note ("Processing…"), not the answer.
+                        if (IsFinal(update.Status?.State)) answer = update.Status?.Message;
+                        break;
+                }
+
+                if (answer is null) continue;
+
+                answered = ended = true;
+                var chatMsg = answer.ToChatMessage();
+                yield return new ChatResponseUpdate
+                {
+                    Role     = ChatRole.Assistant,
+                    Contents = [.. chatMsg.Contents],
+                };
+            }
+            ended |= !cancellationToken.IsCancellationRequested;
+        }
+        finally
+        {
+            if (!ended && watch.Id is { } taskId)
+                await CancelRemoteTaskAsync(taskId);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!answered)
+            _logger.LogWarning(
+                "[MentorAgent:A2A] The remote agent '{Name}' ended its stream without an answer, so the delegated " +
+                "request comes back empty. A peer that refuses streaming answers so too.",
+                Metadata.DefaultModelId);
     }
 
     /// <summary>A state after which the task says nothing more — its message is the outcome.</summary>

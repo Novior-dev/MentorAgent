@@ -38,12 +38,17 @@ internal sealed class MentorConfirmationBuilder
     public MentorConfirmationBuilder(
         MentorDiscoveryService discovery,
         IOptions<MentorOptions> options,
-        ILogger<MentorConfirmationBuilder>? logger = null)
+        ILogger<MentorConfirmationBuilder>? logger = null,
+        MentorTurnLanguage? turnLanguage = null)
     {
         _discovery = discovery;
         _options   = options.Value;
         _logger    = (ILogger?)logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        _turnLanguage = turnLanguage;
     }
+
+    /// <summary>The language of the turn, for <see cref="MentorConfirmationContext.Language"/> (story 536).</summary>
+    private readonly MentorTurnLanguage? _turnLanguage;
 
     private DiscoveryResult Discovery => _cache ??= _discovery.Discover();
 
@@ -193,7 +198,7 @@ internal sealed class MentorConfirmationBuilder
                 ToolName       = toolName,
                 Description    = description,
                 Arguments      = shown,
-                Language       = _options.Language,
+                Language       = _turnLanguage?.Current ?? _options.Language,
                 DefaultMessage = message,
                 Services       = services ?? EmptyServices.Instance,
             });
@@ -291,8 +296,11 @@ internal sealed class MentorConfirmationBuilder
            || c is >= '\u202A' and <= '\u202E'
            || c is >= '\u2066' and <= '\u2069';
 
-    /// <summary>What <see cref="MentorConfirmationContext.Services"/> is when the caller has no scope to give.</summary>
-    private sealed class EmptyServices : IServiceProvider
+    /// <summary>
+    /// What <see cref="MentorConfirmationContext.Services"/> and <c>MentorActionRequest.Services</c> are when the caller
+    /// has no scope to give: a middleware built by hand.
+    /// </summary>
+    internal sealed class EmptyServices : IServiceProvider
     {
         public static readonly EmptyServices Instance = new();
         public object? GetService(Type serviceType) => null;

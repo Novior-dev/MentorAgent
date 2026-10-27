@@ -154,7 +154,7 @@ public sealed class HandoffGraphTests
         var prompt = new MentorPromptBuilder(Microsoft.Extensions.Options.Options.Create(NewOptions()));
 
         var custom = "You are a laconic shipping clerk. Answer in one sentence.";
-        prompt.BuildAgentInstructions(Describe("shipping", custom)).Should().Be(custom);
+        prompt.BuildAgentInstructions(Describe("shipping", custom), MentorLanguage.English).Should().Be(custom);
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public sealed class HandoffGraphTests
     {
         var prompt = new MentorPromptBuilder(Microsoft.Extensions.Options.Options.Create(NewOptions()));
 
-        var generated = prompt.BuildAgentInstructions(Describe("shipping"));
+        var generated = prompt.BuildAgentInstructions(Describe("shipping"), MentorLanguage.English);
 
         generated.Should().Contain("shipping").And.Contain("Handles everything about shipping.");
         generated.Should().Contain("TestApp", "the generated prompt names the application");
@@ -179,7 +179,7 @@ public sealed class HandoffGraphTests
         // specialist with no instructions at all, which answers as a generic assistant.
         var prompt = new MentorPromptBuilder(Microsoft.Extensions.Options.Options.Create(NewOptions()));
 
-        prompt.BuildAgentInstructions(Describe("shipping", instructions))
+        prompt.BuildAgentInstructions(Describe("shipping", instructions), MentorLanguage.English)
             .Should().Contain("specialized AI agent");
     }
 
@@ -192,7 +192,7 @@ public sealed class HandoffGraphTests
         options.Language = MentorLanguage.Italian;
 
         new MentorPromptBuilder(Microsoft.Extensions.Options.Options.Create(options))
-            .BuildAgentInstructions(Describe("shipping"))
+            .BuildAgentInstructions(Describe("shipping"), options.Language)
             .Should().Contain("Italian");
     }
 

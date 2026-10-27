@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Novior.MentorAgent.Abstractions.Interfaces;
+using Novior.MentorAgent.Abstractions.Models;
 using Novior.MentorAgent.Core;
 using Novior.MentorAgent.Tests.App;
 using Novior.MentorAgent.Tests.Harness;
@@ -26,7 +27,7 @@ namespace Novior.MentorAgent.Tests.Levels;
 /// </summary>
 public sealed class DelegatedDeclineTests
 {
-    private static readonly string Declined = MentorUtils.ToolDeclined("Cancelled");
+    private static readonly string Declined = MentorUtils.ToolDeclined("Cancelled", MentorLanguage.English);
 
     private static string Result(Func<string, bool>? isReadOnly, params ChatMessage[] messages)
         => MentorOrchestrator.DelegationResult(new AgentResponse([.. messages]), NullLogger.Instance,

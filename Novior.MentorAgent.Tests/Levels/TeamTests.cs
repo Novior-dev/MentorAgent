@@ -1,5 +1,6 @@
 using System.Reflection;
 using FluentAssertions;
+using Novior.MentorAgent.Abstractions.Models;
 using Novior.MentorAgent.Attributes;
 using Novior.MentorAgent.Core;
 using Novior.MentorAgent.Tests.Fakes;
@@ -368,7 +369,7 @@ public sealed class TeamTests
         // With a REJECTED anywhere vetoing the plan, a member who asked for rework with the token would
         // block it for good. The instruction says so, and asks for changes without a token.
         await using var host = MentorHostFixture.Create();
-        var instructions = host.Get<MentorPromptBuilder>().BuildTeamMemberInstructions(Member("Approver"));
+        var instructions = host.Get<MentorPromptBuilder>().BuildTeamMemberInstructions(Member("Approver"), MentorLanguage.English);
 
         instructions.Should().Contain("REJECTED for good and must not go ahead");
         instructions.Should().Contain("If it only needs changes, say what to change and write neither token");

@@ -24,10 +24,24 @@ namespace Novior.MentorAgent.Middleware;
 internal sealed class GatedAIFunction : DelegatingAIFunction
 {
     private readonly MentorAgentUIMiddleware _gate;
+    private readonly MentorAgentKind _agentKind;
+    private readonly string? _agentName;
 
-    public GatedAIFunction(AIFunction innerFunction, MentorAgentUIMiddleware gate)
+    /// <param name="innerFunction">The tool.</param>
+    /// <param name="gate">The scope's gate.</param>
+    /// <param name="agentKind">Which kind of agent the tool is given to, for the gate's decisions (story 180).</param>
+    /// <param name="agentName">
+    /// That agent's name, when the tool belongs to one agent. The agents of an <see cref="Core.IMentorAgentSource"/>
+    /// share one list, so theirs is the agent running the call (<see cref="AIAgent.CurrentRunContext"/>).
+    /// </param>
+    public GatedAIFunction(AIFunction innerFunction, MentorAgentUIMiddleware gate,
+        MentorAgentKind agentKind = MentorAgentKind.Specialist, string? agentName = null)
         : base(innerFunction)
-        => _gate = gate;
+    {
+        _gate      = gate;
+        _agentKind = agentKind;
+        _agentName = agentName;
+    }
 
     protected override ValueTask<object?> InvokeCoreAsync(
         AIFunctionArguments arguments, CancellationToken cancellationToken)
@@ -43,12 +57,17 @@ internal sealed class GatedAIFunction : DelegatingAIFunction
                alwaysBlockForApproval: true,
                // This function's own method: a level-1 method with the same name and no roles used to decide
                // the roles of a specialist's call (BUG-188).
-               method: UnderlyingMethod);
+               method: UnderlyingMethod,
+               callId: FunctionInvokingChatClient.CurrentContext?.CallContent?.CallId,
+               agentKind: _agentKind,
+               agentName: _agentName ?? AIAgent.CurrentRunContext?.Agent?.Name,
+               description: Description);
 
     /// <summary>
     /// Wraps <paramref name="tool"/> in the gate when it is an invocable <see cref="AIFunction"/>.
     /// Anything else (hosted tools, declarations) is returned unchanged.
     /// </summary>
-    public static AITool Wrap(AITool tool, MentorAgentUIMiddleware gate)
-        => tool is AIFunction fn and not GatedAIFunction ? new GatedAIFunction(fn, gate) : tool;
+    public static AITool Wrap(AITool tool, MentorAgentUIMiddleware gate,
+        MentorAgentKind agentKind = MentorAgentKind.Specialist, string? agentName = null)
+        => tool is AIFunction fn and not GatedAIFunction ? new GatedAIFunction(fn, gate, agentKind, agentName) : tool;
 }

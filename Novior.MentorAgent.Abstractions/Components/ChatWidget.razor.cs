@@ -1,4 +1,5 @@
-﻿using Novior.MentorAgent.Abstractions.Core;
+﻿using System.Reflection;
+using Novior.MentorAgent.Abstractions.Core;
 using Novior.MentorAgent.Abstractions.Interfaces;
 using Novior.MentorAgent.Abstractions.Models;
 using Microsoft.AspNetCore.Components;
@@ -11,6 +12,18 @@ namespace Novior.MentorAgent.Abstractions.Components;
 
 public partial class ChatWidget : IDisposable
 {
+    /// <summary>
+    /// The <c>?v=</c> on the stylesheet and script links: this assembly's informational version, that is
+    /// the package version plus the commit it was built from (BUG-209). Neither file is fingerprinted,
+    /// and a host serving them as classic static files sends no <c>Cache-Control</c>, so a browser may
+    /// reuse its copy without asking. A number bumped by hand stayed <c>?v=10</c> from the first release
+    /// on, and an upgraded visitor got the previous release's CSS and JS.
+    /// </summary>
+    internal static string AssetVersion { get; } =
+        typeof(ChatWidget).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? typeof(ChatWidget).Assembly.GetName().Version?.ToString(3)
+        ?? "0";
+
     /// <summary>
     /// Optional custom renderer for generative cards (#14 L2). When set it replaces
     /// <c>MentorCardView</c> for <b>every</b> card, so switch on <c>card.Kind</c> inside it and fall
@@ -25,6 +38,54 @@ public partial class ChatWidget : IDisposable
     /// </code>
     /// </summary>
     [Parameter] public RenderFragment<MentorCard>? CardTemplate { get; set; }
+
+    /// <summary>
+    /// The language of this widget, for this page: its texts, the voice, the tour, and every turn it sends,
+    /// which the assistant answers in. <see langword="null"/> (the default) means <c>MentorOptions.Language</c>.
+    /// Bind it to the page's language and the widget follows a change at once, keeping the conversation:
+    /// <code>&lt;ChatWidget Language="@_language" /&gt;</code>
+    /// </summary>
+    [Parameter] public MentorLanguage? Language { get; set; }
+
+    /// <summary>The name the widget's localizer cascades under, to the components inside it.</summary>
+    internal const string LocalizerCascade = "Novior.MentorAgent.WidgetLocalizer";
+
+    // The localizer of Language, made again only when Language changes; null without one.
+    private MentorLocalizer? _pageLocalizer;
+
+    /// <summary>The widget's texts: in <see cref="Language"/> when it is set, else in the application's language.</summary>
+    private MentorLocalizer L => _pageLocalizer ?? ApplicationL;
+
+    protected override void OnParametersSet()
+    {
+        if (Language is not { } language) _pageLocalizer = null;
+        else if (_pageLocalizer?.Language != language) _pageLocalizer = new MentorLocalizer(language);
+    }
+
+    /// <summary>
+    /// An open tour follows a change of <see cref="Language"/> at once, on the step it is at; a closed one is fetched
+    /// again when it is replayed. An open tour used to keep the steps of the language it opened in (BUG-228).
+    /// </summary>
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_tourOpen || _tourLanguage == Language || Services.GetService(typeof(IMentorTour)) is not IMentorTour tour) return;
+
+        var language = Language;
+        try
+        {
+            var steps = await tour.GetStepsAsync(language);
+            // A later switch is fetching its own steps, or this language has none: what is shown stays.
+            if (Language != language || steps.Count == 0) return;
+
+            // The step shown is the tour's own: OnboardingTour keeps it within the new steps.
+            _tourSteps = steps;
+            _tourLanguage = language;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[MentorAgent:UI] The onboarding tour could not be fetched in the new language.");
+        }
+    }
 
     [Inject] private IMentorOrchestrator        Orchestrator { get; set; } = default!;
     [Inject] private IMentorStateService        State        { get; set; } = default!;
@@ -148,6 +209,8 @@ public partial class ChatWidget : IDisposable
 
     // #18 — onboarding tour. Loaded lazily, the first time the widget is opened.
     private IReadOnlyList<MentorTourStep> _tourSteps = [];
+    // The Language the steps were fetched in: after a switch the tour is fetched again in the new one.
+    private MentorLanguage? _tourLanguage;
     private bool _tourOpen;
     private bool _tourChecked;
     private int  _tourIndex;
@@ -174,6 +237,17 @@ public partial class ChatWidget : IDisposable
         if (firstRender)
         {
             var opt = Options.Value;
+
+            // On <html>, the :root the inline block had, through the CSSOM: a strict Content-Security-Policy
+            // refuses a <style> block or a style attribute, not style.setProperty (BUG-213). Until this runs,
+            // on a prerendered page for instance, the accent is the theme's own.
+            var accent = PrimaryColorVars(opt.PrimaryColor);
+            if (accent.Count > 0)
+            {
+                try { await JS.InvokeVoidAsync("MentorAgent.setRootVars", accent); }
+                catch { }
+            }
+
             if (opt.EnableVoiceOutput)
             {
                 try
@@ -267,7 +341,8 @@ public partial class ChatWidget : IDisposable
         {
             if (await JS.InvokeAsync<bool>("MentorAgent.flagGet", TourSeenKey)) return;
 
-            _tourSteps = await tour.GetStepsAsync();
+            _tourSteps = await tour.GetStepsAsync(Language);
+            _tourLanguage = Language;
             // No steps is a legitimate answer (an app with no [MentorPage]); do not mark it seen,
             // so a later deployment that does have pages still gets its first run.
             if (_tourSteps.Count == 0) return;
@@ -354,7 +429,12 @@ public partial class ChatWidget : IDisposable
         }
         try
         {
-            if (_tourSteps.Count == 0) _tourSteps = await tour.GetStepsAsync();
+            // A tour fetched in another language is fetched again in the widget's (story 536).
+            if (_tourSteps.Count == 0 || _tourLanguage != Language)
+            {
+                _tourSteps = await tour.GetStepsAsync(Language);
+                _tourLanguage = Language;
+            }
             if (_tourSteps.Count == 0)
             {
                 Logger.LogWarning(
@@ -462,7 +542,8 @@ public partial class ChatWidget : IDisposable
         // Fire-and-forget, but never silently: if the send itself fails (e.g. the transport
         // rejected the payload) the user must see something rather than a chat that just sits there.
         // The send ends with the turn on every transport, so its end also releases the reset guard.
-        _ = Orchestrator.SendMessageAsync(msg.Text, msg.Attachments)
+        // With the widget's Language, which the server answers the turn in (story 536); none means the application's.
+        _ = Orchestrator.SendMessageAsync(msg with { Language = Language })
                         .ContinueWith(t =>
                         {
                             if (t.IsFaulted) ShowSendFailure(t.Exception!);
@@ -564,7 +645,7 @@ public partial class ChatWidget : IDisposable
                 // beginSpeech reset the queue the first had just filled.
                 _speechOpen = true;
                 await JS.InvokeVoidAsync("MentorAgent.beginSpeech",
-                                         Options.Value.Language.ToIsoCode(), Options.Value.VoiceRate);
+                                         L.Language.ToIsoCode(), Options.Value.VoiceRate);
             }
             await JS.InvokeVoidAsync("MentorAgent.pushSpeech", pending);
         }
@@ -633,7 +714,7 @@ public partial class ChatWidget : IDisposable
                             // Streaming off, or an answer too short to have crossed a boundary:
                             // one utterance for the whole thing.
                             await JS.InvokeVoidAsync("MentorAgent.speak", text,
-                                                     Options.Value.Language.ToIsoCode(), Options.Value.VoiceRate);
+                                                     L.Language.ToIsoCode(), Options.Value.VoiceRate);
                         }
                     }
                     catch { }
@@ -701,6 +782,9 @@ public partial class ChatWidget : IDisposable
     /// MessageBubble reads images off the message itself, so this is all the rendering needs.
     /// </summary>
     private static ChatMessage BuildAssistantMessage(string text, IReadOnlyList<string>? images)
+        => MessageBubble.MarkAiGenerated(BuildAssistantContent(text, images));
+
+    private static ChatMessage BuildAssistantContent(string text, IReadOnlyList<string>? images)
     {
         if (images is not { Count: > 0 })
             return new ChatMessage(ChatRole.Assistant, text);
@@ -824,34 +908,37 @@ public partial class ChatWidget : IDisposable
 
     // â”€â”€ Theme builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    private static string BuildThemeVars(MentorWidgetOptions opt)
+    /// <summary>
+    /// The stylesheet of this package a theme links, from <c>css/themes</c>, and the media it applies to.
+    /// Null for <see cref="MentorTheme.Default"/> and <see cref="MentorTheme.Custom"/>, which override nothing.
+    /// <see cref="MentorTheme.Auto"/> is Minimal for a system that asks for light, and Default otherwise.
+    /// </summary>
+    private static (string File, string? Media)? ThemeStylesheet(MentorTheme theme) => theme switch
     {
-        var sb = new System.Text.StringBuilder();
-        switch (opt.Theme)
+        MentorTheme.Dark    => ("dark", null),
+        MentorTheme.Minimal => ("minimal", null),
+        MentorTheme.Auto    => ("minimal", "(prefers-color-scheme: light)"),
+        _                   => null,
+    };
+
+    /// <summary>
+    /// The variables a <c>PrimaryColor</c> sets: the accent, and from a 6-digit hex also the pressed shade,
+    /// the glow, the accent border and the FAB shadow. Empty without one.
+    /// </summary>
+    private static Dictionary<string, string> PrimaryColorVars(string? primaryColor)
+    {
+        var vars = new Dictionary<string, string>();
+        if (string.IsNullOrWhiteSpace(primaryColor)) return vars;
+
+        vars["--bm-accent"] = primaryColor;
+        if (TryParseHexColor(primaryColor, out var r, out var g, out var b))
         {
-            case MentorTheme.Dark:
-                sb.Append("--bm-bg-base:#050810;--bm-bg-panel:rgba(5,8,16,0.85);--bm-bg-surface:#0d1117;--bm-bg-elevated:#161b25;--bm-bg-hover:#1c2230;--bm-text-primary:#f0f4ff;--bm-text-secondary:#8b9cc8;--bm-text-muted:#4a567a;");
-                break;
-            case MentorTheme.Minimal:
-                sb.Append("--bm-bg-base:#ffffff;--bm-bg-panel:rgba(255,255,255,0.97);--bm-bg-surface:#f8fafc;--bm-bg-elevated:#f1f5f9;--bm-bg-hover:#e2e8f0;--bm-text-primary:#0f172a;--bm-text-secondary:#475569;--bm-text-muted:#94a3b8;--bm-border:rgba(0,0,0,.1);--bm-border-accent:rgba(0,0,0,.2);--bm-shadow-panel:0 8px 40px rgba(0,0,0,.15),0 0 0 1px rgba(0,0,0,.08),inset 0 1px 0 rgba(255,255,255,.8);");
-                // The hosted-tools and A2A chips keep their amber/indigo tint on a white surface, so
-                // their pale dark-theme text becomes unreadable. Deep amber-700 / indigo-700 keep the
-                // same identity with enough contrast to actually read.
-                sb.Append("--bm-hosted-text:#b45309;--bm-hosted-text-strong:#92400e;--bm-a2a-text:#4338ca;--bm-a2a-text-strong:#3730a3;");
-                break;
+            vars["--bm-accent-dark"]   = $"rgb({(int)(r*.82)},{(int)(g*.82)},{(int)(b*.82)})";
+            vars["--bm-accent-glow"]   = $"rgba({r},{g},{b},.35)";
+            vars["--bm-border-accent"] = $"rgba({r},{g},{b},.3)";
+            vars["--bm-shadow-fab"]    = $"0 8px 32px rgba({r},{g},{b},.4),0 2px 8px rgba(0,0,0,.5)";
         }
-        if (!string.IsNullOrWhiteSpace(opt.PrimaryColor))
-        {
-            sb.Append($"--bm-accent:{opt.PrimaryColor};");
-            if (TryParseHexColor(opt.PrimaryColor, out var r, out var g, out var b))
-            {
-                sb.Append($"--bm-accent-dark:rgb({(int)(r*.82)},{(int)(g*.82)},{(int)(b*.82)});");
-                sb.Append($"--bm-accent-glow:rgba({r},{g},{b},.35);");
-                sb.Append($"--bm-border-accent:rgba({r},{g},{b},.3);");
-                sb.Append($"--bm-shadow-fab:0 8px 32px rgba({r},{g},{b},.4),0 2px 8px rgba(0,0,0,.5);");
-            }
-        }
-        return sb.ToString();
+        return vars;
     }
 
     private static bool TryParseHexColor(string hex, out int r, out int g, out int b)

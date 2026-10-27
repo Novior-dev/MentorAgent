@@ -19,8 +19,10 @@ public sealed class ProactiveHintTests
     [Fact]
     public async Task The_hint_is_in_the_description_of_the_tool_the_model_sees()
     {
-        // The fixture's cancel_order sets ProactiveHint = "Suggest checking active orders first".
+        // The fixture's cancel_order sets ProactiveHint = "Suggest checking active orders first". It needs the Manager
+        // role, and is offered only to a user who holds it (BUG-200).
         await using var host = MentorHostFixture.Create(o => o.MemoryAutoCapture = false);
+        host.Auth.SignIn("ada", "Manager");
         host.Chat!.Say("ok");
 
         await host.RunTurnAsync("annulla l'ordine 7");

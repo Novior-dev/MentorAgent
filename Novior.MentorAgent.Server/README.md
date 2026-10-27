@@ -76,11 +76,15 @@ Expose a fully-featured AI assistant backend from **any ASP.NET Core application
 | `/mentor/chat` | **SSE streaming** | React, Vue, Angular, fetch API, curl — no library needed. `GET` for text, `POST` for [text + images](#multimodal-image-input) |
 | `/mentor/approve` | **HTTP POST** | All clients — HITL confirmation/rejection (see [HITL note](#hitl--confirming-actions)) |
 | `/mentor/cancel` | **HTTP POST** | All SignalR clients — stops the in-flight turn (`?connectionId=...`). HTTP, not a hub method: SignalR cannot dispatch one while `SendMessage` is streaming. Returns **200** when the connection exists, even if no turn is running, and **404** when the connection is closed or the id is unknown: the connection's turn stopped when it closed, so reconnect before sending again |
-| `/mentor/tour` | **HTTP GET** | All clients — [onboarding tour](#onboarding-tour) steps as JSON |
+| `/mentor/tour` | **HTTP GET** | All clients — [onboarding tour](#onboarding-tour) steps as JSON; `?language=it` for the tour in that language |
 | `/mentor/session` | **HTTP GET / POST** | All SignalR clients: saves and restores the connection's conversation (`?connectionId=...`). `GET` returns the snapshot — opaque, protected with ASP.NET Core Data Protection and bound to the connection's user (`204` when there is nothing to save yet). `POST` with that snapshot as JSON body restores it (`400` if it is not one this server issued for this user, was edited, cannot be used by this host, or does not parse; `415` unless the request's content type is JSON). Owner-checked like approve/cancel, before the body is read. A `404` right after connecting means the connection's scope is not registered yet: restore after the first hub call, or retry once |
 | `/mentor/admin/metrics` | **HTTP GET** | Operator dashboards — [token & cost snapshot](#token--cost-dashboard), role-gated. Never expose to end users |
 | `/mcp` | **MCP server** | Claude Desktop, VS Code Copilot, Cursor, any MCP client |
 | `/.well-known/agent-card.json` + `/a2a` | **A2A agent** | Other AI agents, orchestrators |
+
+Behind a load balancer every request of a client — the hub connection and its `/mentor/approve`,
+`/mentor/cancel` and `/mentor/session` — must reach the same instance: see *Running more than one instance* in
+the MentorAgent README.
 
 A reconnect is a new connection and therefore a new conversation. Save while the connection is alive and restore on the new one:
 
@@ -229,10 +233,12 @@ breaks except those features.
 
 > **Each `/mentor/chat` request is its own conversation.** The endpoint runs the turn in the request's own DI scope, so every `GET`/`POST` starts a fresh session. The model does not see the previous turns, a follow-up such as *"and the second one?"* has nothing to refer to, and per-session counters (`MaxHostedToolCallsPerSession`) reset on every call. SSE also has no way to send a `PageContextSnapshot`, so page context and client-side UI actions are not available. For a multi-turn chat, use [SignalR](#option-b--signalr-full-feature-set), whose scope and conversation span the connection.
 
+**The turn's language.** `GET /mentor/chat?message=…&language=it`, or `"language": "it"` in the `POST` body, sets the language of this turn: the name or the ISO code of a `MentorLanguage`. Anything else, or none, is the application's `Language`.
+
 | Frame | Payload | What it is for |
 |---|---|---|
-| `chunk` | `text` | One streamed fragment of the answer |
-| `completed` | — | The **turn** is over. Not merely the current stream: a turn waiting on an approval has not completed |
+| `chunk` | `text`, `aiGenerated` | One streamed fragment of the answer. `aiGenerated` is always `true`: the machine-readable marker of AI-generated text |
+| `completed` | `aiGenerated` | The **turn** is over. Not merely the current stream: a turn waiting on an approval has not completed |
 | `error` | `message` | The turn failed. Followed by `completed` |
 | `cards` | `cards[]` | [Generative cards](#generative-ui--cards-level-2) — camelCase, string enums |
 | `navigation` | `url` | The assistant called `navigate_to`. Route however your framework routes |
@@ -300,6 +306,7 @@ const connection = new signalR.HubConnectionBuilder()
     .build();
 
 // ── Subscribe to ALL events (see complete reference below) ───────────────────
+connection.on('ReplyStarted',         reply        => markAiGenerated(reply.aiGenerated));
 connection.on('StreamingChunk',       chunk        => appendText(chunk));
 connection.on('StreamingCompleted',   ()           => finalize());
 connection.on('BusyChanged',          busy         => setSpinner(busy));
@@ -324,6 +331,10 @@ await connection.start();
 // ── Send messages ─────────────────────────────────────────────────────────────
 // Always two arguments — see the note under the protocol reference.
 await connection.invoke('SendMessage', 'Mostrami gli ordini pending', null);
+
+// ── Send a message in the page's language ──────────────────────────────────────
+// One object; language is a MentorLanguage name or ISO code: the turn in Italian, whatever the application's.
+await connection.invoke('SendUserMessage', { text: 'Mostrami gli ordini pending', attachments: null, language: 'it' });
 
 // ── Send a message with images (multimodal) ──────────────────────────────────
 // The second argument carries the images. It is never optional on the wire: a text-only turn passes null (see the note under the protocol reference).
@@ -361,6 +372,7 @@ await fetch(`/mentor/approve?actionId=${actionId}&approved=false`, { method: 'PO
 
 | Event | Parameters | When fired | What to do |
 |-------|-----------|------------|------------|
+| `ReplyStarted` | `reply: { aiGenerated: true }` (`MentorReplyStarted` in .NET) | Once before every reply of the model, before its first `StreamingChunk` — also for a reply that does not stream, and for a specialist's or a team's | Mark the reply as AI-generated (see *Telling people they are talking to an AI* in the MentorAgent README). Register it even with an empty handler: a client that does not still works, but SignalR logs a Warning for every reply ("Failed to find handler" in .NET, "No client method with the name…" in JavaScript) |
 | `StreamingChunk` | `chunk: string` | Each streaming token from the AI | Append text to the chat bubble |
 | `StreamingCompleted` | — | A streaming **segment** ended: the reply finished, or the turn was stopped or failed. It also fires mid-turn, right before `ConfirmationRequired`, so the explanation is committed before the dialog appears | Finalize the current bubble. Do **not** use it to re-enable input: a turn parked on a confirmation has not ended, and a turn refused up front (message too long, rate limit, safety or out-of-scope refusal) sends `Error` + `BusyChanged(false)` with no `StreamingCompleted`. Gate the composer on `BusyChanged` |
 | `BusyChanged` | `busy: boolean` | AI starts/stops processing | Show/hide loading spinner |
@@ -388,6 +400,7 @@ await fetch(`/mentor/approve?actionId=${actionId}&approved=false`, { method: 'PO
 |--------|-----------|-------------|
 | `UpdatePageContext` | `snapshot: PageContextSnapshot` | Send current page state before each message. Call before `SendMessage` |
 | `SendMessage` | `text: string`, `attachments: MentorAttachment[] \| null` | Send a user message to the AI. `attachments` carries images for a multimodal turn. For a text-only turn pass `null` (or `[]`). The argument is **required on the wire**, see the note below. Each item is `{ mimeType, dataBase64? , url?, fileName? }` — exactly one of `dataBase64` / `url`. An image-only turn (empty `text`) is valid |
+| `SendUserMessage` | `message: { text, attachments, language }` | Sends a user message as `SendMessage` does, with the language of this turn: the name (`"Italian"`) or the ISO code (`"it"`) of a `MentorLanguage`, in any case. A number, a boolean or a name that is not one counts as the application's `Language`, with no error; so does no `language`. `text` and `attachments` are those of `SendMessage`. The WebAssembly client calls it only when its widget has a `Language` |
 | ~~`CancelRequest`~~ | — | ⚠️ **Only works while idle.** SignalR sequential dispatch means it cannot run while `SendMessage` is streaming — exactly when Stop is needed. Use `POST /mentor/cancel?connectionId=...` instead |
 | `ResetSession` | — | Start a new conversation (a fresh `AgentSession`) |
 | ~~`RespondToApproval`~~ | ~~`requestId: string`, `approved: boolean`~~ | ⚠️ **Do not use for HITL.** SignalR sequential dispatch causes a deadlock while `SendMessage` is awaiting. Use `POST /mentor/approve` instead (see below) |
@@ -572,6 +585,7 @@ export function useMentorHub(hubUrl: string, getToken?: () => string | Promise<s
             if (r?.status === 404) { await new Promise(ok => setTimeout(ok, 250)); r = await post(); }  // scope not registered yet
         });
 
+        conn.on('ReplyStarted',         () => {});   // the marker of AI-generated text
         conn.on('StreamingChunk',       c => {
             streamingRef.current += c;
             setStreaming(p => p + c);
@@ -811,6 +825,7 @@ export class MentorHubService implements OnDestroy {
             if (r?.status === 404) { await new Promise(ok => setTimeout(ok, 250)); r = await post(); }  // scope not registered yet
         });
 
+        this.connection.on('ReplyStarted',         () => {});   // the marker of AI-generated text
         this.connection.on('StreamingChunk',       (c: string)  => this.streaming.update(p => p + c));
         this.connection.on('StreamingCompleted',   async ()     => {
             const text = this.streaming();
@@ -1013,6 +1028,7 @@ export function useMentorHub(hubUrl: string, getToken?: () => string | Promise<s
         if (r?.status === 404) { await new Promise(ok => setTimeout(ok, 250)); r = await post(); }  // scope not registered yet
     });
 
+    connection.on('ReplyStarted',         () => {});   // the marker of AI-generated text
     connection.on('StreamingChunk',       (c: string)  => streaming.value += c);
     connection.on('StreamingCompleted',   async ()     => {
         if (streaming.value) messages.value.push({ role: 'assistant', text: streaming.value });   // no text: a segment closed before a confirmation
@@ -1146,6 +1162,7 @@ var connection = new HubConnectionBuilder()
     .WithAutomaticReconnect()
     .Build();
 
+connection.On<object>("ReplyStarted",        _ => { });   // the marker of AI-generated text
 connection.On<string>("StreamingChunk",      chunk => Console.Write(chunk));
 connection.On(        "StreamingCompleted",  ()    => Console.WriteLine());
 connection.On<bool>(  "BusyChanged",         busy  => { /* show spinner */ });
@@ -1191,7 +1208,7 @@ anything else, so here is what each endpoint exposes and what to do about it.
 | `POST /mentor/cancel` | — | Nothing: owner-only, same rule | *(enforced)* |
 | `GET`/`POST /mentor/session` | — | Nothing: owner-only, same rule | *(enforced)* |
 | `GET /mentor/admin/metrics` | — | Nothing, when `DashboardRole` is set | `DashboardRole` |
-| `GET /mentor/tour` | ✅ | Read the tour — public screen names, identical for every user, no counts and no per-user data. Deliberate | — |
+| `GET /mentor/tour` | ✅ | Read the tour — public screen names and the descriptions of the actions that need no role, identical for every user, no counts and no per-user data. Deliberate | — |
 | `/mcp` *(if mapped)* | ✅ | Call every **ungated** `[MentorAction]` as an MCP tool (gated actions are withheld there) | `MapMentorAgentMcp(configure: ...)` |
 | `/a2a` + `/.well-known/agent-card.json` *(if mapped)* | ✅ | Run A2A tasks against your assistant (**your model spend**) and read the agent card | `MapMentorAgentA2A(configure: ...)` |
 
@@ -1836,7 +1853,8 @@ connection.on('ConfirmationRequired', (actionId, toolName, message) => {
 > If the server is on a different origin, use the full URL: `http://localhost:5169/mentor/approve?actionId=...&approved=true`.
 
 **What `POST /mentor/approve` answers.** `200`: the waiting turn received the answer. `404`: nothing is
-waiting for it any more — it was answered already, the turn was stopped, or the connection that raised it
+waiting for it any more — it was answered already, nobody answered it within `ConfirmationTimeout`, the turn
+was stopped, or the connection that raised it
 has closed (a connection's turn ends with it). `401` / `403`: the caller is not the connection's
 principal. A `404` is not a fault: close the dialog.
 
@@ -2037,7 +2055,7 @@ options.ToolFilterMinScore  = 0.35f; // cosine-similarity threshold (higher = st
 options.ToolFilterMinTools  = 0;     // default: the threshold alone (a trade-off - read the core README first)
 ```
 
-Core tools (navigation, memory, routing, teams, skills, UI actions) are always kept. When nothing clears the threshold, the three best-ranked actions that need no confirmation and no role travel anyway — an MCP tool only when its server marks it `readOnlyHint` — because cosine is not calibrated and a question that needs data can score below a greeting (BUG-106); give every action that changes data `RequiresConfirmation`. When only actions that need confirmation clear it, the three best-ranked that do not travel with them (BUG-099). Log (Debug): `Tool filtering: 10/47 tools sent (7 core + 3/40 matched + 0/0 hosted, minScore=0.35)`, preceded on such a turn by `no action cleared minScore=0.35 (best: …); the 3 best-ranked that need no confirmation were sent: …`.
+Core tools (navigation, memory, routing, teams, skills, UI actions) are always kept. Only the actions the user may run are ranked: one with `RequiredRoles` they hold none of never travels. When nothing clears the threshold, the three best-ranked actions that need no confirmation and no role travel anyway — an MCP tool only when its server marks it `readOnlyHint` — because cosine is not calibrated and a question that needs data can score below a greeting (BUG-106); give every action that changes data `RequiresConfirmation`. When only actions that need confirmation clear it, the three best-ranked that do not travel with them (BUG-099). Log (Debug): `Tool filtering: 10/47 tools sent (7 core + 3/40 matched + 0/0 hosted, minScore=0.35)`, preceded on such a turn by `no action cleared minScore=0.35 (best: …); the 3 best-ranked that need no confirmation were sent: …`.
 
 ### History compaction
 
@@ -2216,6 +2234,8 @@ The **Blazor/WASM widget renders this automatically** (XSS-safe — model text i
 > ⚠️ If you render Markdown yourself, **do not** inject the model's output as raw HTML. Treat it as
 > data: a Markdown renderer that escapes HTML (the default in `react-markdown`) is the safe choice.
 > The Blazor widget HTML-encodes every piece of model text before emitting any tag, for this reason.
+> Links deserve the same care: accept only `http` and `https` addresses, and open them with
+> `rel="noopener noreferrer"`, as the widget does.
 
 This is Level 1 — Markdown the model writes. [Cards](#generative-ui--cards-level-2) are the level above.
 
@@ -2237,7 +2257,7 @@ public MentorCard GetOrder(int id) => new("order")
 };
 ```
 
-A result is a card by its shape, not its .NET type: an object with a non-empty string `kind`, or an array of them (see *Generative UI — cards* in the MentorAgent README).
+A result is a card by its shape, not its .NET type: an object with a non-empty string `kind`, or an array of them — and only in the result of a method declared to return `MentorCard` or a sequence of them; any other result stays text (see *Generative UI — cards* in the MentorAgent README).
 
 Cards reach remote clients two ways, both **additive** — a client that ignores them still receives the full answer as text:
 
@@ -2337,7 +2357,7 @@ For agents from a database or a configuration service, implement `IMentorAgentSo
 
 ## Onboarding tour
 
-A short guided tour shown the first time a user opens the assistant, **generated from this server's own surface** — the pages registered with `[MentorPage]` and the descriptions of the assistant's tools. A hardcoded tour is correct the day it is written and wrong three releases later; this one cannot describe a screen that no longer exists.
+A short guided tour shown the first time a user opens the assistant, **generated from this server's own surface** — the pages registered with `[MentorPage]` and the descriptions of the assistant's tools that need no role. The tour is one for every visitor and `GET /mentor/tour` answers anyone, so it does not describe an action that needs a role, which the MCP server too describes only to a caller who holds it. A hardcoded tour is correct the day it is written and wrong three releases later; this one cannot describe a screen that no longer exists.
 
 ```csharp
 options.EnableOnboardingTour = true;
@@ -2441,7 +2461,7 @@ app.MapMentorAgentMcp("/my-mcp");                                 // a path pass
 app.MapMentorAgentMcp(configure: e => e.RequireAuthorization());  // protect the endpoint
 ```
 
-Every `[MentorAction]` method becomes an MCP tool **except the gated ones**. An MCP request has no signed-in user, so an action with `RequiredRoles` is withheld unless you tell MentorAgent who the caller is. An action that needs a confirmation (`RequiresConfirmation` or `RequiresApproval`) is withheld **always**, because nobody is on the far end of an MCP call to answer a dialog — from 1.0.0-rc.15 that includes every `[MentorAction]` declaring neither `ReadOnly = true` nor `RequiresConfirmation` (`RequireConfirmationForWrites`); declare `RequiresConfirmation = false` on a write that must stay published. A startup warning lists the withheld actions. An action declared `ReadOnly = true` (or through `IsReadOnlyAction`) is published with `readOnlyHint`, and some MCP clients skip their own confirmation for such a tool: declare it only on actions that really only read. Until you protect it, the endpoint is open. It carries no CORS policy (MCP clients are not browsers); a browser-based client needs the opt-in described in the MentorAgent README (MCP Server, Step 2).
+Every `[MentorAction]` method becomes an MCP tool **except the gated ones**. An MCP request has no signed-in user, so an action with `RequiredRoles` is withheld unless you tell MentorAgent who the caller is. An action that needs a confirmation (`RequiresConfirmation` or `RequiresApproval`) is withheld **always**, because nobody is on the far end of an MCP call to answer a dialog — from 1.0.0-rc.15 that includes every `[MentorAction]` declaring neither `ReadOnly = true` nor `RequiresConfirmation` (`RequireConfirmationForWrites`); declare `RequiresConfirmation = false` on a write that must stay published. A startup warning lists the withheld actions. The `RequiresApproval` predicate is asked again at every `tools/list` and `tools/call`, so the warning tells the state at startup: an action the predicate holds back later is no longer listed and, called, is refused as withheld (BUG-202). An `IMentorActionPolicy` (see *Deciding before an action runs* in the MentorAgent README) can also take a tool away from one caller: its `IsAllowedAsync`, asked with the caller `McpCallerPrincipal` resolves, decides each `tools/list`. An action declared `ReadOnly = true` (or through `IsReadOnlyAction`) is published with `readOnlyHint`, and some MCP clients skip their own confirmation for such a tool: declare it only on actions that really only read. Until you protect it, the endpoint is open. It carries no CORS policy (MCP clients are not browsers); a browser-based client needs the opt-in described in the MentorAgent README (MCP Server, Step 2).
 
 ```csharp
 builder.Services.AddHttpContextAccessor();
@@ -2455,7 +2475,7 @@ builder.Services.AddOptions<MentorOptions>().Configure<IHttpContextAccessor>(
     (options, http) => options.McpCallerPrincipal = () => http.HttpContext?.User);
 ```
 
-Every `tools/call` passes through `OnToolResult`, counts in the dashboard's top actions and against `RateLimitPerUser` (an allowance separate from chat messages, per `NameIdentifier`, `sub` or `oid`; a caller with none is counted by remote address — which `AddHttpContextAccessor()` above makes available — or else shares one allowance with every such caller), and writes one Information line with a fingerprint of the caller (BUG-107).
+Every `tools/call` passes through `OnToolResult`, counts in the dashboard's top actions and against `RateLimitPerUser` (an allowance separate from chat messages, per `NameIdentifier`, `sub` or `oid`; a caller with none is counted by remote address — which `AddHttpContextAccessor()` above makes available — or else shares one allowance with every such caller), and writes one Information line with a fingerprint of the caller (BUG-107). Before the tool runs, the policies are asked with its arguments — `IsAllowedAsync`, then `BeforeActionAsync`, with the request's scope in `MentorActionRequest.Services`: a no answers "Unknown tool", as a missing role does (`denied-policy` in the log); a `Stop` returns an error with the policy's reason (`blocked`); a `Confirm` is refused, since nobody can confirm a call here (`nobody-to-confirm`); a policy that throws or runs out of `ActionPolicyTimeout` stops the call (`policy-failed`).
 
 Connect Claude Desktop, VS Code Copilot, or any MCP client to `/mcp`.
 
@@ -2502,10 +2522,12 @@ What a peer gets — the caller is a program, not a person:
 - **An answer from tools, or a refusal.** A served turn is told that no human is present: call the tool first, state only what a tool returned in this turn, and ask no follow-up questions. If it still ends without calling a tool that returns data (a navigation, a UI action, a memory write and a skill do not count), the reply is thrown away and the same request runs once more with a tool call **required**. If that second attempt returns no data either and the classifier model decides the reply states something about the application's records — a figure, or that an entry does not exist — the peer receives `NOT GROUNDED: …` instead. A policy read from a skill is returned as it is. There are never more than two attempts.
 - **Its name for you, as data.** A MentorAgent caller sends the name it uses for this host as message metadata (`mentoragent.addressedAs`), so a request like "how many products does InventoryAgent have?" is understood to be about this host. Only a single token of letters, digits and `- _ .` (64 characters at most) is accepted.
 - **No onward delegation.** A turn that arrives over A2A is not offered this host's own `RemoteAgents` (they are left out of its handoff workflow, its prompt and the `route_to_specialist` description). Your local specialists, declarative agents, teams and tools still serve it. Two hosts can therefore be each other's remote agent without looping, but **chaining A → B → C through a MentorAgent host is not supported in 1.0**. Point A at C directly.
+- **A marked answer.** The reply's message carries `"aiGenerated": true` in its metadata: the machine-readable marker of AI-generated text. The working message and the error messages do not.
 - **A failed task, never an empty one.** A turn that produced no reply is reported to the caller as **failed** ("this agent could not produce a reply to the request"), and a warning is logged on this host.
+- **A cancel that stops.** `CancelTask` stops the task's turn as Stop does: no action starts after it, nothing more is reported, and the task ends `Canceled` — streamed, with `returnImmediately` or waiting for the answer. If `MapMentorAgentA2A()` warns that it cannot wrap the A2A SDK's request handler, the call in progress of a cancelled task reads `session-ended` instead of `stop`.
 - **Any host kind can serve.** Headless servers and Blazor Server hosts both answer A2A tasks.
 
-On the consuming side, when this host has `RemoteAgents`, every `route_to_specialist` result opens with its source: a local specialist's answer says no remote agent was contacted, a remote answer is marked as that system's data, and a remote agent that was named but never took part produces `NOT <NAME>'S ANSWER` plus a warning — so the assistant cannot present a local answer as the remote one.
+On the consuming side, when this host has `RemoteAgents`, every `route_to_specialist` result opens with its source: a local specialist's answer says no remote agent was contacted, a remote answer is marked as that system's data, and a remote agent that was named but never took part produces `NOT <NAME>'S ANSWER` plus a warning — so the assistant cannot present a local answer as the remote one. A turn that ends before a remote agent's answer, a Stop above all, cancels the task it delegated (`CancelTask`), so a MentorAgent peer starts no action once the cancel arrives (BUG-210).
 
 ---
 
@@ -2610,7 +2632,7 @@ With an absolute `HubUrl` like this one, the WASM client also sends confirmation
 | `RequiresConfirmation` | Shows a confirmation banner before executing. Use for destructive or irreversible operations |
 | `RequiresConfirmationDeclared` | Read-only, not set in the attribute: `true` when the attribute writes `RequiresConfirmation`, true or false. It tells an action that declares nothing, which asks with `RequireConfirmationForWrites` on, from one that declares `RequiresConfirmation = false`, which does not: `RequiresConfirmation` reads `false` for both |
 | `ReadOnly` | Declares that the action only reads — it changes no data. MentorAgent takes your word for it: the action is published to MCP clients with `readOnlyHint`, which some clients take as leave to skip their own confirmation — so a write declared `ReadOnly` by mistake runs from them with nobody asked — and with `RequireLookupForRecordQuestions` on it is one the assistant may be required to call before answering a question about a value of your records. Ignored when the action also needs confirmation. Declare `[Description]` methods by name with `options.IsReadOnlyAction` |
-| `RequiredRoles` | ASP.NET Core identity roles: the caller needs **any one** of them (not all), must be authenticated. On the hub, `/mentor/chat` and A2A the user is the request's caller; in a Blazor circuit, the one the host's `AuthenticationStateProvider` reports. Empty = no role check |
+| `RequiredRoles` | ASP.NET Core identity roles: the caller needs **any one** of them (not all), must be authenticated. On the hub, `/mentor/chat` and A2A the user is the request's caller; in a Blazor circuit, the one the host's `AuthenticationStateProvider` reports. The model of the coordinator, and of a specialist, team member or agent source that holds the action, is offered it only in a turn whose user holds one of the roles. Empty = no role check |
 | `ProactiveHint` | Appended to the tool's description as `Guidance: <hint>` for the assistant's own tools (coordinator, specialists, team members) — not on the MCP server surface, and not used by semantic tool filtering |
 | `NavigateTo` | URL the AI navigates to automatically after successful execution |
 
@@ -2801,11 +2823,12 @@ first connection.
 | `AppName` | `string` | *(required)* | Application name for the system prompt |
 | `AppDescription` | `string` | `""` | Domain description for richer AI context |
 | `ChatClient` | `IChatClient?` | `null` | AI provider (recommended) |
-| `Agent` | `AIAgent?` | `null` | Pre-built AI agent (alternative) |
+| `Agent` | `AIAgent?` | `null` | Pre-built AI agent (alternative). Two calls with one id in a response of your agent's model are not made unique: your agent runs them before MentorAgent's clients see them (BUG-225). |
 | `EmbeddingGenerator` | `IEmbeddingGenerator<string, Embedding<float>>?` | `null` | Optional embedding model — enables semantic tool filtering |
 | `ScanAssemblies` | `Assembly[]` | *(required)* | Assemblies to scan for agents, actions, pages |
-| `Language` | `MentorLanguage` | `English` | Language for AI responses |
+| `Language` | `MentorLanguage` | `English` | Language for AI responses, and for the instructions MentorAgent writes that the model could echo (see *What follows `Language`* in the MentorAgent README). Read again on every turn; a client can give a turn its own language (`SendUserMessage`, `language` on `/mentor/chat`) |
 | `MentorshipLevel` | `MentorshipLevel` | `Standard` | AI proactivity: Minimal / Standard / Proactive |
+| `ProactiveNextSteps` | `bool` | `false` | With `Proactive`, close answers with suggested next steps; off by default, since the model offered steps the application does not have (BUG-074) |
 | `EnableSuggestions` | `bool` | `true` | Shows the starter suggestion chips in the **Blazor widget's** welcome panel. Nothing is generated or sent to headless clients — no hub event or SSE frame carries suggestions — so it has no effect on a React/Angular/Vue client or on a MAUI app with its own native UI. A MAUI Blazor Hybrid app runs the Blazor widget, and shows them |
 | `EnableActionFeedback` | `bool` | `true` | Emit `ActionExecuting` / `ActionCompleted` (hub events) while one of your function tools runs; `false` removes those. Hosted-tool lines such as "Searching the web…" are controlled separately by `ShowHostedToolActivity` |
 | `EnableVoiceInput` | `bool` | `false` | Declares that voice input is expected. A headless client implements capture itself (Web Speech API, MAUI speech-to-text) and sends the transcript as an ordinary message |
@@ -2815,7 +2838,8 @@ first connection.
 | `EnableRichResponses` | `bool` | `true` | Instructs the coordinator to format answers as Markdown: tables for comparative data, lists for enumerations (generative UI Level 1). The Blazor widget renders Markdown safely; a client of your own receives it as text and renders it itself. `false` asks for terse plain text |
 
 > **Not listed here on purpose.** `MentorOptions` also carries `Theme`, `Position`, `PrimaryColor`,
-> `BotName`, `WelcomeMessage`, `InputPlaceholder`, `AvatarUrl` and the playback options
+> `BotName`, `WelcomeMessage`, `InputPlaceholder`, `AvatarUrl`, `ShowAiDisclosure`, `AiDisclosureMessage` and the
+> playback options
 > `VoiceStreaming`, `VoiceBargeIn`, `VoiceHandsFree`, `VoiceRate`. They style or drive the **Blazor
 > widget** and have no effect on a headless backend — a React/Angular/Vue client, or a MAUI app with its
 > own native UI, renders its own UI and, for the voice ones, does its own speech work. Set them only if
@@ -2858,8 +2882,8 @@ first connection.
 | `ToolFilterMaxTools` | `int` | `12` | Max matched business tools (core tools always kept) |
 | `ToolFilterMinTools` | `int` | `0` | Once one action clears `ToolFilterMinScore`, at least this many best-ranked actions are sent, whatever their score (up to `ToolFilterMaxTools`). `0` = the threshold alone. A trade-off, not a fix: it can hand the model a read action it needed, or a wrong one it picks instead |
 | `ToolFilterMinScore` | `float` | `0.35` | Minimum cosine similarity (0–1) for a tool to be relevant |
-| `RequireLookupForRecordQuestions` | `bool` | `false` | Opt-in. When a classifier says a message asks for a value of your records, the first model call must call a declared read-only action the filter selected (or hand over to a specialist). One classifier call per turn whose selection holds a read. Needs `EnableToolFiltering`, an `EmbeddingGenerator` and declared reads. See [Semantic tool filtering](#semantic-tool-filtering) |
-| `RequireActionForChangeRequests` | `bool` | `false` | Opt-in. When a classifier says a message asks to carry out one of your confirmation-gated actions and gives every input it needs, the first model call must call one of those actions the filter selected (or hand over to a specialist), so the banner comes first; when it asks for a page, `navigate_to`. A request that leaves an input out is not forced. One classifier call per turn, shared with `RequireLookupForRecordQuestions`. Needs `EnableToolFiltering`, an `EmbeddingGenerator`, and `RequireConfirmation` for actions. See [Semantic tool filtering](#semantic-tool-filtering) |
+| `RequireLookupForRecordQuestions` | `bool` | `false` | Opt-in. When a classifier says a message asks for a value of your records, the first model call must call a declared read-only action (or hand over to a specialist): with semantic tool filtering, one the filter selected; without it, any declared read the user may run. One classifier call per turn whose selection holds a read — without the filter, nearly every turn. Needs declared reads. See [Semantic tool filtering](#semantic-tool-filtering) |
+| `RequireActionForChangeRequests` | `bool` | `false` | Opt-in. When a classifier says a message asks to carry out one of your confirmation-gated actions and gives every input it needs, the first model call must call one of those actions the filter selected (or hand over to a specialist), so the banner comes first; when it asks for a page, `navigate_to`. A request that leaves an input out is not forced. One classifier call per turn, shared with `RequireLookupForRecordQuestions`. Unlike that option, needs `EnableToolFiltering` and an `EmbeddingGenerator`, and `RequireConfirmation` for actions. See [Semantic tool filtering](#semantic-tool-filtering) |
 | `EnableCompaction` | `bool` | `false` | Compact long conversation history before each call — what is sent, never what is stored (BUG-104). Locally kept history only (Path A); not installed with `UseServiceManagedHistory` |
 | `CompactionTokenThreshold` | `int` | `4000` | Token budget that triggers compaction |
 | `CompactionMaxTurns` | `int` | `8` | Recent turns kept intact |
@@ -2957,16 +2981,19 @@ first connection.
 | `EnableOutputSafetyCheck` | `bool` | `false` | Built-in LLM check on the **reply**: blocks one that leaks system instructions or secrets, discloses someone's personal data, or contains harmful content. Buffers the reply for that turn (no live streaming). Runs on `ClassifierChatClient`, or on `ChatClient` when it is not set, is bounded by `SafetyCheckTimeout` / `SafetyCheckFailure`, and a custom `OutputGuardrail` takes precedence. Requires a `ChatClient` or a `ClassifierChatClient`: on Path B without one it is skipped, with a warning when the coordinator is built |
 | `SafetyCheckTimeout` | `TimeSpan` | `00:00:15` | Time limit for the input/output safety checks (built-in or custom); `Zero` = no limit, Stop still cancels |
 | `SafetyCheckFailure` | `MentorSafetyCheckFailure` | `Allow` | A check with no verdict (timeout, error): `Allow` = fail open with a warning, `Block` = refuse the message / withhold the reply |
-| `RefuseOutOfScope` | `bool` | `false` | Refuse a message that plainly has nothing to do with the application instead of answering it; defaults to answering when unsure (BUG-105). With the safety check on it rides in the same classifier call (a longer prompt: the question and the scope); alone it costs one small call per turn, and a turn that is about to declare a hosted tool still asks the tool gate its own question. Counted in `GuardrailBlockCount` |
+| `RefuseOutOfScope` | `bool` | `false` | Refuse a message that plainly has nothing to do with the application instead of answering it; defaults to answering when unsure (BUG-105). A short reply ("yes", a choice the assistant offered) is judged with the end of the assistant's last reply, in the same call; the safety check still judges the message alone (BUG-223). With the safety check on it rides in the same classifier call (a longer prompt: the question and the scope); alone it costs one small call per turn, and a turn that is about to declare a hosted tool still asks the tool gate its own question. Counted in `GuardrailBlockCount` |
 | `WarmUpAtStartup` | `bool` | `false` | Build one coordinator at start-up (catalogue embeddings, shared MCP sessions, agent cards) so the first connection does not pay for them. Runs once the host has started; a failed warm-up never fails the boot |
 | `MaxMessageLength` | `int` | `4000` | Max message length (0 = unlimited) |
 | `RateLimitPerUser` | `int` | `0` | Max messages per user within `RateLimitWindowSecs` (0 = disabled). Signed-out callers are counted per connection under the default `AnonymousIdentity = PerSession`. MCP `tools/call` has its own allowance with the same limit, per `NameIdentifier`, `sub` or `oid`; a caller with none is counted by remote address when `IHttpContextAccessor` is registered, otherwise all such callers share one |
 | `RateLimitWindowSecs` | `int` | `60` | Rate limiting window in seconds |
 | `RequireConfirmation` | `bool` | `true` | On/off for the confirmation dialogs of your actions, MCP-client servers and `RequiresApproval`. A hosted MCP server's approvals (`RequireApproval`, `AlwaysRequireApprovalTools`) still show the banner |
 | `RequireConfirmationForWrites` | `bool` | `true` | A `[MentorAction]` declaring neither `ReadOnly = true` nor `RequiresConfirmation` asks for confirmation, so it is also withheld from `/mcp` and the A2A card. `[Description]`-only methods are not covered. `false` = the rc.14 behaviour |
-| `HitlMode` | `MentorHitlMode` | `Blocking` | `Blocking` (MentorAgent's flow) or `Native` (AF `ApprovalRequiredAIFunction`). Same client protocol either way — see [HITL](#hitl--confirming-actions) |
+| `HitlMode` | `MentorHitlMode` | `Blocking` | `Blocking` (MentorAgent's flow) or `Native` (AF `ApprovalRequiredAIFunction`). Same client protocol either way — see [HITL](#hitl--confirming-actions). A later call of a model response with an id the response or the conversation already holds gets the next free `<id>_n` before the function-invoking client sees it, so two calls of one id no longer break the conversation (BUG-225). |
 | `IsReadOnlyAction` | `Func<string, bool>?` | `null` | Declares by tool name the actions that only read — same as `[MentorAction(ReadOnly = true)]`, for `[Description]` methods or central declaration. Published to MCP clients as `readOnlyHint`, which some clients take as leave to skip their own confirmation; the actions `RequireLookupForRecordQuestions` may require. A confirmation-gated tool is never read-only |
-| `RequiresApproval` | `Func<string, bool>?` | `null` | Forces approval for a tool **by name** — the way to gate MCP tools and skills you don't own |
+| `RequiresApproval` | `Func<string, bool>?` | `null` | Forces approval for a tool **by name** — the way to gate MCP tools and skills you don't own. Asked again on every call and on every `tools/list` and `tools/call`: keep it a cheap, pure function of the name |
+| `ActionPolicyTimeout` | `TimeSpan` | `00:00:05` | How long each call to an `IMentorActionPolicy` may take; then the call does not run (`PolicyFailed`), and the action is left out when MentorAgent decides what to offer. `Zero` = no limit |
+| `ConfirmationMessage` | `Func<MentorConfirmationContext, string?>?` | `null` | Writes the text of the confirmation banner from the tool, its description, the arguments (in parameter order, cleaned, cut at 200 characters), `Language` and the scope's services. It is the `message` of the hub's `ConfirmationRequired` event and of the SSE `confirmationRequired` frame. `null`, white space or an exception: the default text |
+| `ConfirmationTimeout` | `TimeSpan` | `00:00:00` | How long a confirmation waits for its answer, from when the banner is shown; then it counts as rejected and the action does not run. `Zero` = no limit; a few minutes suits a web host |
 | `AutoApprovalRules` | `IList<Func<ToolAutoApprovalRuleContext, ValueTask<bool>>>` | empty | `Native` mode only. Approves a call before any banner appears, and enables "don't ask again". **Waives the prompt, never `RequiredRoles`** |
 | `MaxAutoApprovalIterations` | `int?` | `null` | Cap on re-runs caused by auto-approval. Each one is a fresh billable model call and a per-request limit cannot bound it |
 | `IncludeWorkflowExceptionDetails` | `bool` | `false` | Put the exception message of a failing Level-2 / Level-3 workflow agent (handoff, group chat) into the reply the user reads. **Development only, never in production** |
@@ -2979,7 +3006,8 @@ first connection.
 | `ChatReducer` | `IChatReducer?` | `null` | Replaces the default history reducer (`MentorChatReducer`, which keeps tool calls with their results). `new MessageCountingChatReducer(50)` restores the behaviour up to rc.14. Not used with a provider you supply or with `UseServiceManagedHistory` |
 | `ChatHistoryProvider` | `ChatHistoryProvider?` | `null` | One provider instance **shared by every connection and user** — single-user hosts only, or a provider that partitions its own storage |
 | `ChatHistoryProviderFactory` | `Func<IServiceProvider, ChatHistoryProvider>?` | `null` | Builds a provider **once per coordinator** (per hub connection) — the isolation the default has. **Prefer this on any multi-user server.** Setting both stops the host when it starts |
-| `UseServiceManagedHistory` | `bool` | `false` | Set when the client keeps the conversation on the **service** (Responses API, Foundry, Copilot Studio) — required to avoid AF's "Only ConversationId or ChatHistoryProvider" error. Disables `MaxSessionMessages`, `ChatReducer` and `EnableCompaction` |
+| `UseServiceManagedHistory` | `bool` | `false` | Set when the client keeps the conversation on the **service** (Responses API, Foundry, Copilot Studio) — required to avoid AF's "Only ConversationId or ChatHistoryProvider" error. Disables `MaxSessionMessages`, `ChatReducer` and `EnableCompaction`. A model response that gives two calls the same id is passed on as it came, with a warning: the service holds the calls under the ids it generated (BUG-225). |
+| `SessionContextPlacement` | `MentorSessionContextPlacement` | `Instructions` | Where the lines that change with every request go (page, page data, address, date and time). `LastUserMessage` puts them at the start of the user's last message, so the instructions stay the same and a local engine keeps its prompt cache. Path A with local history only (see *The request's context in the user's message* in the MentorAgent README) |
 
 ---
 

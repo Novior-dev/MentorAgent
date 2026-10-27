@@ -216,7 +216,7 @@ The **admin dashboard** ships as a Blazor component. Drop it on a protected page
 ```
 
 Also configured/available on the server (see the core README for full examples):
-- **Rich responses** — with `options.EnableRichResponses` (server, default on) the assistant formats structured data as Markdown; **this widget renders the tables & lists automatically** — no client wiring, XSS-safe, tables scroll horizontally on narrow screens.
+- **Rich responses** — with `options.EnableRichResponses` (server, default on) the assistant formats structured data as Markdown; **this widget renders the tables, lists and links automatically** — no client wiring, XSS-safe, tables scroll horizontally on narrow screens.
 - **Model routing** (`options.StrongChatClient` + `options.RoutingStrategy`: `Semantic`/`Classifier`/`Cascade`/`Custom`) — cheap↔strong per turn.
 - **Structured outputs** — inject `IMentorStructured` (`GenerateAsync<T>`) for typed results / auto-filled forms.
 - **Evaluation** — inject `MentorEvaluator` (wraps the Agent Framework's native `agent.EvaluateAsync`) in tests to gate CI on token/quality regressions; plug `FoundryEvals`/MEAI evaluators for quality & safety.
@@ -369,18 +369,19 @@ Unlike Blazor Server (where the widget injects CSS automatically via `<HeadConte
 ```html
 <head>
     ...
-    <link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=10" rel="stylesheet" />
+    <link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.2.0" rel="stylesheet" />
 </head>
 <body>
     ...
-    <script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=10"></script>
+    <script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.2.0"></script>
 </body>
 ```
 
 Without this, the widget will render unstyled until after WASM initializes (flash of unstyled content).
 
-> ⚠️ **Keep the `?v=` and bump it on every upgrade.** On Blazor Server the widget writes these tags
-> itself and versions them for you; here they are yours, nothing fingerprints them, and a returning
+> ⚠️ **Set the `?v=` to the package version and change it on every upgrade.** On Blazor Server the
+> widget writes these tags itself and versions them for you, with the package version and its commit;
+> here they are yours, nothing fingerprints them, and a returning
 > visitor's browser will reuse the copy it already has. A stale `MentorAgent.js` fails silently and
 > selectively — the widget still works, but the calls that did not exist in the older file are
 > swallowed by their `try/catch`, so the [onboarding tour](#onboarding-tour) never appears and voice
@@ -396,7 +397,7 @@ On Blazor Server, `<ChatWidget />` injects its own CSS and JS automatically — 
 ### Theme and appearance
 
 ```csharp
-options.Theme        = MentorTheme.Minimal;   // Default | Dark | Minimal | Custom
+options.Theme        = MentorTheme.Minimal;   // Default | Dark | Minimal | Custom | Auto
 options.PrimaryColor = "#7c3aed";             // any hex color
 options.Position     = ChatPosition.BottomRight; // BottomRight | BottomLeft | TopRight | TopLeft | SideRight | SideLeft
 options.AvatarUrl    = "/my-avatar.png";
@@ -418,7 +419,7 @@ options.Language = MentorLanguage.Italian;
 // English | Italian | French | German | Spanish | Portuguese | Dutch | Polish | Japanese | Chinese
 ```
 
-This sets the **widget's** UI strings only. The language the assistant *answers* in is the server's `options.Language` in `AddMentorAgent()`, and the prompt enforces it whatever language the user writes in. Set both:
+This sets the **widget's** UI strings, read again on every use. The language the assistant *answers* in is the server's `options.Language` in `AddMentorAgent()`, and the prompt enforces it whatever language the user writes in. A widget given its own language, `<ChatWidget Language="MentorLanguage.Italian" />`, sends it with every turn, and the server answers in it (see *A language per page* in the MentorAgent README). Otherwise set both:
 
 ```csharp
 using Novior.MentorAgent.Abstractions.Models;   // MentorLanguage, in both Program.cs files
@@ -742,6 +743,8 @@ Override only when extra clarity is needed:
 | `ConfigureConnection` | `Action<HttpConnectionOptions>?` | `null` | Escape hatch on the hub's connection options — headers, transports, cookies. Runs after `AccessTokenProvider` |
 | `BotName` | `string` | `"Mentor AI"` | Bot name in the widget header |
 | `WelcomeMessage` | `string?` | `null` | Welcome message (HTML supported) |
+| `ShowAiDisclosure` | `bool` | `true` | Shows the notice that tells people they are talking to an AI, under the widget's header for the whole conversation. `false` hides it; the replies' marker stays |
+| `AiDisclosureMessage` | `string?` | `null` | The notice's text, shown as written (as text, never as markup). `null` or white space: the default, translated into the configured language |
 | `AvatarUrl` | `string?` | `null` | Custom avatar URL |
 | `InputPlaceholder` | `string?` | `null` | Input box placeholder. `null` uses the localized text in `Language` ("Write a message..." in English) |
 | `Theme` | `MentorTheme` | `Default` | Widget visual theme |
@@ -862,6 +865,7 @@ public void Dispose()
 | `OnBusyChanged` | `Action<bool>` | AI starts/stops processing | Show/hide spinner |
 | `OnError` | `Action<string>` | Critical error (rate limit, safety block) | Show error banner |
 | `OnActionExecuting` | `Action<string>` | Tool/agent is executing. Carries the text to show (the action's `Description`, or the routing, team or hosted-tool label), not the tool name | Show action feedback bar. To log which tool ran, use `OnActionCompleted`, which carries the tool name |
+| `OnActionStarted` | `Action<MentorActionStarted>` | Never raised by this client: the hub sends it only the text shown, not the tool name | Record actions on the server, where it is raised with `ToolName` and `DisplayName` |
 | `OnActionCompleted` | `Action<string>` | Tool execution succeeded | Hide feedback bar |
 | `OnActionFailed` | `Action<string>` | Tool execution failed — `tool: message`; with the server's `OnException` set, never the exception's own text | Show error in feedback |
 | `OnConfirmationRequired` | `Action<ConfirmationRequest>` | Destructive action needs user approval | Show custom confirmation dialog |

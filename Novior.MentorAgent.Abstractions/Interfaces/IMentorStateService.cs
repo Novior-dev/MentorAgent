@@ -20,8 +20,24 @@ public interface IMentorStateService
 
     // -- Tool Calls / Actions --------------------------------------------------
 
-    /// <summary>Event: a tool call has started. Payload: tool name.</summary>
+    /// <summary>
+    /// Event: a tool call has started. Payload: the text shown to the user for it — the action's description, else a
+    /// readable form of its name, or the routing, team or hosted-tool text. The tool's technical name is in
+    /// <see cref="OnActionStarted"/>.
+    /// </summary>
     event Action<string>? OnActionExecuting;
+
+    /// <summary>
+    /// Event: a tool call has started, with the tool's technical name next to the text shown. Raised with
+    /// <see cref="OnActionExecuting"/>, where the turn runs: in the Blazor Server circuit or the MAUI app, and on the
+    /// server for the hub, SSE and A2A. The WebAssembly client's implementation does not raise it, since the hub sends
+    /// it only the text shown: record actions on the server.
+    /// <para>
+    /// The interface implements it as an event nobody raises, so an implementation written before it still compiles
+    /// and runs.
+    /// </para>
+    /// </summary>
+    event Action<MentorActionStarted>? OnActionStarted { add { } remove { } }
 
     /// <summary>Event: a tool call has completed successfully.</summary>
     event Action<string>? OnActionCompleted;

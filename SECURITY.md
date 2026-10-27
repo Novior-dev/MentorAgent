@@ -7,14 +7,31 @@ for it.
 
 Say which package and version you used, what you found and, if you can, how to reproduce it.
 
+## What happens next
+
+- **Within 5 working days** we acknowledge the report and tell you what happens next. This is a best-effort
+  commitment, not a contractual one.
+- **A serious vulnerability** is fixed in a patch release as soon as the fix is ready, for every version that
+  still gets security fixes (below).
+- **When the fix is released** we announce it as a GitHub Security Advisory on
+  [Novior-dev/MentorAgent](https://github.com/Novior-dev/MentorAgent/security/advisories), and in the release
+  notes of the version that fixes it: its section of `CHANGELOG.md`, which nuget.org shows, and its page in the
+  documentation at [docs.mentoragent.net](https://docs.mentoragent.net).
+
 ## Supported versions
 
-Security fixes go to the latest minor release only.
+- The latest minor version gets every fix.
+- When a new minor version is released, the previous one still gets security fixes for 3 months.
+- When a new major version is released, the previous major version still gets security fixes for 6 months, on
+  its latest minor version.
+- Release candidates and previews get no fixes.
 
-| Version | Supported |
+| Version | Fixes |
 |---|---|
-| The latest 1.1.x | ✅ |
-| 1.0.x, release candidates and previews | ❌ |
+| 1.2.x | ✅ Every fix |
+| 1.1.x | ✅ Security fixes, until 27 January 2027 |
+| 1.0.x | ✅ Security fixes, until 21 January 2027 |
+| Release candidates and previews | ❌ |
 
 ## How a release is built
 

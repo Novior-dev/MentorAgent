@@ -80,11 +80,21 @@ internal sealed class HandoffBuilder
 
         foreach (var descriptor in agents)
         {
-            var tools = BuildToolsForAgent(descriptor);
-            var instructions = _promptBuilder.BuildAgentInstructions(descriptor);
+            var tools = OneToolPerName.Keep(BuildToolsForAgent(descriptor), descriptor.Attribute.Name, BuildLog);
+            var builtLanguage = _options.Language;
+            var instructions = _promptBuilder.BuildAgentInstructions(descriptor, builtLanguage);
+            // Story 536 — a turn in another language is sent the builder's instructions for it; instructions of the
+            // host's own are not the builder's, so they get the language line only.
+            Func<MentorLanguage, string>? variant = string.IsNullOrWhiteSpace(descriptor.Attribute.Instructions)
+                ? language => _promptBuilder.BuildAgentInstructions(descriptor, language)
+                : null;
 
             var agent = new ChatClientAgent(
-                chatClient,
+                // BUG-205: offered only the tools this turn's user may run, as the coordinator is. The language swap
+                // comes first, before the role filter, as on the coordinator.
+                Middleware.TurnLanguageChatClient.For(
+                    Middleware.AgentRoleFilterChatClient.For(chatClient, tools, _gate),
+                    _sp.GetService<MentorTurnLanguage>(), builtLanguage, instructions, variant, descriptor.Attribute.Name, _logger),
                 new ChatClientAgentOptions
                 {
                     Name = descriptor.Attribute.Name,
@@ -193,7 +203,7 @@ internal sealed class HandoffBuilder
                 // (RequiredRoles, RequiresConfirmation, feedback, navigation, metrics) with it —
                 // without this, [MentorAction(RequiresConfirmation = true, RequiredRoles = [...])]
                 // on a specialist method was silently ignored.
-                tools.Add(Middleware.GatedAIFunction.Wrap(tool, _gate));
+                tools.Add(Middleware.GatedAIFunction.Wrap(tool, _gate, MentorAgentKind.Specialist, descriptor.Attribute.Name));
             }
             catch (Exception ex)
             {

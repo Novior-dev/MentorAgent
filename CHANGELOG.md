@@ -28,6 +28,364 @@ names of their time.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-27
+
+### Added
+
+- **Novior.MentorAgent.Abstractions:** `IMentorStateService.OnActionStarted` gives the tool's technical name next to
+  the text shown, in a `MentorActionStarted`: `OnActionExecuting` carries only the text shown, so whoever recorded
+  the actions from it could not tell for sure which tool ran. It is raised where the turn runs, not by the WebAssembly
+  client, and the interface implements it as an event nobody raises, so an implementation written for 1.1.0 still
+  compiles. The documentation of `OnActionExecuting` now says it carries the text shown, not the tool name.
+
+- **Novior.MentorAgent.Abstractions, Novior.MentorAgent:** `IMentorActionObserver` receives every decision of the tool
+  gate, on every surface and for every agent; `AddMentorActionObserver<T>()` registers one. A `MentorActionDecision`
+  carries the outcome (`MentorActionOutcome`), a reason code that stays the same across versions
+  (`MentorActionReasons`), the tool, the agent, the surface, the session, turn and call ids, the user and who
+  confirmed — never the arguments. A decision never waits for an observer: each has a queue of its own and 5 seconds a
+  call.
+
+- **Novior.MentorAgent.Abstractions:** an action that asks for confirmation knows who confirmed it and when:
+  `MentorActionConfirmation.Current`, read inside the action's method, carries the confirmation's id, the tool, the
+  time and who confirmed — the caller of `POST /mentor/approve`, or the session's user in a circuit and in the MAUI
+  app — in Blocking and in Native mode. It is `null` for an action nobody confirmed. The approval event came when
+  the action was already on its way, so a ledger of the writes could not say who approved one.
+
+- **Novior.MentorAgent:** `MentorOptions.ConfirmationTimeout` bounds how long a confirmation waits for its answer,
+  counted from when the banner is shown. Once it has passed with no answer, the confirmation counts as rejected: the
+  action does not run, its decision is `Rejected` with the new reason code `confirmation-timeout`, the span's
+  `mentoragent.tool.confirmation` is `timed-out`, and the model is told nobody confirmed it in time, not that the user
+  declined. An answer that comes later is ignored, as one after Stop is: `POST /mentor/approve` answers 404. It applies
+  to a confirmation a policy asks for too, in Blocking and in Native mode, and for specialists and team members. Zero or
+  a negative value, the default, is no limit, as before.
+
+- **Novior.MentorAgent, .Abstractions, .Blazor, .Server:** two tools for article 50 of the EU AI Act. A notice that
+  tells people they are talking to an AI assistant, under the widget's header for the whole conversation
+  (`ShowAiDisclosure`, `AiDisclosureMessage`, on `MentorOptions` and `MentorAgentBlazorOptions`), with a default text
+  in the ten languages of `Language`; and a machine-readable marker on every reply the model writes:
+  `data-ai-generated="true"` on the reply in the widget, `"aiGenerated": true` on the `chunk` and `completed` frames of
+  `/mentor/chat`, the hub event `ReplyStarted` before each reply, whose argument is a `MentorReplyStarted`
+  (`{ "aiGenerated": true }`), and `aiGenerated` in the metadata of the reply to an A2A task. Turning the notice off
+  leaves the marker. The results of the MCP server, the spoken replies and the images and files of the provider's
+  hosted tools carry no marker. Which words to show, and whether the article applies, is the application's to decide.
+
+- **Novior.MentorAgent.Abstractions:** `MentorTheme.Auto` follows the visitor's system setting
+  (`prefers-color-scheme`): the light theme, `Minimal`, when it asks for light, which is also what a browser reports
+  when the system states no preference, and `Default` when it asks for dark. It follows the system, not the page: on
+  a page that is always light, a visitor whose system is dark sees the dark widget. No script is involved, and the
+  default theme stays `Default`.
+
+- **Novior.MentorAgent, .Abstractions, .Blazor, .Server:** a language per page. `<ChatWidget Language="…" />` gives
+  the widget a language of its own for its texts, its voice and its onboarding tour, and every turn it sends carries
+  it: the assistant answers in it, and what MentorAgent writes for that turn follows it. The language travels as
+  `MentorUserMessage.Language`, in the hub's new `SendUserMessage`, as `language` on `/mentor/chat` and on `GET
+  /mentor/tour?language=`. `IMentorOrchestrator` and `IMentorTour` get default methods, so implementations written for
+  1.1.0 compile. A change of `MentorOptions.Language` while the application runs applies from the next turn. A2A and
+  MCP requests stay on `MentorOptions.Language`.
+- **Novior.MentorAgent:** `MentorOptions.SessionContextPlacement`. With `LastUserMessage` the context of each request
+  — the page, its data, its address, the date and time — goes at the start of the user's last message instead of the
+  end of the instructions, which then stay the same through the session: a model that caches the prompt by its prefix,
+  a local engine above all, no longer reads the whole conversation again on every new minute or page. The stored
+  conversation keeps the user's words. Path A with local history only; the default, `Instructions`, changes nothing.
+
+### Changed
+
+- **Novior.MentorAgent, .Abstractions, .Blazor:** the widget now shows, by default, under its header: "You are talking
+  to an AI assistant: its replies are generated automatically.", in the configured `Language`, for the whole
+  conversation. Set `AiDisclosureMessage` to your own words, or `ShowAiDisclosure` to `false` to show none.
+
+- **Novior.MentorAgent.Server:** the hub sends `ReplyStarted` before each reply. A client that does not register it
+  keeps working, and SignalR logs a warning for every reply ("Failed to find handler" in .NET, "No client method with
+  the name" in JavaScript): register it, even with a handler that does nothing — `connection.on("ReplyStarted", () =>
+  {})`, or `hub.On<MentorReplyStarted>("ReplyStarted", _ => { })`. The WebAssembly client of Novior.MentorAgent.Blazor
+  registers it.
+
+- Every package is now checked at pack time against the public API of 1.1.0, so 1.2.0 cannot break code built
+  against 1.1.0 by accident. An intended break is listed in this file as Breaking.
+
+- The family moves onto the Microsoft Agent Framework 1.26.0 line (`Microsoft.Agents.AI` and
+  `Microsoft.Agents.AI.Workflows` 1.26.0) and `Microsoft.Extensions.AI` 10.11.0. **Novior.MentorAgent.Declarative:**
+  `Microsoft.Agents.AI.Declarative` moves to 1.26.0-rc1, on the same line. In Agent Framework 1.26
+  `AgentSessionStore.DeleteSessionAsync` is abstract: a host with an `AgentSessionStore` of its own implements it.
+  1.26 also refuses two tool approval requests with one id; MentorAgent gives each call of a response an id of its
+  own (BUG-225), except with `UseServiceManagedHistory`.
+
+- With Agent Framework 1.25 or later, when control returns to an agent of the handoff workflow behind `route_to_specialist`,
+  the workflow repeats the user's request to it instead of leaving it a tool result alone: whoever reads the
+  workflow's messages sees one more after each return. The answers do not change.
+
+- `ModelContextProtocol` moves to 2.3.0: the MCP client in Novior.MentorAgent, and
+  `ModelContextProtocol.AspNetCore` 2.3.0 in **Novior.MentorAgent.Server**. The SDK's HTTP server is stateless by
+  default from 2.0; the MCP endpoint asks for the stateful transport, so a client keeps its `Mcp-Session-Id` and the
+  endpoint answers as before, a `GET` without a session with 400 included.
+
+- An MCP server of the host that lists a tool without `inputSchema` is no longer connected: ModelContextProtocol 2.0
+  refuses such a tool where 1.x gave it an empty schema, and the server's whole tool list is lost with it. The
+  warning names the server, and its exception names `inputSchema`; the assistant goes on without that server.
+
+- The A2A SDK moves to 1.0.0-preview3: `A2A` in Novior.MentorAgent and `A2A.AspNetCore` in
+  **Novior.MentorAgent.Server**.
+
+- **Novior.MentorAgent:** a call refused for its roles is logged once, at Warning, in Blocking and in Native mode
+  alike. In Native mode a user who was not signed in was refused before the banner with a Debug line only, and in
+  Blocking mode a missing role wrote two Warnings. A confirmation cancelled by Stop or by the end of the session is
+  now logged at Debug in Native mode too, and a tool call's Debug line is written once instead of twice.
+
+- The `mentor.tool.{toolName}` and `mentor.mcp.tool.{toolName}` spans carry the outcome
+  (`mentoragent.tool.outcome`), the reason code (`mentoragent.tool.reason`), the confirmation
+  (`mentoragent.tool.confirmation`) and the surface (`mentoragent.surface`), and a failed call sets the span's
+  status to error. In Native mode a call refused, rejected or stopped before it runs now has its span too.
+
+- **Novior.MentorAgent.Server:** the MCP server's line for each `tools/call` tells apart a call refused for its roles
+  (`denied-role`), an action the server never publishes (`withheld`) and a name nothing defines (`unknown`): the
+  three were all `unknown`. A call the client cancels is `cancelled`. The caller is still told the same for every name
+  it may not use.
+
+- **Novior.MentorAgent.Abstractions, Novior.MentorAgent, .Server:** `IMentorActionPolicy` lets the application's own
+  code decide whether a user may use an action and whether a call may run — a permission per company or per record, a
+  rule on the arguments — on every surface: the coordinator on both paths and in both modes, the specialists, team
+  members and agent sources, the MCP servers the application consumes, the MCP server and A2A tasks.
+  `AddMentorActionPolicy<T>()` registers one. `IsAllowedAsync` decides what is offered and is asked again before every
+  call; `BeforeActionAsync` answers `Proceed`, `Confirm` or `Stop`, and the strictest answer of all the policies wins.
+  A policy that throws, or does not answer within the new `MentorOptions.ActionPolicyTimeout` (5 seconds), stops the
+  call. The gate's decisions gain the outcomes `Blocked` and `PolicyFailed` and `MentorActionDecision.Detail`.
+
+- **Novior.MentorAgent.Abstractions, Novior.MentorAgent:** `IMentorActionCatalog.GetActions()` lists the
+  application's actions as MentorAgent sees them — the coordinator's, the specialists' and the team members' — with
+  their roles, whether a call asks for a confirmation now, whether they only read, whether and to whom the MCP server
+  publishes them (`MentorMcpExposure`) and whether the A2A card lists them, decided at every call by the rules of the
+  MCP server and of the card.
+
+- **Novior.MentorAgent:** a change of default. With `MentorshipLevel.Proactive` the prompt no longer asks for
+  suggested next steps at the end of an answer, and asks for none: told to offer only what the request's tools,
+  pages, skills and specialists can do, the model still offered steps the application does not have (BUG-074, S3).
+  Measured on 15 turns of the same build, the closing offers went from 15 to 2, and the offers of something the
+  application does not have from 4 to 0. The new `MentorOptions.ProactiveNextSteps` brings the old rule back, word for
+  word, when set to `true`. The rest of the level, the explanations, the warnings and the one sentence before
+  acting, and the other levels do not change.
+
+- **Novior.MentorAgent:** the package README opens with what MentorAgent is today: AI agents for any .NET
+  application, with the chat widget for Blazor and .NET MAUI, and any other frontend through
+  `Novior.MentorAgent.Server`; it links the documentation at docs.mentoragent.net. The package description and tags
+  say the same. The repository's front page on GitHub is now a short README.
+
+- SECURITY.md says when a vulnerability report is answered (within 5 working days, best effort), how a fix is
+  announced (a GitHub Security Advisory and the release notes) and how long each version gets security fixes: 3
+  months after the next minor version, 6 months after the next major version; 1.0.x until 21 January 2027.
+  SUPPORT.md and the README say the same.
+
+- The README says how to run MentorAgent on more than one instance, and the policy by which it follows Agent
+  Framework, Microsoft.Extensions.AI, ModelContextProtocol and A2A.
+
+### Fixed
+
+- **Novior.MentorAgent:** with Agent Framework 1.23 or later, an agent offered two tools with the same name — two
+  level-1 methods, or one name from two MCP servers — failed every turn with "Duplicate tool name". Each agent is now
+  offered one tool per name: the first, which is the one a call by that name already ran. A warning names every copy
+  and the one kept. A name the coordinator shares with a specialist stays with both (BUG-195, S2).
+
+- **Novior.MentorAgent.Declarative:** with Agent Framework 1.23 or later, `MentorDeclarativeOptions.ConfigurationSection`
+  gave a definition no values: the framework loads configuration only for the keys a definition names through `Env`
+  and the host lists as allowed. The package now loads the section itself, one Power Fx variable per key, named by its
+  full configuration path, as before (BUG-196, S2).
+
+- **Novior.MentorAgent, .Server:** on A2A 1.0.0-preview3 a turn delegated to a peer came back empty, with no error. A
+  preview3 server refuses a streamed request unless its agent declares streaming, and the SDK's client reads the
+  refusal as an empty stream; the agent MentorAgent registered with the SDK declared nothing. It now declares
+  streaming, as the published card did. Towards any peer, `A2AChatClient` streams only when the peer's card declares
+  streaming and otherwise asks once without a stream, and an empty stream logs a warning naming the peer (BUG-197, S2).
+
+- **Novior.MentorAgent:** a shared MCP server that connected but did not answer `ping` was opened and dropped again
+  in a loop with no limit, and the turn never reached the model. A session that does not answer `ping` right after it
+  was opened now counts as a failed connect: the server is left out for the failure window, like one that is down,
+  and a warning says it connected but does not answer ping (BUG-198, S3).
+
+- **Novior.MentorAgent:** the coordinator's model was offered every action, those the user had no role for included:
+  asked for one, it announced it and the gate refused it. It is now offered, and counts, only the actions the user may
+  run, decided at the start of every turn on both paths (BUG-200, S3), and with `RequireActionForChangeRequests` such
+  an action is no longer one the first call can be required to make (BUG-201, S3). A turn that leaves an action out
+  says so in its instructions, naming no action and no role; a call made anyway is refused, as before.
+
+- **Novior.MentorAgent, .Server:** the MCP server read the `RequiresApproval` predicate once, when it built its tool
+  catalogue at the first request: an action the predicate gated after that stayed in `tools/list` and ran for a caller
+  nobody could ask. The predicate is now read for every `tools/list` and every `tools/call`; an action it holds back is
+  not listed and, called, is refused as withheld (BUG-202, S2).
+
+- **Novior.MentorAgent:** in `MentorHitlMode.Native` the approval markers are decided when the coordinator is built,
+  so a tool the `RequiresApproval` predicate gated after that ran with no confirmation, and with an auto-approval rule
+  its decision read `auto-approved` though no rule was asked. The gate now asks for the confirmation of such a call,
+  with the same banner and the same `POST /mentor/approve` as in Blocking mode, and a task from another agent refuses
+  it with `nobody-to-confirm` (BUG-203, S2).
+
+- **Novior.MentorAgent:** a Stop pressed after the user confirmed an action, before the action started, did not stop
+  it. Nothing read the turn's token between the answer and the run, so an action that does not read it itself ran, in
+  Blocking and in Native mode, and for a specialist's action too. The gate now reads it right before the action runs:
+  the action does not run, its decision is `Stopped` with `stop`, and the model is told the user stopped the request.
+  In Native mode the answers are no longer sent once Stop has come, so the next turn closes the request as never run
+  instead of as one that may have (BUG-204, S2).
+
+- **Novior.MentorAgent, .Server:** a caller that cancelled an A2A task (`tasks/cancel`) was answered `Working`, and the
+  task never ended `Canceled`. A caller waiting for the reply saw the turn go on, its actions included, and the task
+  end `Completed`; a streamed or `returnImmediately` task stopped, but stayed `Working` for good. Cancelling now stops
+  the task's turn as Stop does — nothing starts after it, and the call in progress is `Stopped` with `stop`, not
+  `session-ended` — and the task ends `Canceled`, in all three cases. The A2A SDK cancels the turn before it tells the
+  agent, so MentorAgent puts its own request handler in front of the SDK's; `MapMentorAgentA2A()` logs a warning when
+  a version of the SDK cannot be wrapped, and a cancelled task still ends `Canceled` then (BUG-199, S2).
+
+- **Novior.MentorAgent:** specialists, team members and the agents of an `IMentorAgentSource` were offered every tool
+  they hold, those the user had no role for included, and the gate then refused the call. They are now offered, and
+  told, only the tools the user may run, by the coordinator's rule, in both modes; a request that leaves a tool out
+  carries the coordinator's notice (BUG-205, S3).
+
+- **Novior.MentorAgent, .Server:** the onboarding tour was written from every action of the application, those that
+  need a role included: it could suggest one its reader may not use, and `GET /mentor/tour`, which answers anyone,
+  signed in or not, could describe actions the MCP server describes to nobody without the role. The tour is still one
+  for every visitor, generated once; it is now written from the actions that need no role (BUG-206, S3).
+
+- **Novior.MentorAgent:** the onboarding tour was generated on the request of the first visitor who asked for it. A
+  visitor who closed the page while the model wrote it, or whose `GET /mentor/tour` was cut short, ended the
+  generation, and the built-in tour, with no question to try, was kept for every visitor until the process restarted.
+  The generation now depends on no visitor's request: one who stops waiting only stops waiting, and the tour the model
+  writes is the one everyone gets (BUG-207, S4).
+
+- **Novior.MentorAgent:** in `HitlMode.Native` the banner of a coordinator's action took its text — the description
+  and the order of the arguments — from the first method found with the tool's name, not from the method the call
+  runs, though the 1.1.0 notes said the banner followed that method in both modes (BUG-188). Since an agent is
+  offered one tool per name (BUG-195), the two differ when the first method's class is not registered and the
+  coordinator is offered a later one: the user was asked to confirm what the other method does. The banner now reads
+  as the method the call runs in Native mode too (BUG-208, S3).
+
+- **Novior.MentorAgent.Abstractions:** the stylesheet and script links `ChatWidget` writes kept `?v=10` from the
+  first release on, while both files changed in every release. Neither file is fingerprinted, and a host serving them
+  as classic static files sends no `Cache-Control`, so a returning visitor's browser could keep the previous
+  release's copies after an upgrade: new elements unstyled, and what the older script lacks failing silently. The
+  links now carry the version the package was built as, with its commit (`?v=1.2.0+…`). A host that writes the two
+  links itself — a standalone WASM `index.html`, a surface without `ChatWidget` — sets `?v=` to the package version,
+  `?v=1.2.0` for this release, and changes it on every upgrade (BUG-209, S3).
+
+- **Novior.MentorAgent:** a Stop pressed while a request was delegated to a remote agent over A2A stopped the local
+  turn and told the peer nothing: the peer finished the task, actions that ask for no confirmation included. A turn
+  that leaves a delegated task before its answer now cancels it on the peer (`CancelTask`), waiting two seconds at
+  most for the peer to take it; a Stop that comes before the peer's first event, which names the task, keeps the
+  request open up to two seconds for it. A peer whose card declares no streaming is now asked with
+  `returnImmediately`, and its task read with `GetTask` until it ends, so that it can be cancelled too (BUG-210, S2).
+
+- **Novior.MentorAgent:** a Stop during the first message of a session, while a remote agent's card was being read,
+  was logged as the agent not answering ("did not answer: The operation was canceled") and kept the agent out of
+  reach for a minute, and the session's coordinator was built without it for as long as the session lasted. A Stop
+  there now ends the build: nothing is remembered against the agent, and the next message builds the coordinator
+  with it (BUG-211, S3).
+
+- **Breaking — Novior.MentorAgent:** a tool result became a generative card by its shape alone: any object with a
+  non-empty string `kind`. A record of the application's with such a property, a support ticket with a link a
+  customer wrote in it, was drawn as a card, the link a button, and its other fields never reached the model. A
+  result is now read for cards only when the method that produced it is declared to return them: `MentorCard`, or a
+  sequence of them, directly or through a task. A method that returned cards as `object`, as a `JsonElement` built
+  by hand or as a type of its own shows them as text: declare `MentorCard` or `IEnumerable<MentorCard>`. A `MentorCard` an
+  `OnToolResult` hook returns is still a card; an MCP tool's result never is (BUG-212, S3).
+
+- **Novior.MentorAgent.Abstractions:** under a Content-Security-Policy without `style-src 'unsafe-inline'`, such as
+  `default-src 'self'`, the Dark and Minimal themes and a `PrimaryColor` were dropped, and `<MentorDashboard />` lost
+  the colours of its charts and the width of its bars. The themes are now stylesheets of the package, a `PrimaryColor`
+  is set with `style.setProperty` once the widget's script runs, and the dashboard uses classes and SVG: both work
+  under `default-src 'self'` with any option. A host's `html:root` rule no longer wins over the five variables a
+  `PrimaryColor` sets (BUG-213, S3).
+
+- **Novior.MentorAgent.Abstractions:** IntelliSense described `MentorTheme.Default` as "Light theme with blue accents"
+  and `Minimal` as having no shadows. `Default` is the baseline's dark glass, a navy panel at 55% opacity, which on a
+  light page shows as dark grey with the page behind it; the light theme is `Minimal`. The documentation now says
+  which is which (BUG-214, S4).
+
+- **Novior.MentorAgent.Abstractions:** a Markdown link in a reply, `[text](https://…)`, was shown as raw text, brackets
+  and parentheses included, and could not be clicked. It is now a link that opens in a new tab, with
+  `rel="noopener noreferrer nofollow"`, when its address is an absolute `http` or `https` one; any other scheme,
+  `javascript:` and `data:` included, and a relative address stay text. The model's HTML is still always encoded
+  (BUG-215, S3).
+
+- **Novior.MentorAgent.Abstractions:** numbered steps with a line of text between them started again from 1 after the
+  line. A numbered list now starts at its first step's number, and a line or a code block indented under a step stays
+  inside it (BUG-216, S3).
+
+- **Novior.MentorAgent.Abstractions:** a message holding the text the Markdown renderer uses as a placeholder for a
+  code block, `@@BMCODE7@@` for instance, threw out of the render: on Blazor Server the circuit ended, and the host's
+  page stopped responding until a reload. The text may come from the user, or from the model repeating data others
+  wrote. It is now shown as it is (BUG-217, S1).
+
+- **Novior.MentorAgent:** with a `Language` other than English, the instructions MentorAgent writes for the model —
+  its example sentences, the grounding rule, the instructions in tool results — were in English, and a model could
+  copy one into its reply ("Understood, l'email è stata annullata"). They now follow `Language`, in all ten languages;
+  in English they are unchanged (BUG-221, S3).
+
+- **Novior.MentorAgent:** with `RefuseOutOfScope`, a short reply to the assistant's question was judged on its own:
+  on the demo the assistant asked "Vuoi vedere i dettagli…?", the user answered "Sì", and the turn was refused as out
+  of scope, 5 times of 5 in Italian ("Yes" passed 3 of 3). The scope question is now shown the end of the
+  assistant's last reply, in the same classifier call, and the verdict is kept for the message and that reply
+  together, so the same "Sì" after another question is judged again. The safety question still judges the message
+  alone, and the first message of a conversation is asked as before (BUG-223, S2).
+
+- **Novior.MentorAgent:** the notice of a turn that leaves out an action the user may not run (BUG-200) was English
+  in every language, and in Italian the model offered the action and, after "Sì", used another one or made up its
+  result. It now follows the language of the turn, under its English heading (English unchanged), and ends with
+  three rules: no offer of such an action, a yes does not make it available, no other tool in its place. On the demo
+  the card of `show_expense` is now shown, its Approve button only for a manager or an administrator (BUG-224, S2; a
+  residue is listed under *Known issues*).
+
+- **Novior.MentorAgent:** in Native mode a response with two calls of one id broke the conversation until it was
+  reset ("An item with the same key has already been added"). A call whose id the response or the conversation
+  already holds now gets the next free `<id>_n`, on the coordinator and the agents under it; not with
+  `UseServiceManagedHistory` (a warning says so) nor on path B. Two turns in a row that fail the same way on the
+  requests left open log an error that suggests a new conversation (BUG-225, S2).
+
+- **Novior.MentorAgent:** an A2A caller told the task at once (`ReturnImmediately`) could lose who it is: the SDK
+  answers it as soon as the task is submitted, its request ends while the turn runs on, and the turn read the caller
+  from that request only then. An authenticated peer became anonymous, its role-gated actions were refused, its
+  memory and rate limit went under another key. The caller is now read when the task starts (BUG-226, S2).
+
+- **Novior.MentorAgent.Server:** the Server README's option tables left out `MentorOptions.ConfirmationMessage`,
+  although the 1.1.0 notes said every option was in a reference table of both READMEs or among the Server README's
+  options not listed on purpose (BUG-163). It is now in the table of the confirmation options, and a test checks that
+  the tables of both READMEs list every option of `MentorOptions` and every property of `[MentorAction]` (BUG-227,
+  S4).
+
+- **Novior.MentorAgent.Abstractions:** with the onboarding tour open, a change of the widget's `Language` translated
+  the tour's buttons and left its steps in the language it had opened in. An open tour now fetches its steps in the
+  new language and stays on the step it was at, or on the last one when the new language has fewer (BUG-228, S4).
+
+- **Novior.MentorAgent:** `RequireLookupForRecordQuestions` had no effect without semantic tool filtering, and on the
+  demo, which has no embedding model, a question about pending expenses asked in Italian was answered about one time
+  in three with a list the model made up. Without the filter, the first call of a record question must now call one of
+  the declared reads the user may run, or hand the request over; with the filter nothing changes. The demo turns the
+  option on (BUG-222, S2).
+
+### Known issues
+
+- **Novior.MentorAgent:** BUG-074 (S3) is closed by default: since 1.2.0 `MentorshipLevel.Proactive` asks for no
+  closing offers unless `ProactiveNextSteps` is on. With it on, the assistant can still offer next steps the
+  application does not have — 4 of 15 closing offers on the headless server sample, measured on 1.2.0.
+- **Novior.MentorAgent:** BUG-118 (S2) is closed for hosts that opt in to `RequireActionForChangeRequests`. Without it
+  the model can still narrate an action it never performed — "Stock aggiornato" with no tool called, or "Ecco la
+  pagina Prodotti" with no navigation — and with it a complete request the classifier does not recognise runs as
+  without the option.
+- **Novior.MentorAgent:** BUG-220 (S3): with `MentorHitlMode.Blocking` and a Chat Completions client, the model can
+  announce an action that asks for no confirmation — "Procedo a registrare la nota…" — and end its reply without
+  calling it: once in 12 turns on the Blazor Server sample, on 1.2.0. `RequireActionForChangeRequests` does not
+  prevent it, since it requires only actions that ask for a confirmation. The user can repeat the request; where it
+  matters, give the action `RequiresConfirmation = true`, so that with the option a complete request calls it first,
+  behind the banner; or use `MentorHitlMode.Native` with a Responses client, where an earlier measurement saw the
+  action called almost every time.
+- **Novior.MentorAgent:** BUG-224 (S2) leaves a residue in a turn in a language other than English: when the role
+  filter leaves an action out, the assistant can still offer it, and after the user's "yes" it can, rarely, call
+  another action the user may run in its place — once in 10 Italian tries on the demo, a new expense claim instead of
+  an approval. The confirmation that write actions ask for by default stops that call: keep `RequireConfirmation`
+  and `RequireConfirmationForWrites` on.
+- **Novior.MentorAgent:** BUG-106's residue is closed for hosts that opt in to `RequireLookupForRecordQuestions`;
+  without it, a catalogue question can still be answered with an offer to look the value up.
+- **Novior.MentorAgent, .Server:** a 1.1.0 host that moves the A2A SDK to 1.0.0-preview3 on its own — `A2A`, or
+  `A2A.AspNetCore`, which brings it — cannot answer A2A tasks. NuGet allows it without a warning, since 1.1.0 asks
+  for preview2 or later, but preview3 changed the signatures of four `TaskUpdater` methods the 1.1.0 handler calls:
+  the handler fails with `MissingMethodException` when a task arrives. Keep `A2A` and `A2A.AspNetCore` at
+  1.0.0-preview2 with 1.1.0, or move to 1.2.0.
+
 ## [1.1.0] - 2026-10-21
 
 ### Added
@@ -1187,6 +1545,7 @@ names of their time.
 - **MentorAgent:** `MentorRemoteAgent.RequiredRoles` is not enforced: any user can reach a remote agent.
 
 [Unreleased]: https://www.nuget.org/packages/Novior.MentorAgent
+[1.2.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.2.0
 [1.1.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.1.0
 [1.0.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.0.0
 [1.0.0-rc.15]: https://www.nuget.org/packages/MentorAgent/1.0.0-rc.15

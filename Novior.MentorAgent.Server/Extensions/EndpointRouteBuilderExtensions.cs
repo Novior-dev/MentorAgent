@@ -91,7 +91,11 @@ public static class EndpointRouteBuilderExtensions
 
         // The withheld actions are named now, at startup, as the README promises, not with the first MCP
         // request (BUG-178). Only the warning: which tools a caller sees is still decided per request.
-        sp.GetService<MentorAgentMcpToolCollection>()?.ReportWithheld();
+        if (sp.GetService<MentorAgentMcpToolCollection>() is { } collection)
+        {
+            collection.ReportWithheld();
+            collection.Mapped = true;   // IMentorActionCatalog: the endpoint is served (story 153)
+        }
 
         // No RequireCors here (BUG-108). CORS metadata on an endpoint makes ASP.NET Core refuse the request
         // with a 500 unless the CORS middleware ran — and whether the host added it cannot be read at map
@@ -154,6 +158,13 @@ public static class EndpointRouteBuilderExtensions
         if (opts is not null && sp.GetService<MentorA2AServerRegistered>() is null)
             throw new InvalidOperationException(NotRegistered("A2A", "AddMentorAgentA2A", "MapMentorAgentA2A"));
 
+        // BUG-199: without MentorAgent's request handler in front of the SDK's, a task its caller cancels still ends
+        // Canceled, but the call in progress is stopped before anything says why and reads session-ended.
+        if (sp.GetService<A2A.IA2ARequestHandler>() is not MentorA2ARequestHandler)
+            sp.GetService<ILoggerFactory>()?.CreateLogger("Novior.MentorAgent.Server").LogWarning(
+                "[MentorAgent:A2A] The A2A SDK's request handler could not be wrapped: a task the caller cancels still " +
+                "ends Canceled, but the call it stops reads session-ended instead of stop. Check the A2A.AspNetCore version.");
+
         var a2a = endpoints.MapA2A(path);
         configure?.Invoke(a2a);
 
@@ -164,6 +175,11 @@ public static class EndpointRouteBuilderExtensions
         if (opts is not null)
         {
             var o = opts.Value;
+            var skills = BuildAgentSkills(sp, o);
+            // IMentorActionCatalog says which actions the card lists: the ones built here, once (story 153).
+            if (sp.GetService<IMentorActionCatalog>() is Core.MentorActionCatalog catalog)
+                catalog.AgentCardSkills = new HashSet<string>(skills.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+
             var card = new A2A.AgentCard
             {
                 Name        = o.AppName,
@@ -204,7 +220,8 @@ public static class EndpointRouteBuilderExtensions
                 // actions from the MCP surface (BUG-021): the card is the same for every caller,
                 // signed in or not, and nobody answers a confirmation, so advertising a gated action
                 // would be advertising a refusal. Only actions a turn can run, once per name (BUG-177).
-                Skills = BuildAgentSkills(sp, o),
+                // It is not filtered by an IMentorActionPolicy either: one card for every caller, built at startup.
+                Skills = skills,
 
                 // Text in, text out; images too when the host accepts them. An empty list is not
                 // "unknown" to a client, it is "nothing", so these are stated rather than omitted.

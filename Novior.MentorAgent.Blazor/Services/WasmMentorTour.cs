@@ -20,7 +20,8 @@ internal sealed class WasmMentorTour : IMentorTour
     private readonly string _url;
     private readonly ILogger<WasmMentorTour> _logger;
 
-    private IReadOnlyList<MentorTourStep>? _cached;
+    // One per language asked for, and one for the server's own (story 536).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MentorTourStep>> _cached = new();
 
     public WasmMentorTour(
         NavigationManager navigation,
@@ -77,13 +78,23 @@ internal sealed class WasmMentorTour : IMentorTour
         return true;
     }
 
-    public async Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(CancellationToken ct = default)
+        => GetStepsAsync(null, ct);
+
+    /// <summary>The address of the tour in <paramref name="language"/>; without one, the server's language.</summary>
+    internal string UrlFor(MentorLanguage? language)
+        => language is { } lang
+            ? _url + (_url.Contains('?') ? "&" : "?") + "language=" + lang.ToIsoCode()
+            : _url;
+
+    public async Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(MentorLanguage? language, CancellationToken ct = default)
     {
-        if (_cached is { } ready) return ready;
+        var url = UrlFor(language);
+        if (_cached.TryGetValue(url, out var ready)) return ready;
 
         try
         {
-            using var response = await _http.GetAsync(_url, ct);
+            using var response = await _http.GetAsync(url, ct);
             response.EnsureSuccessStatusCode();
 
             // A SPA host answers an unknown path with index.html and a 200, so "it returned
@@ -96,18 +107,18 @@ internal sealed class WasmMentorTour : IMentorTour
                     "[MentorAgent:Tour] {Url} answered with '{MediaType}' instead of JSON — that URL is "
                     + "not the MentorAgent server. Point HubUrl at the server (or set TourUrl to an "
                     + "absolute URL) and make sure the server enables CORS for this origin.",
-                    _url, mediaType ?? "no content type");
-                return _cached = [];
+                    url, mediaType ?? "no content type");
+                return _cached[url] = [];
             }
 
             var steps = await response.Content.ReadFromJsonAsync<List<MentorTourStep>>(ct);
-            return _cached = steps ?? [];
+            return _cached[url] = steps ?? [];
         }
         catch (Exception ex)
         {
             // No tour is a missing nicety, not a broken app: log it and let the widget open normally.
-            _logger.LogWarning(ex, "[MentorAgent:Tour] Could not fetch the tour from {Url}.", _url);
-            return _cached = [];
+            _logger.LogWarning(ex, "[MentorAgent:Tour] Could not fetch the tour from {Url}.", url);
+            return _cached[url] = [];
         }
     }
 }

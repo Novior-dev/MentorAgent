@@ -32,14 +32,8 @@ internal sealed class MentorTurnOrigin
     /// <summary>A2A message metadata key under which a MentorAgent caller sends its name for the peer.</summary>
     internal const string AddressedAsMetadataKey = "mentoragent.addressedAs";
 
-    /// <summary>
-    /// The tool result for a confirmation-gated action on a task from another agent. Nobody can answer
-    /// the confirmation there, so the action is refused at once instead of waiting until the caller gives
-    /// up — the agent card leaves such actions out for the same reason.
-    /// </summary>
-    internal const string NobodyToConfirm =
-        "Not run: this action needs a person to confirm it, and a request from another agent has nobody to " +
-        "ask. Say that it has to be done from the application itself.";
+    // The tool result for a confirmation-gated action on a task from another agent is MentorPromptTexts.NobodyToConfirm,
+    // in the language of the turn.
 
     /// <summary>
     /// The line the per-request context block carries for such a turn.

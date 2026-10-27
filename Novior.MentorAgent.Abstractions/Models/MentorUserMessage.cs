@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Novior.MentorAgent.Abstractions.Core;
+
 namespace Novior.MentorAgent.Abstractions.Models;
 
 /// <summary>
@@ -11,4 +14,17 @@ public sealed record MentorUserMessage(string Text, IReadOnlyList<MentorAttachme
 {
     /// <summary>True when at least one image is attached.</summary>
     public bool HasAttachments => Attachments is { Count: > 0 };
+
+    /// <summary>
+    /// The language of this turn: what the assistant answers in, and the language of the texts the server
+    /// writes for it. <see langword="null"/> means <c>MentorOptions.Language</c>, read again on every turn.
+    /// <c>ChatWidget</c> sets it from its <c>Language</c> parameter.
+    /// <para>
+    /// On the wire it is the name (<c>"Italian"</c>) or the ISO code (<c>"it"</c>), in any case. Any other
+    /// value — a number, a name that is not a <see cref="MentorLanguage"/>, an empty string — is read as
+    /// <see langword="null"/>.
+    /// </para>
+    /// </summary>
+    [JsonConverter(typeof(MentorLanguageWireConverter))]
+    public MentorLanguage? Language { get; init; }
 }

@@ -65,8 +65,8 @@ if (model.IsConfigured)
             "Expense claims of a small team: employees submit them, managers approve or reject them, " +
             "an administrator looks after the whole application.";
 
-        // One language for the whole application, read here at startup. The EN/IT button of the demo changes
-        // its pages only; set MentorAgent:Language to Italian in appsettings.json for an Italian assistant.
+        // The application's language, read here at startup: the policy handbook and the labels of the expense
+        // actions use it. The EN/IT button gives the page's language to the widget, so the assistant follows it.
         options.Language = assistantLanguage.Language;
 
         // The site's colours.
@@ -83,6 +83,10 @@ if (model.IsConfigured)
         // assistant's language. Roles are on the actions (RequiredRoles).
         options.RequireConfirmation = true;
         options.ConfirmationMessage = DemoConfirmation.Write;
+
+        // A question about the claims is answered from a read: when a classifier says the message asks for a value
+        // of the records, the first call is list_expenses or show_expense (they are ReadOnly), never a list from memory.
+        options.RequireLookupForRecordQuestions = true;
 
         // Tables in the answers, and cards with buttons from show_expense.
         options.EnableRichResponses = true;

@@ -337,8 +337,9 @@ internal sealed class UIActionsMiddleware : DelegatingChatClient
     /// <summary>
     /// A forced call (RequireLookupForRecordQuestions, RequireActionForChangeRequests): the first call must be a
     /// read, one of the requested actions or navigate_to, so no UI action is added that could satisfy the
-    /// requirement. The marker the tool filter set is removed here, its only reader, so it never reaches a
-    /// provider client that sends every additional property in the request body.
+    /// requirement. The marker the tool filter set — or <see cref="ForcedReadChatClient"/>, without the filter — is
+    /// removed here, its only reader, so it never reaches a provider client that sends every additional property in
+    /// the request body.
     /// </summary>
     private static ChatOptions? TakeForcedCallMarker(ChatOptions? options, out bool forcedCall)
     {

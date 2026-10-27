@@ -57,10 +57,13 @@ public sealed class PathParityTests
 
     // ── Row 1 · L1 actions — ✅ on both ─────────────────────────────────────────
 
+    // cancel_order needs the Manager role: it reaches the model for a user who holds it (BUG-200).
+
     [Fact]
     public async Task L1_actions_reach_the_model_on_path_A()
     {
         await using var host = MentorHostFixture.Create();
+        host.Auth.SignIn("ada", "Manager");
 
         await host.RunTurnAsync("hello");
 
@@ -72,6 +75,7 @@ public sealed class PathParityTests
     {
         var (host, inner) = PathB();
         await using var _ = host;
+        host.Auth.SignIn("ada", "Manager");
 
         await host.RunTurnAsync("hello");
 

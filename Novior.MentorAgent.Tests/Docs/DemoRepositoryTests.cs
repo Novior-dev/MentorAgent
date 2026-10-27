@@ -58,6 +58,23 @@ public sealed class DemoRepositoryTests
             .Should().Contain("demo/MentorAgentDemo/MentorAgentDemo.csproj", "the pipeline builds the demo with the solution");
     }
 
+    [Fact]
+    public void The_demos_OpenAI_adapter_has_the_version_of_the_librarys_Microsoft_Extensions_AI()
+    {
+        // Microsoft.Extensions.AI.OpenAI is built against one Microsoft.Extensions.AI and one OpenAI SDK, and a pair
+        // that does not match fails at run time: 10.10.0 next to OpenAI 2.14 threw TypeLoadException on every
+        // Responses call that carried a tool. The demo brings the adapter and the library brings Microsoft.Extensions.AI,
+        // so the two move together.
+        static string Version(string project, string package) => Regex.Match(
+            File.ReadAllText(Path.Combine(RepoFiles.Root, project)),
+            $@"<PackageReference Include=""{Regex.Escape(package)}"" Version=""([^""]+)""").Groups[1].Value;
+
+        var library = Version("Novior.MentorAgent/Novior.MentorAgent.csproj", "Microsoft.Extensions.AI");
+        library.Should().NotBeEmpty("the library references Microsoft.Extensions.AI");
+        Version("demo/MentorAgentDemo/MentorAgentDemo.csproj", "Microsoft.Extensions.AI.OpenAI")
+            .Should().Be(library, "the demo's adapter follows the library's Microsoft.Extensions.AI");
+    }
+
     [Theory]
     [InlineData("""{ "Demo": { "ApiKey": "abc" } }""")]
     [InlineData("""{ "ConnectionStrings": { "Default": "Server=x" }, "Demo": { "Token": "t" } }""")]

@@ -60,7 +60,12 @@ internal static class OutOfScopeRefusal
     /// empty. Using one of those is part of the application's work, but — the BUG-050 lesson — it does not
     /// make an unrelated subject the application's business.
     /// </param>
-    internal static string Question(string scope, string configured)
+    /// <param name="previous">
+    /// The end of the assistant's last reply, from <see cref="ReplyContext"/>, or null on the first message of a
+    /// conversation. Seen alone, "Sì" answering "Vuoi vedere i dettagli?" was refused 5 times of 5 in Italian on the
+    /// demo: the question says what a short reply answers. Data for the scope question only, never a turn.
+    /// </param>
+    internal static string Question(string scope, string configured, string? previous = null)
     {
         var equipped = string.IsNullOrWhiteSpace(configured)
             ? string.Empty
@@ -80,7 +85,25 @@ internal static class OutOfScopeRefusal
             "summarise, remember or forget what the user said) and questions about what the assistant can do " +
             "are ANSWER.\n" +
             "REFUSE only when the subject plainly has nothing to do with this application, such as creative " +
-            "writing, the weather, sport or general knowledge unrelated to its business. If unsure, ANSWER.";
+            "writing, the weather, sport or general knowledge unrelated to its business. If unsure, ANSWER." +
+            (string.IsNullOrEmpty(previous)
+                ? string.Empty
+                : $"\nThe assistant's previous message, for context only, ended: \"{previous}\". A short reply to it " +
+                  "(yes, no, a choice it offered, a value it asked for) is ANSWER.");
+    }
+
+    /// <summary>How much of the assistant's last reply the scope question is shown: its end, where its question is.</summary>
+    internal const int ReplyContextLength = 300;
+
+    /// <summary>
+    /// The end of <paramref name="reply"/> on one line, at most <see cref="ReplyContextLength"/> characters after an
+    /// ellipsis; null when there is none. The end, because a reply closes with its question ("…Vuoi confermare?").
+    /// </summary>
+    internal static string? ReplyContext(string? reply)
+    {
+        var line = RequestClassifier.OneLine(reply, int.MaxValue - 1);
+        if (line.Length == 0) return null;
+        return line.Length <= ReplyContextLength ? line : "…" + line[^ReplyContextLength..].TrimStart();
     }
 }
 

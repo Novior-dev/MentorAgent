@@ -3,6 +3,7 @@ using Bunit;
 using FluentAssertions;
 using Novior.MentorAgent.Abstractions.Components;
 using Novior.MentorAgent.Abstractions.Models;
+using Novior.MentorAgent.Tests.Docs;
 using Xunit;
 
 namespace Novior.MentorAgent.Tests.Components;
@@ -282,10 +283,37 @@ public sealed class MentorDashboardTests : ComponentTestBase
     [Fact]
     public void Chart_colours_come_from_css_variables_so_they_follow_the_theme()
     {
+        // A class per series, which the stylesheet maps to the series variable, for the line and its legend
+        // swatch alike. They were style attributes, which a page without style-src 'unsafe-inline' refuses (BUG-213).
         var cut = RenderDash();
 
-        (cut.Find(".bm-dash__chartcard polyline").GetAttribute("style") ?? "")
-            .Should().Contain("var(--bm-chart-in)");
+        cut.FindAll(".bm-dash__chartcard polyline").Select(p => p.GetAttribute("class"))
+            .Should().Equal("bm-chart__line bm-chart__line--in", "bm-chart__line bm-chart__line--out",
+                            "bm-chart__line bm-chart__line--total", "bm-chart__line bm-chart__line--req",
+                            "bm-chart__line bm-chart__line--lat");
+        cut.FindAll(".bm-dash__legend i").Select(i => i.GetAttribute("class"))
+            .Should().Equal("bm-dash__swatch--in", "bm-dash__swatch--out", "bm-dash__swatch--total");
+
+        var css = File.ReadAllText(Path.Combine(
+            RepoFiles.Root, RepoFiles.Abstractions, "wwwroot", "css", "MentorAgent.css"));
+        foreach (var series in new[] { "in", "out", "total", "req", "lat" })
+            css.Should().MatchRegex($@"\.bm-chart__line--{series}\s*\{{\s*stroke:\s*var\(--bm-chart-{series}\);\s*\}}");
+        foreach (var series in new[] { "in", "out", "total" })
+            css.Should().MatchRegex($@"\.bm-dash__swatch--{series}\s*\{{\s*background:\s*var\(--bm-chart-{series}\);\s*\}}");
+    }
+
+    [Fact]
+    public void The_dashboard_renders_no_inline_style_so_it_works_under_a_strict_csp()
+    {
+        // BUG-213: the README asked for style-src 'unsafe-inline' for the legend, the bars and a margin.
+        // Both views: the conversation metrics show only in the all-models one.
+        var cut = RenderDash();
+        Styles().Should().BeEmpty();
+
+        cut.Find(".bm-dash__select").Change("gpt-4o");
+        Styles().Should().BeEmpty();
+
+        string Styles() => string.Join(" | ", cut.FindAll("[style], style").Select(e => e.OuterHtml));
     }
 
     [Fact]
@@ -354,10 +382,12 @@ public sealed class MentorDashboardTests : ComponentTestBase
     {
         var cut = RenderDash();
 
+        // An SVG bar 100 units wide, so the fill's width attribute is the share. It was a style attribute.
         var items = cut.FindAll(".bm-dash__list li");
         items.Should().HaveCount(2);
-        (items[0].QuerySelector(".bm-dash__bar-fill")!.GetAttribute("style") ?? "").Should().Contain("100%");
-        (items[1].QuerySelector(".bm-dash__bar-fill")!.GetAttribute("style") ?? "").Should().Contain("50%",
+        items[0].QuerySelector("svg.bm-dash__bar")!.GetAttribute("viewBox").Should().Be("0 0 100 1");
+        items[0].QuerySelector("rect.bm-dash__bar-fill")!.GetAttribute("width").Should().Be("100");
+        items[1].QuerySelector("rect.bm-dash__bar-fill")!.GetAttribute("width").Should().Be("50",
             "6 of 12 is half the leader's bar");
     }
 

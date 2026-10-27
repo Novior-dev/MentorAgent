@@ -150,16 +150,30 @@ internal sealed class GroupChatBuilder
 
     private ChatClientAgent BuildMemberAgent(TeamMemberInfo member, IChatClient chatClient)
     {
-        var instructions = _promptBuilder.BuildTeamMemberInstructions(member);
-        var tools = BuildMemberTools(member);
+        var builtLanguage = _options.Language;
+        var instructions = _promptBuilder.BuildTeamMemberInstructions(member, builtLanguage);
+        // Story 536 — a turn in another language is sent the builder's instructions for it. Outside the member's role
+        // filter, which rewrites the tools block inside them.
+        var promptBuilderForTurn = _promptBuilder;
+        IChatClient ForTurn(IChatClient inner) => Middleware.TurnLanguageChatClient.For(inner,
+            _sp.GetService<MentorTurnLanguage>(), builtLanguage, instructions,
+            language => promptBuilderForTurn.BuildTeamMemberInstructions(member, language), member.Attribute.Role, _logger);
+        var tools = OneToolPerName.Keep(BuildMemberTools(member), member.Attribute.Role, _logger);
 
         if (tools.Count > 0)
         {
             _logger.LogDebug("[MentorAgent] TeamMember '{Role}': {N} tools",
                 member.Attribute.Role, tools.Count);
 
+            // BUG-205: offered only the tools this turn's user may run, and told only of those: the instructions
+            // list the member's tools with their descriptions.
+            var promptBuilder = _promptBuilder;
+            var memberClient = ForTurn(Middleware.AgentRoleFilterChatClient.For(chatClient, tools, _gate,
+                mayRun => (promptBuilder.TeamMemberToolsBlock(member.Tools),
+                           promptBuilder.TeamMemberToolsBlock([.. member.Tools.Where(t => mayRun(t.ToolName, t.Method))]))));
+
             return new ChatClientAgent(
-                chatClient,
+                memberClient,
                 new ChatClientAgentOptions
                 {
                     Name = member.Attribute.Role,
@@ -173,7 +187,7 @@ internal sealed class GroupChatBuilder
         }
 
         return new ChatClientAgent(
-            chatClient,
+            ForTurn(chatClient),
             instructions,
             member.Attribute.Role,
             $"Team member: {member.Attribute.Role}");
@@ -198,7 +212,7 @@ internal sealed class GroupChatBuilder
                 // middleware. Wrapping the function carries the gate (RequiredRoles,
                 // RequiresConfirmation, feedback, metrics) with it. Team tools are meant to be
                 // read-only, so this is usually a pass-through — but it is no longer a hole.
-                tools.Add(Middleware.GatedAIFunction.Wrap(tool, _gate));
+                tools.Add(Middleware.GatedAIFunction.Wrap(tool, _gate, MentorAgentKind.TeamMember, member.Attribute.Role));
             }
             catch (Exception ex)
             {

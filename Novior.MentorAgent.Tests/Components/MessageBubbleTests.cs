@@ -250,6 +250,180 @@ public sealed class MessageBubbleTests : ComponentTestBase
         cut.Find(".bm-bubble__content").TextContent.Trim().Should().BeEmpty();
     }
 
+    [Fact]
+    public void Text_that_looks_like_an_internal_placeholder_is_shown_as_it_is()
+    {
+        // The renderer swaps code blocks and links for numbered placeholders and puts them back at the end. A
+        // model that writes one itself, with no block or link of that number, must not throw out of the render.
+        var cut = RenderBubble(Assistant("@@BMCODE7@@ and @@BMLINK3@@"));
+
+        cut.Find(".bm-bubble__content").TextContent.Should().Be("@@BMCODE7@@ and @@BMLINK3@@");
+    }
+
+    // ── Links (BUG-215) ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void A_markdown_link_to_an_https_address_becomes_a_link_that_opens_in_a_new_tab()
+    {
+        // It stayed raw text, brackets and parentheses included, and could not be clicked.
+        var cut = RenderBubble(Assistant("See the [Guide](https://example.com/a) for details."));
+
+        var link = cut.Find(".bm-bubble__content a");
+        link.GetAttribute("href").Should().Be("https://example.com/a");
+        link.GetAttribute("target").Should().Be("_blank");
+        link.GetAttribute("rel").Should().Be("noopener noreferrer nofollow");
+        link.Attributes.Should().HaveCount(3, "an href, a target and a rel, and nothing a model could add");
+        link.TextContent.Should().Be("Guide");
+        cut.Find(".bm-bubble__content").TextContent.Should().Be("See the Guide for details.");
+    }
+
+    [Theory]
+    [InlineData("http://example.com/a?x=1&y=2")]
+    [InlineData("https://example.com/my_page_name")]
+    [InlineData("https://example.com/a*b*c")]
+    [InlineData("https://en.wikipedia.org/wiki/Foo_(bar)")]
+    [InlineData("HTTPS://EXAMPLE.COM/A")]
+    public void The_address_reaches_the_href_whole(string url)
+    {
+        // An ampersand is encoded in the attribute and read back by the browser; underscores and asterisks
+        // are not italics inside an address; one level of parentheses belongs to it.
+        var cut = RenderBubble(Assistant($"[the page]({url})"));
+
+        cut.Find(".bm-bubble__content a").GetAttribute("href").Should().Be(url);
+        cut.Find(".bm-bubble__content a").TextContent.Should().Be("the page");
+    }
+
+    [Theory]
+    [InlineData("[x](javascript:alert(1))")]
+    [InlineData("[x](JavaScript:alert(1))")]
+    [InlineData("[x](data:text/html,<script>alert(1)</script>)")]
+    [InlineData("[x](vbscript:msgbox(1))")]
+    [InlineData("[x](/relative)")]
+    [InlineData("[x](relative/page)")]
+    [InlineData("[x](//evil.example/a)")]
+    [InlineData("[x](https://example.com/a\" onmouseover=\"alert(1))")]
+    public void A_link_to_any_other_scheme_or_a_relative_address_stays_encoded_text(string markdown)
+    {
+        var cut = RenderBubble(Assistant(markdown));
+
+        var content = cut.Find(".bm-bubble__content");
+        content.QuerySelectorAll("a, script").Should().BeEmpty();
+        content.TextContent.Should().Be(markdown);
+    }
+
+    [Fact]
+    public void A_quote_in_the_address_cannot_add_an_attribute()
+    {
+        // No space, so the address ends at the closing parenthesis: the quotes are part of it, encoded, and the
+        // browser reads one odd https address, not an event handler.
+        var cut = RenderBubble(Assistant("[x](https://example.com/a\"onmouseover=\"alert(1))"));
+
+        var content = cut.Find(".bm-bubble__content");
+        content.QuerySelectorAll("[onmouseover]").Should().BeEmpty();
+        foreach (var link in content.QuerySelectorAll("a"))
+        {
+            link.Attributes.Select(a => a.Name).Should().BeEquivalentTo("href", "target", "rel");
+            link.GetAttribute("href").Should().StartWith("https://");
+        }
+    }
+
+    [Fact]
+    public void An_address_holding_a_placeholder_stays_text()
+    {
+        // The code blocks are put back last, over the whole reply: one in an href would end the attribute early.
+        // As text, the placeholder repeats the reply's own block, which is harmless.
+        var cut = RenderBubble(Assistant("```\nx\n```\n[y](https://example.com/@@BMCODE0@@)"));
+
+        cut.FindAll(".bm-bubble__content a, .bm-bubble__content [href]").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void The_link_text_takes_inline_formatting_and_cannot_hold_another_link()
+    {
+        var formatted = RenderBubble(Assistant("[**Guide** to `dotnet`](https://example.com/a)"));
+
+        var link = formatted.Find(".bm-bubble__content a");
+        link.QuerySelector("strong")!.TextContent.Should().Be("Guide");
+        link.QuerySelector("code.bm-inline-code")!.TextContent.Should().Be("dotnet");
+
+        var nested = RenderBubble(Assistant("[a [b](https://example.com/b)](https://example.com/a)"));
+
+        nested.FindAll(".bm-bubble__content a a").Should().BeEmpty();
+        nested.FindAll(".bm-bubble__content a").Should().ContainSingle()
+              .Which.GetAttribute("href").Should().Be("https://example.com/b");
+    }
+
+    [Fact]
+    public void A_link_inside_code_stays_code()
+    {
+        var cut = RenderBubble(Assistant("Write `[Guide](https://example.com/a)` in the file.\n```\n[Guide](https://example.com/b)\n```"));
+
+        cut.FindAll(".bm-bubble__content a").Should().BeEmpty();
+        cut.Find("code.bm-inline-code").TextContent.Should().Be("[Guide](https://example.com/a)");
+        cut.Find("pre.bm-code code").TextContent.Should().Be("[Guide](https://example.com/b)");
+    }
+
+    [Fact]
+    public void A_link_works_in_a_list_item_and_in_a_table_cell()
+    {
+        var cut = RenderBubble(Assistant("""
+            1. Install it from [NuGet](https://www.nuget.org/packages/Novior.MentorAgent)
+
+            | Page | Link |
+            | --- | --- |
+            | Docs | [read](https://example.com/docs) |
+            """));
+
+        cut.Find("ol.bm-list li a").GetAttribute("href").Should().Be("https://www.nuget.org/packages/Novior.MentorAgent");
+        cut.Find(".bm-table td a").GetAttribute("href").Should().Be("https://example.com/docs");
+    }
+
+    // ── Numbered steps with text between them (BUG-216) ─────────────────────────
+
+    [Fact]
+    public void A_numbered_list_that_resumes_after_a_paragraph_keeps_its_number()
+    {
+        // The paragraph ends the list, and the next one started again from 1.
+        var cut = RenderBubble(Assistant("1. A\nA line of explanation.\n2. B"));
+
+        var lists = cut.FindAll("ol.bm-list");
+        lists.Should().HaveCount(2);
+        lists[0].HasAttribute("start").Should().BeFalse("a list that starts at 1 needs no start");
+        lists[1].GetAttribute("start").Should().Be("2");
+        lists[1].TextContent.Should().Be("B");
+    }
+
+    [Fact]
+    public void A_numbered_list_starts_at_the_number_its_first_step_has()
+    {
+        var cut = RenderBubble(Assistant("3. C\n4. D"));
+
+        cut.Find("ol.bm-list").GetAttribute("start").Should().Be("3");
+        cut.FindAll("ol.bm-list li").Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void A_line_indented_under_a_step_stays_inside_that_step()
+    {
+        var cut = RenderBubble(Assistant("1. Install the package\n   dotnet add package Novior.MentorAgent\n2. Register the services"));
+
+        cut.FindAll("ol.bm-list").Should().ContainSingle();
+        var items = cut.FindAll("ol.bm-list li");
+        items.Should().HaveCount(2);
+        items[0].InnerHtml.Should().Be("Install the package<br>dotnet add package Novior.MentorAgent");
+        items[1].TextContent.Should().Be("Register the services");
+    }
+
+    [Fact]
+    public void A_code_block_indented_under_a_step_stays_inside_that_step()
+    {
+        var cut = RenderBubble(Assistant("1. Install it:\n   ```bash\n   dotnet add package Novior.MentorAgent\n   ```\n2. Register the services"));
+
+        cut.FindAll("ol.bm-list").Should().ContainSingle();
+        cut.Find("ol.bm-list li pre.bm-code code").TextContent.Should().Be("dotnet add package Novior.MentorAgent");
+        cut.FindAll("ol.bm-list li").Should().HaveCount(2);
+    }
+
     // ── Role, streaming and timestamps ──────────────────────────────────────────
 
     [Fact]

@@ -3,6 +3,8 @@ using FluentAssertions;
 using Novior.MentorAgent.Core.Mcp;
 using Novior.MentorAgent.Options;
 using Novior.MentorAgent.Tests.Fakes;
+using Novior.MentorAgent.Tests.Harness;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -38,8 +40,9 @@ public sealed class McpClientPoolTests
     private static MentorMcpServer Stdio(string name = "files", bool? shared = null) =>
         new() { Name = name, Command = "npx", Arguments = ["-y", "server"], Shared = shared };
 
-    private static McpClientPool Pool(FakeMcpSessionFactory factory, TimeProvider? clock = null)
-        => new(factory, NullLogger<McpClientPool>.Instance, clock);
+    private static McpClientPool Pool(FakeMcpSessionFactory factory, TimeProvider? clock = null, TestLogCollector? logs = null)
+        => new(factory, logs is null ? NullLogger<McpClientPool>.Instance
+                                     : LoggerFactory.Create(b => b.AddProvider(new TestLoggerProvider(logs))).CreateLogger<McpClientPool>(), clock);
 
     // ── What "shared" means ─────────────────────────────────────────────────────
 
@@ -171,6 +174,63 @@ public sealed class McpClientPoolTests
         second.Should().NotBeSameAs(first);
         factory.Connects.Should().Be(2);
         first.Disposed.Should().BeTrue("the dead one is closed, not leaked");
+    }
+
+    // ── A server that connects but does not answer ping (BUG-198) ───────────────
+
+    /// <summary>
+    /// The call, with a deadline: before BUG-198 a session that never answered ping was reopened in a loop, for as
+    /// long as the caller waited.
+    /// </summary>
+    private static Task<IMcpSession> CallWithDeadline(McpClientPool pool)
+        => pool.GetOrConnectAsync(Url(), new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
+
+    [Fact]
+    public async Task A_server_that_connects_but_never_answers_ping_is_left_out_like_one_that_is_down()
+    {
+        var clock = new TestClock(DateTimeOffset.UtcNow);
+        var logs = new TestLogCollector();
+        var factory = new FakeMcpSessionFactory { NewSessionsAlive = false };
+        var pool = Pool(factory, clock, logs);
+        pool.FailureBackoff = TimeSpan.FromSeconds(30);
+
+        for (var i = 0; i < 3; i++)
+            await Assert.ThrowsAsync<McpSessionUnavailableException>(() => CallWithDeadline(pool));
+
+        factory.Connects.Should().Be(1, "a session opened by this call that does not answer is a failed connect");
+        factory.Sessions.Single().Disposed.Should().BeTrue("the session that does not answer is closed");
+        logs.HasWarning("'docs' connected but does not answer ping").Should().BeTrue(logs.WarningText);
+    }
+
+    [Fact]
+    public async Task A_cached_session_that_died_is_reopened_once_then_the_server_is_left_out()
+    {
+        var factory = new FakeMcpSessionFactory();
+        var pool = Pool(factory, new TestClock(DateTimeOffset.UtcNow));
+
+        var first = (FakeMcpSession)await pool.GetOrConnectAsync(Url(), default);
+        first.Alive = false;
+        factory.NewSessionsAlive = false;
+
+        await Assert.ThrowsAsync<McpSessionUnavailableException>(() => CallWithDeadline(pool));
+
+        factory.Connects.Should().Be(2, "the session that died is reopened once, and the new one does not answer either");
+    }
+
+    [Fact]
+    public async Task After_the_backoff_a_server_that_did_not_answer_ping_is_tried_again()
+    {
+        var clock = new TestClock(DateTimeOffset.UtcNow);
+        var factory = new FakeMcpSessionFactory { NewSessionsAlive = false };
+        var pool = Pool(factory, clock);
+        pool.FailureBackoff = TimeSpan.FromSeconds(30);
+
+        await Assert.ThrowsAsync<McpSessionUnavailableException>(() => CallWithDeadline(pool));
+        clock.Advance(TimeSpan.FromMinutes(1));
+        factory.NewSessionsAlive = true;
+
+        (await CallWithDeadline(pool)).ServerName.Should().Be("docs");
+        factory.Connects.Should().Be(2);
     }
 
     // ── Housekeeping ────────────────────────────────────────────────────────────

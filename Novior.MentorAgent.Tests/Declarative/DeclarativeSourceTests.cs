@@ -304,6 +304,29 @@ public sealed class DeclarativeSourceTests : IDisposable
         resolved.Should().BeNull();
     }
 
+    [Fact]
+    public async Task A_definition_reads_a_value_of_the_named_section_by_its_full_path()
+    {
+        // What the package README promises: one Power Fx variable per key of the section, named by
+        // the key's full configuration path. Agent Framework 1.23 stopped loading configuration into
+        // the engine unless a definition names the key through Env and the host lists it as allowed,
+        // so a definition written to the README would have lost its values without a word.
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["AgentSettings:Temperature"] = "2" })
+            .Build();
+        var options = new MentorDeclarativeOptions { ConfigurationSection = "AgentSettings" };
+        options.Definitions.Add(Definition("shipping") +
+            "\nmodel:\n  options:\n    temperature: =Value('AgentSettings:Temperature')\n");
+        var collector = new TestLogCollector();
+        var factory = LoggerFactory.Create(b => b.AddProvider(new TestLoggerProvider(collector)));
+
+        var agents = await new DeclarativeAgentSource(options, factory, configuration)
+            .GetAgentsAsync(new MentorAgentSourceContext(new FakeChatClient(), []), CancellationToken.None);
+
+        var agent = agents.Should().ContainSingle(collector.ExceptionText).Subject;
+        ((ChatOptions)agent.GetService(typeof(ChatOptions))!).Temperature.Should().Be(2);
+    }
+
     // ── The security property ───────────────────────────────────────────────────
 
     [Fact]

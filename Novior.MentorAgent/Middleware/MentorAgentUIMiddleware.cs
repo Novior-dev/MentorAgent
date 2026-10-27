@@ -38,6 +38,13 @@ internal sealed class MentorAgentUIMiddleware
     /// </summary>
     internal MentorTurnOrigin? Origin { get; set; }
 
+    /// <summary>The language of the turn (story 536): of the tool results and the texts written for it. Set by the registration.</summary>
+    internal MentorTurnLanguage? TurnLanguage { get; set; }
+
+    private MentorLanguage Lang => TurnLanguage?.Current ?? _options.Language;
+
+    private MentorLocalizer L => TurnLanguage?.Localizer ?? _localizer;
+
     public MentorAgentUIMiddleware(
         IMentorStateService stateService,
         IApprovalStore approvalStore,
@@ -245,7 +252,7 @@ internal sealed class MentorAgentUIMiddleware
 
         _metrics.RecordGuardrailBlock();
         _telemetry?.GuardrailBlocks.Add(1);
-        _state.NotifyStreamingChunk(_localizer.Get(withheld));
+        _state.NotifyStreamingChunk(L.Get(withheld));
     }
 
     /// <summary>
@@ -307,7 +314,11 @@ internal sealed class MentorAgentUIMiddleware
                context.Arguments,
                ct => next(context, ct),
                cancellationToken,
-               method: context.Function.UnderlyingMethod);
+               method: context.Function.UnderlyingMethod,
+               callId: context.CallContent?.CallId,
+               agentKind: MentorAgentKind.Coordinator,
+               agentName: agent?.Name,
+               description: context.Function.Description);
 
     /// <summary>
     /// The gate every tool call goes through: role check → HITL confirmation → action feedback →
@@ -320,6 +331,11 @@ internal sealed class MentorAgentUIMiddleware
     /// loop, so nothing of ours would otherwise see their tool calls: before this,
     /// <c>[MentorAction(RequiresConfirmation = true, RequiredRoles = [...])]</c> on a specialist
     /// method was silently ignored.
+    /// </para>
+    ///
+    /// <para>
+    /// Every decision is handed to the action observers (story 180) and written on the call's span: the same
+    /// decisions, in the same order, as the Native flow's in <c>MentorOrchestrator</c>.
     /// </para>
     /// </summary>
     /// <param name="alwaysBlockForApproval">
@@ -337,13 +353,21 @@ internal sealed class MentorAgentUIMiddleware
     /// applied; two methods can share a tool name, and up to 1.0.0 the first one found decided for both
     /// (BUG-188). Without it, or for a method discovery does not know, the tool is looked up by name.
     /// </param>
+    /// <param name="callId">The model's id for the call, for the decisions.</param>
+    /// <param name="agentKind">Which kind of agent called the tool, for the decisions.</param>
+    /// <param name="agentName">That agent's name, for the decisions.</param>
+    /// <param name="description">The tool's description, as the model reads it, for the action policies.</param>
     public async ValueTask<object?> InvokeGatedAsync(
         string toolName,
         IEnumerable<KeyValuePair<string, object?>>? arguments,
         Func<CancellationToken, ValueTask<object?>> invoke,
         CancellationToken cancellationToken,
         bool alwaysBlockForApproval = false,
-        MethodInfo? method = null)
+        MethodInfo? method = null,
+        string? callId = null,
+        MentorAgentKind agentKind = MentorAgentKind.Coordinator,
+        string? agentName = null,
+        string? description = null)
     {
         _logger.LogDebug("[MentorAgent] Tool call: {Name}", toolName);
         _metrics.RecordToolCall(toolName);   // Wave 3 #9 — top-actions metric
@@ -351,12 +375,80 @@ internal sealed class MentorAgentUIMiddleware
         _telemetry?.ToolCalls.Add(1, new KeyValuePair<string, object?>("mentoragent.tool", toolName));  // #8
         using var toolActivity = _telemetry?.StartActivity($"mentor.tool.{toolName}");                   // #8
 
-        // -- 1. Auth check (RequiredRoles) -------------------------------------
-        var authError = await CheckRolesAsync(toolName, cancellationToken, method);
-        if (authError is not null)
+        // In Native mode a confirmed call has been decided up to its confirmation already, by the orchestrator:
+        // its decisions go on from there.
+        var confirmedBefore = Turn?.TakeConfirmed(callId);
+        var call = confirmedBefore ?? new GateCall
         {
-            _logger.LogWarning("[MentorAgent] Tool '{Name}' blocked: {Reason}", toolName, authError);
-            return MentorUtils.ToolError(authError);
+            ToolName  = toolName,
+            Method    = method,
+            CallId    = callId,
+            AgentKind = agentKind,
+            AgentName = agentName,
+        };
+        call.Span = toolActivity;
+
+        // -- 1. Auth check (RequiredRoles) -------------------------------------
+        var roles = await CheckRolesAsync(toolName, cancellationToken, method);
+        call.Roles = roles.Roles;
+        call.User  = roles.User ?? call.User;
+        if (!roles.Allowed)
+        {
+            LogDenied(toolName, roles);
+            Decide(call, MentorActionOutcome.Denied, roles.Reason);
+            return MentorUtils.ToolError(roles.Error!);
+        }
+
+        // Stories 311, 153 — the application's policies decide about its own actions, after the roles and before the
+        // confirmation. The user is read for them whatever roles the action requires.
+        var policies = Policies is { Any: true } registered && IsApplicationAction(toolName, agentKind) ? registered : null;
+        call.User ??= policies is not null
+            ? await ReadUserAsync(cancellationToken)
+            : await ReadUserForDecisionsAsync(cancellationToken);
+
+        // Whether the action asks for a confirmation of its own, read for every call that has none yet: a
+        // RequiresApproval that turned true after the coordinator was built counts (BUG-203).
+        var declared = confirmedBefore is null && _confirmations.RequiresApproval(toolName, method);
+
+        // A call the orchestrator confirmed in Native mode was decided up to its confirmation there, BeforeActionAsync
+        // included: IsAllowedAsync is asked again, as the roles are, for a permission lost while the banner waited.
+        var policy = PolicyCheck.Proceed;
+        if (policies is not null)
+        {
+            (policy, var refused) = await AskPoliciesAsync(policies, call, arguments, description,
+                requiresConfirmation: confirmedBefore is not null || declared,
+                allowedOnly: confirmedBefore is not null, cancellationToken);
+            if (refused is not null) return refused;
+        }
+
+        // In Native mode the framework stops before a call whose tool carries the approval marker, and the
+        // orchestrator asks. One that reaches the gate unconfirmed anyway was let through by an auto-approval rule
+        // (or "don't ask again") of the framework's middleware, or has no marker, its confirmation declared after the
+        // coordinator was built: the gate asks for that one, as in Blocking mode (BUG-203). A policy's Confirm is
+        // asked here in both modes.
+        var blocking = _options.HitlMode == MentorHitlMode.Blocking || alwaysBlockForApproval;
+        var marked = !blocking && ApprovalMarked?.Contains(toolName) == true;
+        var asks = (declared && !marked) || policy.Result == PolicyResult.Confirm;
+
+        // A task from another agent has nobody to confirm anything: waiting here held the task until the calling
+        // agent gave up. Refuse at once, and say why — before Allowed, so the decisions read as the MCP server's, where
+        // nobody can confirm either: Denied alone.
+        if (asks && Origin?.FromAnotherAgent == true)
+        {
+            _logger.LogInformation(
+                "[MentorAgent:A2A] '{Name}' needs confirmation; a task from another agent has nobody to ask — not run.",
+                toolName);
+            call.Confirmation = "unavailable";
+            Decide(call, MentorActionOutcome.Denied, MentorActionReasons.NobodyToConfirm, detail: policy.Reason);
+            return MentorUtils.ToolError(MentorPromptTexts.For(Lang).NobodyToConfirm);
+        }
+
+        if (confirmedBefore is null)
+        {
+            var autoApproved = declared && marked && !asks;
+            if (autoApproved) call.Confirmation = "auto-approved";
+            Decide(call, MentorActionOutcome.Allowed,
+                autoApproved ? MentorActionReasons.AutoApproved : MentorActionReasons.Allowed);
         }
 
         // -- 2. Confirmation check (HITL, MentorHitlMode.Blocking) -------------
@@ -370,20 +462,10 @@ internal sealed class MentorAgentUIMiddleware
         // before invocation and never reaches this middleware, and MentorOrchestrator drives the
         // standard ToolApprovalRequestContent / ToolApprovalResponseContent exchange. Skipping the
         // block here is what keeps the two modes from asking the user twice — except for nested
-        // agents (alwaysBlockForApproval), where the native protocol cannot surface.
-        if ((_options.HitlMode == MentorHitlMode.Blocking || alwaysBlockForApproval)
-            && _confirmations.RequiresApproval(toolName, method))
+        // agents (alwaysBlockForApproval), where the native protocol cannot surface, and for the
+        // calls the framework did not stop for (above).
+        if (asks)
         {
-            // A task from another agent has nobody to confirm anything: waiting here held the task until
-            // the calling agent gave up. Refuse at once, and say why.
-            if (Origin?.FromAnotherAgent == true)
-            {
-                _logger.LogInformation(
-                    "[MentorAgent:A2A] '{Name}' needs confirmation; a task from another agent has nobody to ask — not run.",
-                    toolName);
-                return MentorUtils.ToolError(MentorTurnOrigin.NobodyToConfirm);
-            }
-
             var actionId = Guid.NewGuid();
             var req = new ConfirmationRequest
             {
@@ -393,43 +475,90 @@ internal sealed class MentorAgentUIMiddleware
             };
 
             _logger.LogDebug("[MentorAgent] Confirmation required for tool '{Name}' (ActionId={Id})", toolName, actionId);
+            call.ConfirmationId = actionId;
+            call.Confirmation   = "requested";
+            Decide(call, MentorActionOutcome.ConfirmationRequested,
+                declared ? MentorActionReasons.Operator : MentorActionReasons.Policy, detail: policy.Reason);
 
             // Commit any streaming text already received so the user sees the AI's
             // explanation BEFORE the confirmation banner appears.
             _state.NotifyStreamingCompleted();
             _state.NotifyConfirmationRequired(req);
 
-            bool approved;
+            MentorApprovalAnswer answer;
             try
             {
-                approved = await _approvalStore.WaitForConfirmationAsync(actionId, cancellationToken);
+                answer = _approvalStore is MentorStateService local
+                    ? await local.WaitForAnswerAsync(actionId, _options.ConfirmationTimeout, cancellationToken)
+                    : new(await _approvalStore.WaitForConfirmationAsync(actionId, cancellationToken), null, Now);
             }
             catch (OperationCanceledException)
             {
                 // The turn's token: Stop, or the scope closing under the turn — a hub connection or a
                 // circuit that went away while the banner waited (MentorOrchestrator.DisposeAsync).
                 _logger.LogDebug("[MentorAgent] Confirmation for '{Name}' was cancelled (Stop pressed, or the connection or circuit closed).", toolName);
-                return MentorUtils.ToolStopped(_localizer.Get("stop.request"));
+                Decide(call, MentorActionOutcome.Stopped, StopReason);
+                return MentorUtils.ToolStopped(L.Get("stop.request"), Lang);
             }
 
-            if (!approved)
+            // Story 176 — nobody answered within ConfirmationTimeout: a rejection nobody gave, told as such.
+            if (answer.TimedOut)
+            {
+                LogConfirmationTimedOut(toolName);
+                call.Confirmation = "timed-out";
+                Decide(call, MentorActionOutcome.Rejected, MentorActionReasons.ConfirmationTimeout, at: answer.At);
+                return MentorUtils.ToolConfirmationTimedOut(L.Get("confirm.timeout"), Lang);
+            }
+
+            if (!answer.Approved)
             {
                 _logger.LogDebug("[MentorAgent] Tool '{Name}' rejected by user.", toolName);
-                return MentorUtils.ToolDeclined(_localizer.Get("confirm.denied"));
+                call.Confirmation = "rejected";
+                Decide(call, MentorActionOutcome.Rejected, MentorActionReasons.Operator, at: answer.At);
+                return MentorUtils.ToolDeclined(L.Get("confirm.denied"), Lang);
             }
+
+            call.Confirmation = "confirmed";
+            // In a circuit and in the MAUI app the one who answers is the session's user: read once for a confirmation,
+            // even with no observer, for the action reads it (story 177). Not with the turn's token: a Stop pressed
+            // right after the answer is the run's to honour, and the answer has to be recorded first.
+            call.ConfirmedBy  = answer.By ?? (call.User ??= await ReadUserAsync(CancellationToken.None));
+            call.ConfirmedAt  = answer.At;
+            Decide(call, MentorActionOutcome.Confirmed, MentorActionReasons.Operator,
+                confirmedBy: call.ConfirmedBy, at: answer.At);
 
             // The roles were read before the wait, and the wait lasts as long as the user takes to answer.
             // A role taken away meanwhile must stop the action here, as it does in Native mode, where the
             // approved call comes back through step 1. Without this the Confirm ran an action the user
             // was no longer allowed to run (BUG-143).
-            authError = await CheckRolesAsync(toolName, cancellationToken, method);
-            if (authError is not null)
+            roles = await CheckRolesAsync(toolName, cancellationToken, method);
+            if (!roles.Allowed)
             {
-                _logger.LogWarning("[MentorAgent] Tool '{Name}' blocked after confirmation: {Reason}", toolName, authError);
-                return MentorUtils.ToolError(authError);
+                _logger.LogWarning("[MentorAgent] Tool '{Name}' blocked after confirmation: {Reason}", toolName, roles.Error);
+                Decide(call, MentorActionOutcome.Denied, roles.Reason);
+                return MentorUtils.ToolError(roles.Error!);
+            }
+
+            // The same for a permission the policies took away meanwhile.
+            if (policies is not null)
+            {
+                var (_, refused) = await AskPoliciesAsync(policies, call, arguments, description,
+                    requiresConfirmation: true, allowedOnly: true, cancellationToken);
+                if (refused is not null) return refused;
             }
 
             _logger.LogDebug("[MentorAgent] Tool '{Name}' approved by user — executing.", toolName);
+        }
+
+        // A Stop that came after the confirmation, or while the roles and the policies were asked, wins over the
+        // action. Nothing read the token between the answer and the run, and an action that does not read it itself ran
+        // anyway (BUG-204). In Native mode a confirmed call comes back through here too. The turn's own token as well:
+        // a specialist's call carries the workflow's, which Stop reaches a moment later.
+        if (cancellationToken.IsCancellationRequested || Turn?.Cancellation.IsCancellationRequested == true)
+        {
+            _logger.LogDebug("[MentorAgent] Tool '{Name}' was stopped before it ran (Stop pressed, or the connection or circuit closed).", toolName);
+            Decide(call, MentorActionOutcome.Stopped, StopReason);
+            return MentorUtils.ToolStopped(L.Get("stop.request"), Lang);
         }
 
         // -- 3. Action feedback ------------------------------------------------
@@ -440,6 +569,19 @@ internal sealed class MentorAgentUIMiddleware
         // Only the tool itself is a failure of the action. The catch used to cover everything below as
         // well, so a redaction hook or a card that threw reported an action that had already run as
         // failed, and the model ran it again (BUG-147).
+        // The action reads who confirmed it, and when (story 177). Set for every call, so a call nobody confirmed never
+        // sees the confirmation of another one; and only while the tool runs.
+        var outer = MentorActionConfirmation.Current;
+        MentorActionConfirmation.Current = call.ConfirmationId is { } confirmationId && call.ConfirmedAt is { } confirmedAt
+            ? new MentorActionConfirmation
+            {
+                ConfirmationId = confirmationId,
+                ToolName       = toolName,
+                ConfirmedAt    = confirmedAt,
+                ConfirmedBy    = call.ConfirmedBy,
+            }
+            : null;
+
         object? result;
         try
         {
@@ -451,16 +593,23 @@ internal sealed class MentorAgentUIMiddleware
             _logger.LogDebug("[MentorAgent] Tool '{Name}' was cancelled (Stop pressed, or the connection or circuit closed).", toolName);
             if (_options.EnableActionFeedback)
                 _state.NotifyActionCompleted(toolName);
-            return MentorUtils.ToolStopped(_localizer.Get("stop.request"));
+            Decide(call, MentorActionOutcome.Stopped, StopReason);
+            return MentorUtils.ToolStopped(L.Get("stop.request"), Lang);
         }
         catch (Exception ex)
         {
+            Decide(call, MentorActionOutcome.Failed, MentorActionReasons.Exception, exceptionType: ex.GetType().FullName);
             return ToolFailed(toolName, ex);
+        }
+        finally
+        {
+            MentorActionConfirmation.Current = outer;
         }
 
         // Wave 3 #7 — Result Overrides: let the app transform/redact the tool result. The MCP server
         // applies the same hook through the same helper (BUG-107), and withholds the result the same
         // way when the hook throws: what the hook did not see never reaches the model or the screen.
+        var executed = MentorActionReasons.Completed;
         try
         {
             result = MentorToolResult.Apply(_options, toolName, result);
@@ -472,8 +621,11 @@ internal sealed class MentorAgentUIMiddleware
                 toolName, ex.GetType().Name);
             _logger.LogDebug(ex, "[MentorAgent] OnToolResult threw for '{Name}'.", toolName);
             result = MentorUtils.ToolRanResultWithheld(
-                AppMessage(ex) ?? "The action ran, but its result could not be returned.");
+                AppMessage(ex) ?? "The action ran, but its result could not be returned.", Lang);
+            executed = MentorActionReasons.ResultWithheld;
         }
+
+        Decide(call, MentorActionOutcome.Executed, executed);
 
         // The action has already run: nothing from here on may turn its result into a failure, or the
         // model is told it did not happen and runs it again.
@@ -482,7 +634,7 @@ internal sealed class MentorAgentUIMiddleware
             // #14 L2 — generative cards. Runs AFTER OnToolResult on purpose: a redaction hook must
             // be able to strip a field before it reaches the screen, not just before it reaches the
             // model.
-            result = ExtractCards(toolName, result);
+            result = ExtractCards(toolName, result, call.Method);
 
             if (_options.EnableActionFeedback)
                 _state.NotifyActionCompleted(toolName);
@@ -518,6 +670,285 @@ internal sealed class MentorAgentUIMiddleware
         return result;
     }
 
+    // -- The gate's decisions (story 180) ---------------------------------------
+
+    /// <summary>
+    /// The action observers. Set by the registration; null when the middleware is built by hand, which then
+    /// reports nothing.
+    /// </summary>
+    internal MentorActionDecisions? Decisions { get; set; }
+
+    /// <summary>The turn the decisions belong to. Set by the registration.</summary>
+    internal MentorTurnContext? Turn { get; set; }
+
+    /// <summary>The session the decisions belong to. Set by the registration.</summary>
+    internal MentorSessionIdentity? Session { get; set; }
+
+    // -- The application's action policies (stories 311, 153) ------------------
+
+    /// <summary>The application's policies. Set by the registration; null when the middleware is built by hand.</summary>
+    internal MentorActionPolicies? Policies { get; set; }
+
+    /// <summary>
+    /// In Native mode, the coordinator's tools that carry the approval marker, by name: the framework stops before a
+    /// call to one of them. Set by the orchestrator when it builds the coordinator.
+    /// </summary>
+    internal IReadOnlySet<string>? ApprovalMarked { get; set; }
+
+    /// <summary>MentorAgent's own tools on the coordinator, which no policy decides about; a team's tool is one too.</summary>
+    private static readonly HashSet<string> LibraryTools = new(
+        ["navigate_to", "invoke_ui_action", "remember", "forget_all", "load_skill", "read_skill_resource", "route_to_specialist"],
+        StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether a policy decides about the call: every tool of a specialist, a team member or an agent source; on the
+    /// coordinator, everything but MentorAgent's own tools — the application's actions and the tools of the MCP
+    /// servers it consumes. Decided by excluding, so a tool this list does not know is the policies' to decide.
+    /// </summary>
+    internal bool IsApplicationAction(string toolName, MentorAgentKind? agentKind)
+    {
+        if (agentKind != MentorAgentKind.Coordinator) return true;
+        if (LibraryTools.Contains(toolName)) return false;
+
+        _discoveryCache ??= _discovery.Discover();
+        return !_discoveryCache.Level3Teams.Any(t =>
+            string.Equals(MentorUtils.ToSnakeCase(t.Attribute.Name), toolName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// What the policies are asked about one call. The arguments are a copy: a policy that changed them would change
+    /// the call.
+    /// </summary>
+    internal MentorActionRequest PolicyRequest(GateCall call, IEnumerable<KeyValuePair<string, object?>>? arguments,
+        string? description, bool requiresConfirmation)
+        => new()
+        {
+            Stage                = MentorActionStage.Call,
+            ToolName             = call.ToolName,
+            Description          = description ?? (_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method)?.Description,
+            Arguments            = new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(
+                                       arguments is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(arguments)),
+            User                 = call.User,
+            Surface              = Turn?.Surface ?? MentorActionSurface.InProcess,
+            AgentKind            = call.AgentKind,
+            AgentName            = call.AgentName,
+            SessionId            = Session?.Id,
+            TurnId               = Turn?.TurnId,
+            CallId               = call.CallId,
+            PageName             = PageName(),
+            RequiredRoles        = call.Roles,
+            RequiresConfirmation = requiresConfirmation,
+            Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
+        };
+
+    /// <summary>What the policies are asked about one of the coordinator's actions, as a turn decides what to offer.</summary>
+    internal MentorActionRequest OfferRequest(AIFunction function, ClaimsPrincipal? user, string? agentName)
+        => new()
+        {
+            Stage                = MentorActionStage.Offer,
+            ToolName             = function.Name,
+            Description          = string.IsNullOrWhiteSpace(function.Description) ? null : function.Description,
+            User                 = user,
+            Surface              = Turn?.Surface ?? MentorActionSurface.InProcess,
+            AgentKind            = MentorAgentKind.Coordinator,
+            AgentName            = agentName,
+            SessionId            = Session?.Id,
+            TurnId               = Turn?.TurnId,
+            PageName             = PageName(),
+            RequiredRoles        = GetRequiredRoles(function.Name, function.UnderlyingMethod),
+            RequiresConfirmation = _confirmations.RequiresApproval(function.Name, function.UnderlyingMethod),
+            Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
+        };
+
+    /// <summary>The page the user is on, for the policies; none in a task from another agent.</summary>
+    internal string? PageName()
+        => Origin?.FromAnotherAgent == true ? null : _services?.GetService<IMentorPageContext>()?.PageName;
+
+    /// <summary>
+    /// Asks the policies about the call. When they refuse it, the call gets its last decision here, and the result is
+    /// what the model reads; when they let it through, the check says whether one asks for a confirmation.
+    /// </summary>
+    private async ValueTask<(PolicyCheck Check, object? Refused)> AskPoliciesAsync(MentorActionPolicies policies,
+        GateCall call, IEnumerable<KeyValuePair<string, object?>>? arguments, string? description,
+        bool requiresConfirmation, bool allowedOnly, CancellationToken ct)
+    {
+        PolicyCheck check;
+        try
+        {
+            check = await policies.CheckCallAsync(PolicyRequest(call, arguments, description, requiresConfirmation),
+                allowedOnly, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogDebug("[MentorAgent] The action policies for '{Name}' were cancelled (Stop pressed, or the connection or circuit closed).", call.ToolName);
+            Decide(call, MentorActionOutcome.Stopped, StopReason);
+            return (PolicyCheck.Proceed, MentorUtils.ToolStopped(L.Get("stop.request"), Lang));
+        }
+
+        if (PolicyRefusal(call, check) is not { } text) return (check, null);
+
+        DecidePolicyRefusal(call, check);
+        return (check, MentorUtils.ToolError(text));
+    }
+
+    /// <summary>
+    /// What the model reads for a call the policies refused, with its log line; null when they let it through. Never
+    /// "declined by the user": nobody was asked.
+    /// </summary>
+    internal string? PolicyRefusal(GateCall call, PolicyCheck check)
+    {
+        switch (check.Result)
+        {
+            case PolicyResult.NotAllowed:
+                _logger.LogWarning("[MentorAgent] {Caller} not allowed tool '{Tool}' by an action policy — blocked.",
+                    MentorUserKey.LogTag(call.User), call.ToolName);
+                return L.Get("auth.not.authorized");
+            case PolicyResult.Stop:
+                _logger.LogInformation("[MentorAgent] Tool '{Name}' stopped by an action policy.", call.ToolName);
+                return string.Format(L.Get("action.stopped.rule"), check.Reason);
+            case PolicyResult.Failed:
+                return L.Get("action.stopped.rule.failed");   // the policies logged it
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>The last decision of a call the policies refused: Denied, Blocked or PolicyFailed.</summary>
+    internal void DecidePolicyRefusal(GateCall call, PolicyCheck check)
+        => Decide(call, PolicyOutcome(check.Result), check.ReasonCode ?? MentorActionReasons.Policy,
+            detail: check.Result == PolicyResult.Stop ? check.Reason : null, exceptionType: check.ExceptionType);
+
+    internal static MentorActionOutcome PolicyOutcome(PolicyResult result) => result switch
+    {
+        PolicyResult.NotAllowed => MentorActionOutcome.Denied,
+        PolicyResult.Stop       => MentorActionOutcome.Blocked,
+        _                       => MentorActionOutcome.PolicyFailed,
+    };
+
+    private DateTimeOffset Now => (Decisions?.Time ?? TimeProvider.System).GetUtcNow();
+
+    private string StopReason => Turn?.StopReason ?? MentorActionReasons.Stop;
+
+    /// <summary>
+    /// Hands one decision to the observers and writes it on the call's span. The span keeps the last one: the
+    /// call's outcome.
+    /// </summary>
+    internal void Decide(GateCall call, MentorActionOutcome outcome, string reason,
+        ClaimsPrincipal? confirmedBy = null, DateTimeOffset? at = null, string? exceptionType = null, string? detail = null)
+    {
+        var failed = outcome is MentorActionOutcome.Failed or MentorActionOutcome.PolicyFailed;
+        var surface = Turn?.Surface ?? MentorActionSurface.InProcess;
+
+        if (call.Span is { } span)
+        {
+            span.SetTag("mentoragent.tool", call.ToolName);
+            span.SetTag("mentoragent.tool.outcome", OutcomeTag(outcome));
+            span.SetTag("mentoragent.tool.reason", reason);
+            span.SetTag("mentoragent.tool.confirmation", call.Confirmation);
+            span.SetTag("mentoragent.surface", SurfaceTag(surface));
+            if (call.AgentName is not null) span.SetTag("mentoragent.agent", call.AgentName);
+            if (failed)
+                span.SetStatus(System.Diagnostics.ActivityStatusCode.Error, exceptionType ?? reason);
+        }
+
+        if (Decisions is not { HasObservers: true } decisions) return;
+
+        decisions.Publish(new MentorActionDecision
+        {
+            Outcome        = outcome,
+            ReasonCode     = reason,
+            ToolName       = call.ToolName,
+            DisplayName    = call.DisplayName ??= GetActionDisplayName(call.ToolName, call.Method),
+            Surface        = surface,
+            AgentKind      = call.AgentKind,
+            AgentName      = call.AgentName,
+            SessionId      = Session?.Id,
+            TurnId         = Turn?.TurnId,
+            CallId         = call.CallId,
+            ConfirmationId = call.ConfirmationId,
+            User           = call.User,
+            RequiredRoles  = call.Roles,
+            ConfirmedBy    = outcome == MentorActionOutcome.Confirmed ? confirmedBy : null,
+            Timestamp      = at ?? decisions.Time.GetUtcNow(),
+            ExceptionType  = failed ? exceptionType : null,
+            Detail         = detail,
+        });
+    }
+
+    /// <summary>
+    /// The one log line of a refusal, the same in Blocking and in Native mode: a Warning, with the caller as a
+    /// fingerprint (BUG-148). A refusal the role check has logged already — the host's setup, or a task from
+    /// another agent on a host with no user outside a circuit (BUG-097) — writes nothing more.
+    /// </summary>
+    internal void LogDenied(string toolName, RoleCheck check)
+    {
+        if (check.Logged) return;
+
+        if (check.Reason == MentorActionReasons.RoleMissing)
+            _logger.LogWarning(
+                "[MentorAgent] {Caller} not authorized for tool '{Tool}' — blocked. Required: [{Roles}]",
+                MentorUserKey.LogTag(check.User), toolName, string.Join(", ", check.Roles));
+        else
+            _logger.LogWarning("[MentorAgent] Tool '{Name}' blocked: {Reason}", toolName, check.Error);
+    }
+
+    /// <summary>The one log line of a confirmation nobody answered in time (story 176), the same in both modes.</summary>
+    internal void LogConfirmationTimedOut(string toolName)
+        => _logger.LogInformation(
+            "[MentorAgent] Nobody answered the confirmation for '{Name}' within {Timeout} s — not run.",
+            toolName, _options.ConfirmationTimeout.TotalSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>
+    /// The signed-in user for a decision about an action that requires no role, or null. Read only when an
+    /// observer listens: a host without one pays nothing.
+    /// </summary>
+    internal ValueTask<ClaimsPrincipal?> ReadUserForDecisionsAsync(CancellationToken ct)
+        => Decisions is { HasObservers: true } ? ReadUserAsync(ct) : ValueTask.FromResult<ClaimsPrincipal?>(null);
+
+    /// <summary>Whether the application registers an <c>AuthenticationStateProvider</c>, so a user can sign in at all.</summary>
+    internal bool HasAuthentication => _auth is not null;
+
+    /// <summary>The signed-in user, or null: nobody is, or the provider cannot answer here.</summary>
+    internal async ValueTask<ClaimsPrincipal?> ReadUserAsync(CancellationToken ct)
+    {
+        if (_auth is null) return null;
+        try
+        {
+            var user = (await _auth.GetAuthenticationStateAsync().WaitAsync(ct)).User;
+            return user.Identity?.IsAuthenticated == true ? user : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Blazor's provider outside a circuit, or the host's that cannot answer: the decision has no user.
+            return null;
+        }
+    }
+
+    private static string OutcomeTag(MentorActionOutcome outcome) => outcome switch
+    {
+        MentorActionOutcome.Allowed               => "allowed",
+        MentorActionOutcome.Denied                => "denied",
+        MentorActionOutcome.ConfirmationRequested => "confirmation-requested",
+        MentorActionOutcome.Confirmed             => "confirmed",
+        MentorActionOutcome.Rejected              => "rejected",
+        MentorActionOutcome.Stopped               => "stopped",
+        MentorActionOutcome.Blocked               => "blocked",
+        MentorActionOutcome.PolicyFailed          => "policy-failed",
+        MentorActionOutcome.Executed              => "executed",
+        MentorActionOutcome.Failed                => "failed",
+        _                                         => outcome.ToString().ToLowerInvariant(),
+    };
+
+    internal static string SurfaceTag(MentorActionSurface surface) => surface switch
+    {
+        MentorActionSurface.InProcess => "in-process",
+        MentorActionSurface.Hub       => "hub",
+        MentorActionSurface.Sse       => "sse",
+        MentorActionSurface.Mcp       => "mcp",
+        MentorActionSurface.A2A       => "a2a",
+        _                             => surface.ToString().ToLowerInvariant(),
+    };
+
     /// <summary>
     /// A tool that threw. The chat shows the app's message from <see cref="MentorOptions.OnException"/>;
     /// when the app set the hook but returned nothing, the built-in one; without the hook, the
@@ -531,7 +962,7 @@ internal sealed class MentorAgentUIMiddleware
         var app = AppMessage(ex);
 
         _state.NotifyActionFailed(toolName,
-            app ?? (_options.OnException is null ? ex.Message : _localizer.Get("action.failed")));
+            app ?? (_options.OnException is null ? ex.Message : L.Get("action.failed")));
         _logger.LogWarning("[MentorAgent] Tool '{Name}' failed ({Type}).", toolName, ex.GetType().Name);
         _logger.LogDebug(ex, "[MentorAgent] Tool '{Name}' failed.", toolName);
 
@@ -570,7 +1001,7 @@ internal sealed class MentorAgentUIMiddleware
     /// already on screen.
     /// </para>
     /// </summary>
-    private object? ExtractCards(string toolName, object? result)
+    private object? ExtractCards(string toolName, object? result, MethodInfo? method)
     {
         if (!_options.EnableGenerativeCards || result is null) return result;
 
@@ -581,9 +1012,20 @@ internal sealed class MentorAgentUIMiddleware
             IEnumerable<MentorCard> many => [.. many],
             // The normal path. AIFunctionFactory serialises tool results, so a method returning
             // MentorCard arrives here as JSON — see MentorCardReader for why this is not optional.
-            System.Text.Json.JsonElement json => MentorCardReader.TryRead(json),
+            // Only for a method declared to return cards: any other result shaped like one is the
+            // application's data, and stays text (BUG-212).
+            System.Text.Json.JsonElement json when MentorCardReader.DeclaresCards(method) => MentorCardReader.TryRead(json),
+            System.Text.Json.JsonElement json when MentorCardReader.TryRead(json) is not null => NotACardType(),
             _ => null,
         };
+
+        IReadOnlyList<MentorCard>? NotACardType()
+        {
+            _logger.LogDebug(
+                "[MentorAgent:Cards] '{Tool}' returned JSON shaped like a card, but its method does not return " +
+                "MentorCard: it stays text. Declare MentorCard or IEnumerable<MentorCard> to show it as a card.", toolName);
+            return null;
+        }
 
         if (cards is null || cards.Count == 0) return result;
 
@@ -622,15 +1064,21 @@ internal sealed class MentorAgentUIMiddleware
     /// </para>
     /// <para>
     /// With the called function's <paramref name="method"/>, that method's roles: a method with the same name and
-    /// no roles no longer opens it to everybody (BUG-188). The check before the banner has only the name.
+    /// no roles no longer opens it to everybody (BUG-188). The check before the banner has the method of the copy
+    /// the coordinator offers.
+    /// </para>
+    /// <para>
+    /// The result says why, with the reason code of the gate's decision (story 180), and who was checked. A
+    /// refusal is logged once, by whoever decides it (<see cref="LogDenied"/>): the same Warning in Blocking and
+    /// in Native mode, where Native wrote a Debug line only and Blocking two Warnings for one missing role.
     /// </para>
     /// </summary>
-    internal async ValueTask<string?> CheckRolesAsync(string toolName, CancellationToken ct, MethodInfo? method = null)
+    internal async ValueTask<RoleCheck> CheckRolesAsync(string toolName, CancellationToken ct, MethodInfo? method = null)
     {
         var requiredRoles = GetRequiredRoles(toolName, method);
 
         // No roles required -> open access
-        if (requiredRoles.Length == 0) return null;
+        if (requiredRoles.Length == 0) return RoleCheck.Open;
 
         // Auth not configured in the app -> log warning and block
         if (_auth is null)
@@ -639,7 +1087,7 @@ internal sealed class MentorAgentUIMiddleware
                 "[MentorAgent] Tool '{Name}' requires roles {Roles} but " +
                 "AuthenticationStateProvider is not registered in the app.",
                 toolName, string.Join(", ", requiredRoles));
-            return _localizer.Get("auth.not.configured");
+            return new(L.Get("auth.not.configured"), MentorActionReasons.AuthNotConfigured, null, requiredRoles, Logged: true);
         }
 
         try
@@ -649,22 +1097,14 @@ internal sealed class MentorAgentUIMiddleware
 
             // User not authenticated
             if (user.Identity?.IsAuthenticated != true)
-                return _localizer.Get("auth.login.required");
+                return new(L.Get("auth.login.required"), MentorActionReasons.LoginRequired, null, requiredRoles, Logged: false);
 
             // Role check — having at least one is sufficient
-            var hasRole = requiredRoles.Any(role => user.IsInRole(role));
-            if (!hasRole)
-            {
-                // A fingerprint, never the name: it is often an e-mail address (BUG-148).
-                _logger.LogWarning(
-                    "[MentorAgent] {Caller} not authorized for tool '{Tool}'. " +
-                    "Required: [{Roles}]",
-                    MentorUserKey.LogTag(user), toolName, string.Join(", ", requiredRoles));
+            if (!requiredRoles.Any(role => user.IsInRole(role)))
+                return new(string.Format(L.Get("auth.role.required"), string.Join(", ", requiredRoles)),
+                           MentorActionReasons.RoleMissing, user, requiredRoles, Logged: false);
 
-                return string.Format(_localizer.Get("auth.role.required"), string.Join(", ", requiredRoles));
-            }
-
-            return null; // Authorized
+            return new(null, MentorActionReasons.Allowed, user, requiredRoles, Logged: false);   // Authorized
         }
         catch (Exception ex) when (Origin?.FromAnotherAgent == true)
         {
@@ -676,22 +1116,23 @@ internal sealed class MentorAgentUIMiddleware
             _logger.LogDebug(
                 "[MentorAgent:A2A] '{Tool}' requires roles {Roles}; no signed-in user on this task ({Type}) — refused.",
                 toolName, string.Join(", ", requiredRoles), ex.GetType().Name);
-            return _localizer.Get("auth.login.required");
+            return new(L.Get("auth.login.required"), MentorActionReasons.LoginRequired, null, requiredRoles, Logged: true);
         }
         catch (Exception ex)
         {
             // The type only by default: the provider's message can name the user (BUG-148).
             _logger.LogError("[MentorAgent] Error during role verification for '{Tool}' ({Type}).", toolName, ex.GetType().Name);
             _logger.LogDebug(ex, "[MentorAgent] Error during role verification for '{Tool}'.", toolName);
-            return _localizer.Get("auth.check.error");
+            return new(L.Get("auth.check.error"), MentorActionReasons.AuthCheckFailed, null, requiredRoles, Logged: true);
         }
     }
 
     /// <summary>
     /// Retrieves the RequiredRoles from the cached discovery result for the specified tool: the called method's
-    /// when it is known, else the first copy with that name (BUG-188).
+    /// when it is known, else the first copy with that name (BUG-188). Internal so the coordinator offers its
+    /// model the actions the gate would let the user run, by the same rule (BUG-200).
     /// </summary>
-    private string[] GetRequiredRoles(string toolName, MethodInfo? method)
+    internal string[] GetRequiredRoles(string toolName, MethodInfo? method)
     {
         _discoveryCache ??= _discovery.Discover();
 
@@ -706,14 +1147,14 @@ internal sealed class MentorAgentUIMiddleware
     {
         // System routing tool
         if (toolName == "route_to_specialist")
-            return _localizer.Get("action.routing");
+            return L.Get("action.routing");
 
         // L3 team tools — tool name is snake_case of the team name
         _discoveryCache ??= _discovery.Discover();
         if (_discoveryCache.Level3Teams.Any(t =>
             string.Equals(MentorUtils.ToSnakeCase(t.Attribute.Name), toolName,
                 StringComparison.OrdinalIgnoreCase)))
-            return _localizer.Get("action.team.analyzing");
+            return L.Get("action.team.analyzing");
 
         // User-defined tools — use description from discovery, fall back to friendly name
         return _confirmations.GetToolDescription(toolName, method);

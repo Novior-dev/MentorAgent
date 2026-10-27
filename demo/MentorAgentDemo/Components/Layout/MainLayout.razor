@@ -1,5 +1,6 @@
 @inherits LayoutComponentBase
 @implements IDisposable
+@using Novior.MentorAgent.Abstractions.Models
 @inject DemoLanguage L
 @inject DemoAuthenticationStateProvider Users
 @inject DemoModel Model
@@ -82,7 +83,8 @@
 
 @if (Model.IsConfigured)
 {
-    <ChatWidget />
+    @* The page's language is the widget's: the EN/IT button switches the assistant too, without a reload. *@
+    <ChatWidget Language="@(L.Italian ? MentorLanguage.Italian : MentorLanguage.English)" />
 }
 
 @code {

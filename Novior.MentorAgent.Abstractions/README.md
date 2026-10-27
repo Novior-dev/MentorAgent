@@ -81,7 +81,7 @@ This package is the shared foundation of the MentorAgent family. It contains all
 | Enum | Values |
 |------|--------|
 | `MentorLanguage` | English, Italian, French, German, Spanish, Portuguese, Dutch, Polish, Japanese, Chinese |
-| `MentorTheme` | Default, Dark, Minimal, Custom |
+| `MentorTheme` | Default, Dark, Minimal, Custom, Auto |
 | `ChatPosition` | BottomRight, BottomLeft, TopRight, TopLeft, SideRight, SideLeft |
 | `MentorshipLevel` | Minimal, Standard, Proactive |
 | `MentorHostedTools` | `[Flags]` — None, WebSearch, CodeInterpreter, FileSearch, ImageGeneration, HostedMcp. The set the model provider may run on its own infrastructure; also what the server publishes on connect so a client badge never drifts from the server |
@@ -96,7 +96,7 @@ All MentorAgent UI components live here so they work identically in both Blazor 
 | Component | Description |
 |-----------|-------------|
 | `ChatWidget` | Main floating chat widget — injects CSS/JS automatically |
-| `MessageBubble` | A chat message: Markdown rendering, citation chips and any images the message carries. **XSS-safe by construction** — every piece of model text is HTML-encoded before a tag is emitted, so the model supplies data, never markup |
+| `MessageBubble` | A chat message: Markdown rendering (links to `http`/`https` addresses included), citation chips and any images the message carries. **XSS-safe by construction** — every piece of model text is HTML-encoded before a tag is emitted, so the model supplies data, never markup |
 | `ChatInput` | Text input with voice recognition and the image composer (upload, paste, drag & drop, remote URL) |
 | `MentorDashboard` | Admin token & cost dashboard — per-model breakdown, temporal SVG charts, cost table. Presentational: hand it a `MentorMetricsSnapshot`, from DI in Blazor Server or from `GET /mentor/admin/metrics` in WASM. **Never** rendered by `ChatWidget` — keep it off end-user pages |
 | `ConfirmationBanner` | HITL approval dialog |
@@ -112,7 +112,7 @@ All MentorAgent UI components live here so they work identically in both Blazor 
 
 | Type | Description |
 |------|-------------|
-| `MentorLocalizer` | In-memory i18n for 10 languages — no `.resx` files, no external dependencies. Registered by `AddMentorAgent()` / `AddMentorAgentBlazor()`; inject it as `MentorLocalizer` and call `L.Get("key")` if you build UI that must match the widget's language |
+| `MentorLocalizer` | In-memory i18n for 10 languages — no `.resx` files, no external dependencies. Registered by `AddMentorAgent()` / `AddMentorAgentBlazor()`; inject it as `MentorLocalizer` and call `L.Get("key")` if you build UI that must match the widget's language. `L.Language` is the language it uses: the application's, read on every use |
 | `MentorLanguageExtensions` | `MentorLanguage.Italian.ToIsoCode()` → `"it"` (ISO 639-1; an unknown value gives `"en"`), and `ToFullName()` → `"Italian"`. `ToIsoCode()` is what the components hand the JS layer, which expands it to the BCP-47 tag the browser Speech APIs expect (`"it"` → `"it-IT"`). A custom voice control that talks to `SpeechRecognition` / `speechSynthesis` directly has to do that expansion itself to speak the same language as the widget |
 | `TourProgress` | *(internal)* Where the onboarding tour resumes. Not API — documented only because its edge cases are user-visible |
 
@@ -157,6 +157,7 @@ you compose the parts on your own pages instead of taking the whole widget.
 | Parameter | Type | Description |
 |---|---|---|
 | `CardTemplate` | `RenderFragment<MentorCard>?` | Optional custom renderer for generative-UI cards. Not supplied → `MentorCardView` is used. Match on `card.Kind` and fall back to the built-in renderer for kinds you do not handle |
+| `Language` | `MentorLanguage?` | This widget's language: its texts, voice and onboarding tour, and the language of every turn it sends. Not supplied → the application's `Language`, through the `MentorLocalizer` from DI. See *A language per page* in the MentorAgent README |
 
 ```razor
 @* A MentorCardView inside the template needs no OnAction: ChatWidget cascades its own
@@ -288,6 +289,8 @@ first (so a Prometheus/Azure Monitor aggregate wins), then the live in-RAM `IMen
 
 `Message` is MEAI's own `ChatMessage`, so the role decides the side and the styling. Model text is
 HTML-encoded before any Markdown tag is emitted, so a reply containing `<script>` renders as text.
+Only an absolute `http` or `https` address becomes a link: `javascript:`, `data:` and relative ones stay
+text.
 
 ### `ChatInput`
 
@@ -652,9 +655,12 @@ _content/Novior.MentorAgent.Abstractions/IconMA.png     ← default avatar
 ```
 
 `ChatWidget` injects the first two itself through `<HeadContent>`, so a Blazor Server or Blazor Web
-App host needs no markup. A **standalone WASM** host references them manually in `index.html`
-instead — and neither file is fingerprinted, so the `?v=` query string is the cache buster and you
-must bump it by hand after changing either. A stale `MentorAgent.js` fails silently and looks like
+App host needs no markup, and it versions them for you: the `?v=` it writes is the package version
+and the commit the package was built from (`?v=<version>+<commit>`), so every release changes it.
+A **standalone WASM** host references them manually in `index.html` instead — and neither file is
+fingerprinted, and `UseStaticFiles` serves them without a `Cache-Control`, so the `?v=` query string
+is the cache buster: set it to the version of the package you install and change it on every
+upgrade. A stale `MentorAgent.js` fails silently and looks like
 missing features rather than a caching problem.
 
 That injection happens only where `ChatWidget` is rendered, and it relies on the `<HeadOutlet />`
@@ -662,12 +668,13 @@ that the Blazor Web App template already includes. A page that composes the part
 `ChatWidget` (see [Composing your own chat surface](#composing-your-own-chat-surface)) gets neither
 file: the components render unstyled, and `ChatInput`'s microphone and paste / drag & drop stay off
 without an error. Sending a message still works: the call that resets the textarea after a send is
-guarded, so a missing script neither throws nor ends a Blazor Server circuit. Reference both files yourself in that case, with the same paths and version
-`ChatWidget` uses, in `App.razor` (Blazor Server / Web App) or `index.html`:
+guarded, so a missing script neither throws nor ends a Blazor Server circuit. Reference both files yourself in that case, with the same paths
+and the package version as the `?v=` (`ChatWidget` adds the commit; a link you write needs only the
+version), in `App.razor` (Blazor Server / Web App) or `index.html`:
 
 ```html
-<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=10" rel="stylesheet" />
-<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=10"></script>
+<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.2.0" rel="stylesheet" />
+<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.2.0"></script>
 ```
 
 The script can safely load a second time on a page where `ChatWidget` also renders: the later tag
@@ -776,7 +783,7 @@ package — the WASM build will not fail at compile time, it will fail at runtim
 - .NET 10.0 or later
 - `Microsoft.AspNetCore.Components.Web` 10.0.3
 - `Microsoft.AspNetCore.Components.Authorization` 10.0.3
-- `Microsoft.Extensions.AI` 10.7.0
+- `Microsoft.Extensions.AI` 10.11.0
 
 No AI provider, no server packages, no JavaScript dependencies beyond the browser's own Speech and
 File APIs.

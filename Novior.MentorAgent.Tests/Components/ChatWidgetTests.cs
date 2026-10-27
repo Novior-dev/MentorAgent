@@ -1,3 +1,4 @@
+using System.Reflection;
 using Bunit;
 using FluentAssertions;
 using Novior.MentorAgent.Abstractions.Components;
@@ -506,52 +507,93 @@ public sealed class ChatWidgetTests : ComponentTestBase
     }
 
     // ── Theme ───────────────────────────────────────────────────────────────────
+    //
+    // BUG-213: a theme is a stylesheet of the package that the widget links in its own markup, and a
+    // PrimaryColor is set on <html> through the CSSOM. Both used to be a <style> block, which a page
+    // without style-src 'unsafe-inline' drops. What each stylesheet holds is in CssVariableContractTests.
 
-    [Fact]
-    public void The_default_theme_emits_no_override_block_at_all()
+    private static string ThemeHref(string file)
+        => $"_content/{RepoFiles.Abstractions}/css/themes/{file}.css?v={ChatWidget.AssetVersion}";
+
+    /// <summary>The variables the widget handed to <c>MentorAgent.setRootVars</c>; null when it made no such call.</summary>
+    private IReadOnlyDictionary<string, string>? RootVars()
+        => JSInterop.Invocations.Where(i => i.Identifier == "MentorAgent.setRootVars").ToList() switch
+        {
+            [] => null,
+            [var call] => (IReadOnlyDictionary<string, string>)call.Arguments[0]!,
+            var calls => throw new InvalidOperationException($"setRootVars was called {calls.Count} times."),
+        };
+
+    [Theory]
+    [InlineData(MentorTheme.Default)]
+    [InlineData(MentorTheme.Custom)]
+    public void A_theme_that_overrides_nothing_links_no_stylesheet(MentorTheme theme)
     {
-        // Default is the stylesheet's own palette. Emitting an empty <style>:root { }</style>
-        // would be harmless but is a good signal that the builder short-circuits.
-        Widget.Theme = MentorTheme.Default;
+        // Default is the stylesheet's own palette, and Custom leaves every variable to the host.
+        Widget.Theme = theme;
 
-        RenderWidget().FindAll("style").Should().BeEmpty();
+        var cut = RenderWidget();
+
+        cut.FindAll("link").Should().BeEmpty();
+        cut.FindAll("style").Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(MentorTheme.Dark, "dark")]
+    [InlineData(MentorTheme.Minimal, "minimal")]
+    public void Dark_and_minimal_link_their_stylesheet_inside_the_widget(MentorTheme theme, string file)
+    {
+        // In the body, where the <style> block was: after everything in <head>, so its :root values win
+        // over the baseline and over a host's :root rule of the same specificity, as before. With the
+        // package version, like the widget's own stylesheet (BUG-209), and for every medium.
+        Widget.Theme = theme;
+
+        var link = RenderWidget().Find("link");
+
+        link.GetAttribute("rel").Should().Be("stylesheet");
+        link.GetAttribute("href").Should().Be(ThemeHref(file));
+        link.HasAttribute("media").Should().BeFalse();
     }
 
     [Fact]
-    public void The_dark_theme_overrides_the_background_and_text_variables()
+    public void The_auto_theme_links_the_light_stylesheet_for_a_light_system_only()
     {
-        Widget.Theme = MentorTheme.Dark;
+        // Auto is Default on a dark system and Minimal on a light one: Minimal's own file, for the media
+        // that asks for light, so the browser follows the visitor's setting and no script runs.
+        Widget.Theme = MentorTheme.Auto;
 
-        var style = RenderWidget().Find("style").TextContent;
+        var link = RenderWidget().Find("link");
 
-        style.Should().Contain("--bm-bg-base:#050810").And.Contain("--bm-text-primary:#f0f4ff");
+        link.GetAttribute("rel").Should().Be("stylesheet");
+        link.GetAttribute("href").Should().Be(ThemeHref("minimal"));
+        link.GetAttribute("media").Should().Be("(prefers-color-scheme: light)");
     }
 
     [Fact]
-    public void The_minimal_theme_is_light_and_re_tints_the_chips_for_a_white_surface()
+    public void Without_a_primary_colour_the_widget_sets_no_variable()
     {
-        // Minimal is the light theme — the pale chip text inherited from dark is unreadable on
-        // white, so it also has to override the hosted and A2A chip colours.
-        Widget.Theme = MentorTheme.Minimal;
+        Widget.PrimaryColor = null;
 
-        var style = RenderWidget().Find("style").TextContent;
+        RenderWidget();
 
-        style.Should().Contain("--bm-bg-base:#ffffff");
-        style.Should().Contain("--bm-hosted-text:").And.Contain("--bm-a2a-text:");
+        RootVars().Should().BeNull();
     }
 
     [Fact]
-    public void A_hex_primary_colour_derives_the_four_dependent_variables()
+    public void A_hex_primary_colour_sets_the_accent_and_derives_the_four_dependent_variables()
     {
         Widget.PrimaryColor = "#3b82f6";
 
-        var style = RenderWidget().Find("style").TextContent;
+        RenderWidget();
 
-        style.Should().Contain("--bm-accent:#3b82f6")
-            .And.Contain("--bm-accent-dark:rgb(")
-            .And.Contain("--bm-accent-glow:rgba(")
-            .And.Contain("--bm-border-accent:rgba(")
-            .And.Contain("--bm-shadow-fab:");
+        RootVars().Should().BeEquivalentTo(new Dictionary<string, string>
+        {
+            ["--bm-accent"]        = "#3b82f6",
+            ["--bm-accent-dark"]   = "rgb(48,106,201)",
+            ["--bm-accent-glow"]   = "rgba(59,130,246,.35)",
+            ["--bm-border-accent"] = "rgba(59,130,246,.3)",
+            ["--bm-shadow-fab"]    = "0 8px 32px rgba(59,130,246,.4),0 2px 8px rgba(0,0,0,.5)",
+        });
     }
 
     [Fact]
@@ -561,10 +603,9 @@ public sealed class ChatWidgetTests : ComponentTestBase
         // and skipping the derived shades degrades; guessing would produce a clashing palette.
         Widget.PrimaryColor = "rebeccapurple";
 
-        var style = RenderWidget().Find("style").TextContent;
+        RenderWidget();
 
-        style.Should().Contain("--bm-accent:rebeccapurple");
-        style.Should().NotContain("--bm-accent-dark:");
+        RootVars().Should().BeEquivalentTo(new Dictionary<string, string> { ["--bm-accent"] = "rebeccapurple" });
     }
 
     [Fact]
@@ -575,38 +616,52 @@ public sealed class ChatWidgetTests : ComponentTestBase
         // will trip over it — the accent applies, the glow and shadow keep the theme's values.
         Widget.PrimaryColor = "#f00";
 
-        var style = RenderWidget().Find("style").TextContent;
+        RenderWidget();
 
-        style.Should().Contain("--bm-accent:#f00");
-        style.Should().NotContain("--bm-accent-glow:");
+        RootVars().Should().BeEquivalentTo(new Dictionary<string, string> { ["--bm-accent"] = "#f00" });
     }
 
     [Fact]
-    public void The_custom_theme_injects_nothing_so_the_host_owns_every_variable()
+    public void The_primary_colour_reaches_the_page_through_the_cssom()
     {
-        Widget.Theme = MentorTheme.Custom;
+        // style.setProperty on <html>: the :root scope the <style> block had, and a way of writing a style
+        // that a policy without 'unsafe-inline' allows. A setAttribute('style', …) would be refused.
+        var script = File.ReadAllText(Path.Combine(
+            RepoFiles.Root, RepoFiles.Abstractions, "wwwroot", "js", "MentorAgent.js"));
 
-        RenderWidget().FindAll("style").Should().BeEmpty();
+        var function = System.Text.RegularExpressions.Regex.Match(script, @"setRootVars:\s*\(vars\)\s*=>\s*\{(?<body>[^}]*)\}");
+
+        function.Success.Should().BeTrue("MentorAgent.js should define the setRootVars the widget calls");
+        function.Groups["body"].Value.Should().Contain("document.documentElement.style").And.Contain(".setProperty(");
     }
 
     // ── Assets ──────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void The_stylesheet_and_script_cache_busters_are_bumped_as_a_pair()
+    public void The_stylesheet_and_script_carry_the_package_version_as_their_cache_buster()
     {
-        // The documented `?v=` trap: the two are bumped by hand, and a mismatch ships a new
-        // stylesheet against a cached script. Read from source rather than from the render —
-        // <HeadContent> goes to a HeadOutlet the component's own markup does not contain.
-        var razor = File.ReadAllText(Path.Combine(
-            RepoFiles.Root, RepoFiles.Abstractions, "Components", "ChatWidget.razor"));
+        // BUG-209: neither file is fingerprinted, and a host serving them as classic static files sends
+        // no Cache-Control, so the browser may reuse its copy without asking. A hand-bumped ?v=10 that
+        // never moved gave an upgraded visitor the previous release's CSS and JS. <HeadContent> renders
+        // into the page's HeadOutlet, so the widget is rendered next to one, as a host renders it.
+        var cut = Render(b =>
+        {
+            b.OpenComponent<Microsoft.AspNetCore.Components.Web.HeadOutlet>(0);
+            b.CloseComponent();
+            b.OpenComponent<ChatWidget>(1);
+            b.CloseComponent();
+        });
 
-        var css = System.Text.RegularExpressions.Regex.Match(razor, @"MentorAgent\.css\?v=(\d+)");
-        var js = System.Text.RegularExpressions.Regex.Match(razor, @"MentorAgent\.js\?v=(\d+)");
+        var built = typeof(ChatWidget).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
+        var version = System.Xml.Linq.XDocument.Load(Path.Combine(RepoFiles.Root, "Directory.Build.props"))
+            .Descendants("Version").Single().Value.Trim();
+        built.Should().StartWith(version, "the informational version is the package version, plus the commit");
 
-        css.Success.Should().BeTrue();
-        js.Success.Should().BeTrue();
-        js.Groups[1].Value.Should().Be(css.Groups[1].Value,
-            "the CSS and JS cache-busters are bumped together or the browser mixes versions");
+        cut.Find("link[rel=stylesheet]").GetAttribute("href").Should()
+            .Be("_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=" + built);
+        cut.Find("script").GetAttribute("src").Should()
+            .Be("_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=" + built);
     }
 
     /// <summary>

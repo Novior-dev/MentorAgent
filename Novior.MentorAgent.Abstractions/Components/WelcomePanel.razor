@@ -1,6 +1,6 @@
 ﻿@using Novior.MentorAgent.Abstractions.Core
 @using Novior.MentorAgent.Abstractions.Models
-@inject MentorLocalizer L
+@inject MentorLocalizer ApplicationL
 @inject IOptions<MentorWidgetOptions> Options
 
 <div class="bm-welcome">
@@ -37,6 +37,10 @@
 </div>
 
 @code {
+    // The localizer of the ChatWidget around this component, in the widget's Language (story 536); the application's
+    // when there is none, or when the component is used on its own.
+    [CascadingParameter(Name = ChatWidget.LocalizerCascade)] private MentorLocalizer? WidgetL { get; set; }
+    private MentorLocalizer L => WidgetL ?? ApplicationL;
     [Parameter] public string BotName { get; set; } = "Mentor AI";
     [Parameter] public string? WelcomeMessage { get; set; }
     [Parameter] public bool EnableSuggestions { get; set; } = true;

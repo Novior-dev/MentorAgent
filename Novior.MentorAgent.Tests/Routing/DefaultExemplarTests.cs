@@ -6,6 +6,8 @@ using Novior.MentorAgent.Tests.Fakes;
 using Novior.MentorAgent.Tests.Harness;
 using Microsoft.Extensions.AI;
 using Xunit;
+// Microsoft.Extensions.AI has its own RoutingChatClient since 10.9.
+using RoutingChatClient = Novior.MentorAgent.Middleware.RoutingChatClient;
 
 namespace Novior.MentorAgent.Tests.Routing;
 

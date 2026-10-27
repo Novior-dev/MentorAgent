@@ -193,7 +193,8 @@ the specialist has no data to answer with. Check every name against your `[Mento
 
 This is the design point of the whole package. MentorAgent hands the factory the application's real tool list, **already wrapped in its gate**, so a YAML agent calling `create_order` still hits:
 
-- `RequiredRoles` — the role check, exactly as a C# specialist does
+- `RequiredRoles` — the role check, exactly as a C# specialist does: the tool is offered to the agent's model
+  only in a turn whose user holds one of its roles
 - human approval — the confirmation banner, if the tool requires one
 - action feedback, per-tool metrics and tracing
 
@@ -354,15 +355,18 @@ builder.Services.AddMentorAgentDeclarative(o =>
 });
 ```
 
-The values arrive as Power Fx **variables**, one per key, named by the key's **full configuration path**: `AgentSettings:SupportEmail`, `AgentSettings:MaxRefund`, plus one for the section `AgentSettings` itself. The factory enumerates the section with `AsEnumerable()`, which does not make paths relative.
+The values arrive as Power Fx **variables**, one per key, named by the key's **full configuration path**: `AgentSettings:SupportEmail`, `AgentSettings:MaxRefund`, plus one for the section `AgentSettings` itself. MentorAgent enumerates the section with `AsEnumerable()`, which does not make paths relative, and loads the values into the engine it hands the Agent Framework's factory: from Agent Framework 1.23 the factory itself loads only keys a definition names through `Env` and the host lists as allowed.
 How a definition references them is part of the Agent Framework's declarative schema, not something
 MentorAgent defines, so check the framework's documentation for the expression syntax before
 relying on it.
 
-**Name a section. Never hand over the whole `IConfiguration`.** The factory loads whatever
-configuration it is given into the Power Fx engine as variables — one per key, **in its
-constructor**. A single key that Power Fx rejects as a name (in the version this package uses, an
-empty or whitespace-only key) takes the entire factory down before any definition is read. The
+Every value arrives as **text**, as configuration keeps it. Power Fx reads a number written as text with the
+culture of the process: with the Italian culture, `Value("0.3")` gives 3.
+
+**Name a section. Never hand over the whole `IConfiguration`.** MentorAgent loads the section into
+the Power Fx engine as variables — one per key — **before the factory is built**. A single key that
+Power Fx rejects as a name (in the version this package uses, an empty or whitespace-only key)
+takes every definition down before any is read. The
 exception does not say which key it was: Power Fx's message is the fixed text `Invalid name: ${name}`.
 The placeholder is never filled in, so do not look for a key literally named `${name}`. This is not
 hypothetical: a key contributed by an unrelated configuration provider produced
@@ -399,8 +403,8 @@ actually need substitution.
 4. **Negative check — a bad file does not take the app down.** Break the YAML deliberately: you get
    `'shipping.agent.yaml' could not be loaded — skipped`, and everything else still starts.
 5. **Negative check — the gate holds.** Name a tool carrying `RequiredRoles` in the YAML and ask the
-   agent to use it while unauthenticated. It must be refused, the same way a C# specialist is, and no
-   action taken.
+   agent to use it while unauthenticated. The agent's model is not offered the tool and says it cannot do
+   it here, the same way a C# specialist does, and no action is taken; a call made anyway is refused.
 
 ---
 
@@ -410,7 +414,7 @@ actually need substitution.
 
 That is a fair price for file-based authoring and pure overhead for everyone else, so it stays out of the `Novior.MentorAgent` core package. Installing this one is an explicit decision to pay it.
 
-The reference is `Microsoft.Agents.AI.Declarative` **1.18.0-rc1**, on the same 1.18 line as `Microsoft.Agents.AI` 1.18.0 in the core package, so adding it does not move the rest of the library onto a different Agent Framework version. The declarative package is still a prerelease upstream.
+The reference is `Microsoft.Agents.AI.Declarative` **1.26.0-rc1**, on the same 1.26 line as `Microsoft.Agents.AI` 1.26.0 in the core package, so adding it does not move the rest of the library onto a different Agent Framework version. The declarative package is still a prerelease upstream.
 
 ---
 

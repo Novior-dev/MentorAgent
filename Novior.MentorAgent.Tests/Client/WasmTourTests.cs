@@ -189,6 +189,25 @@ public sealed class WasmTourTests(ITestOutputHelper output)
     /// A <see cref="NavigationManager"/> with a fixed base URI. The real one needs a live Blazor
     /// renderer; all the tour uses is <c>BaseUri</c>.
     /// </summary>
+    [Fact]
+    public void The_tour_of_a_page_language_is_asked_for_with_its_ISO_code()
+    {
+        // Story 536: a widget with a Language asks for the tour in it; without one, the server's language, as before.
+        WasmMentorTour Tour(string? tourUrl) => new(
+            new StubNavigationManager("https://client.test/"),
+            tourUrl is null
+                ? new MentorAgentBlazorOptions { HubUrl = "https://server.test/mentor-hub" }
+                : new MentorAgentBlazorOptions { HubUrl = "https://server.test/mentor-hub", TourUrl = tourUrl },
+            CollectingLogger<WasmMentorTour>(new TestLogCollector()));
+
+        var standard = Tour(null);
+        var own = Tour("https://server.test/tour?v=2");
+
+        standard.UrlFor(null).Should().NotContain("language=");
+        standard.UrlFor(Novior.MentorAgent.Abstractions.Models.MentorLanguage.Italian).Should().Be(standard.UrlFor(null) + "?language=it");
+        own.UrlFor(Novior.MentorAgent.Abstractions.Models.MentorLanguage.French).Should().Be("https://server.test/tour?v=2&language=fr");
+    }
+
     private sealed class StubNavigationManager : NavigationManager
     {
         internal StubNavigationManager(string baseUri) => Initialize(baseUri, baseUri);

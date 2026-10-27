@@ -12,6 +12,8 @@ How the expense desk turns a receipt into a claim and prepares an approval. Load
 
 ## Before an approval
 
+Only a manager or an administrator approves or rejects a claim. For anyone else these steps do not apply: never offer to approve or reject a claim, and never ask whether to.
+
 1. Show the claim with `show_expense`.
 2. Compare it with the policy: the limit of its category, the receipt, the 30 days. Say which rule applies.
 3. If the claim is over a limit, say it before asking to approve, and suggest asking the Auditor.

@@ -20,6 +20,9 @@ internal sealed class FakeMcpSessionFactory : IMcpSessionFactory
     /// <summary>Thrown by every connect while set — a server that is down.</summary>
     internal Exception? ThrowOnConnect { get; set; }
 
+    /// <summary>Whether the sessions it opens answer ping: false for a server that connects but never answers.</summary>
+    internal bool NewSessionsAlive { get; set; } = true;
+
     /// <summary>Awaited inside connect, so a test can hold several callers on one connection.</summary>
     internal TaskCompletionSource? Gate { get; set; }
 
@@ -38,6 +41,7 @@ internal sealed class FakeMcpSessionFactory : IMcpSessionFactory
         var session = Servers.TryGetValue(server.Name, out var configured)
             ? new FakeMcpSession(server.Name, configured.Tools, configured.ReadOnly)
             : new FakeMcpSession(server.Name);
+        session.Alive = NewSessionsAlive;
         lock (Sessions) Sessions.Add(session);
         return session;
     }

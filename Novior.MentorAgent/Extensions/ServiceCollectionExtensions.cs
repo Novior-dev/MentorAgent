@@ -120,7 +120,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Novior.MentorAgent.Abstractions.Core.MentorLocalizer>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<MentorOptions>>();
-            return new Novior.MentorAgent.Abstractions.Core.MentorLocalizer(opts.Value.Language);
+            // Read on every call: a change of MentorOptions.Language while the application runs applies to every text.
+            return new Novior.MentorAgent.Abstractions.Core.MentorLocalizer(() => opts.Value.Language);
         });
 
         // ── Middleware ────────────────────────────────────────────────────────
@@ -131,8 +132,25 @@ public static class ServiceCollectionExtensions
                 ? ActivatorUtilities.CreateInstance<MentorAgentUIMiddleware>(sp, auth)
                 : ActivatorUtilities.CreateInstance<MentorAgentUIMiddleware>(sp);
             middleware.Origin = sp.GetRequiredService<MentorTurnOrigin>();   // BUG-097
+            middleware.TurnLanguage = sp.GetRequiredService<MentorTurnLanguage>();
+            // The gate's decisions for the action observers (story 180).
+            middleware.Decisions = sp.GetRequiredService<MentorActionDecisions>();
+            middleware.Turn      = sp.GetRequiredService<MentorTurnContext>();
+            middleware.Session   = sp.GetRequiredService<MentorSessionIdentity>();
+            // The application's action policies (stories 311, 153).
+            middleware.Policies  = sp.GetRequiredService<MentorActionPolicies>();
             return middleware;
         });
+
+        // Story 180 — the gate's decisions for every IMentorActionObserver of the process, and the turn they
+        // belong to. TryAdd: a test hands its own, with a shorter timeout.
+        services.TryAddSingleton<MentorActionDecisions>();
+        services.AddScoped<MentorTurnContext>();
+
+        // Stories 311, 153 — every IMentorActionPolicy of the process, asked by one rule on every surface; and the
+        // application's actions as MentorAgent sees them.
+        services.TryAddSingleton<MentorActionPolicies>();
+        services.TryAddSingleton<IMentorActionCatalog, MentorActionCatalog>();
 
         // Wave 5 #16 — single source of truth for "does this tool need approval, and what does the
         // banner say?", shared by the middleware (blocking flow), the orchestrator (native AF flow)
@@ -178,6 +196,12 @@ public static class ServiceCollectionExtensions
         // Who is asking: a person at the widget, or another agent over A2A (set by the A2A handler).
         services.AddScoped<MentorTurnOrigin>();
 
+        // The language of the turn: the page's, when the widget sent one, else MentorOptions.Language (set by the orchestrator).
+        services.AddScoped<MentorTurnLanguage>();
+
+        // Where the context of each request goes when it is the user's last message (SessionContextPlacement).
+        services.AddScoped<MentorSessionContext>();
+
         // One stack trace per cause per turn: a single provider failure used to be met, and
         // logged, by six components in a row (E1).
         services.AddScoped<TurnFaultLog>();
@@ -209,9 +233,10 @@ public static class ServiceCollectionExtensions
             var memory     = sp.GetRequiredService<MentorMemoryService>();
             var nav        = sp.GetService<NavigationManager>();
             var auth       = MentorUserAuthentication.For(sp);
-            return new AppContextProvider(options, pageCtx, memory, nav, auth)
+            return new AppContextProvider(options, pageCtx, memory, nav, auth, sp.GetService<TimeProvider>())
             {
-                Origin = sp.GetRequiredService<MentorTurnOrigin>(),
+                Origin         = sp.GetRequiredService<MentorTurnOrigin>(),
+                SessionContext = sp.GetRequiredService<MentorSessionContext>(),
             };
         });
 
@@ -243,6 +268,8 @@ public static class ServiceCollectionExtensions
                 var o = mOpts.Value;
                 wOpts.BotName               = o.BotName;
                 wOpts.WelcomeMessage        = o.WelcomeMessage;
+                wOpts.ShowAiDisclosure      = o.ShowAiDisclosure;
+                wOpts.AiDisclosureMessage   = o.AiDisclosureMessage;
                 wOpts.AvatarUrl             = o.AvatarUrl;
                 wOpts.InputPlaceholder      = o.InputPlaceholder;
                 wOpts.Theme                 = o.Theme;
@@ -302,6 +329,7 @@ public static class ServiceCollectionExtensions
             Faults      = sp.GetRequiredService<TurnFaultLog>(),
             PageContext = sp.GetRequiredService<IMentorPageContext>(),
             Auth        = MentorUserAuthentication.For(sp),
+            TurnLanguage = sp.GetRequiredService<MentorTurnLanguage>(),
         });
 
         // ── Agent Skills ─────────────────────────────────────────────────────
@@ -321,6 +349,65 @@ public static class ServiceCollectionExtensions
         // registration time, as this method always did.
         services.AddSingleton(new MentorRegistrationSnapshot(snapshot, snapshotError));
 
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an <see cref="IMentorActionObserver"/>: it receives every decision of the tool gate, for every
+    /// session and every surface of the process. A singleton, resolved from the application's root services;
+    /// every observer registered is called, in the order of registration. Registering the same type twice
+    /// registers it once.
+    /// </summary>
+    /// <typeparam name="TObserver">The observer.</typeparam>
+    public static IServiceCollection AddMentorActionObserver<TObserver>(this IServiceCollection services)
+        where TObserver : class, IMentorActionObserver
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMentorActionObserver, TObserver>());
+        return services;
+    }
+
+    /// <summary>
+    /// Registers <paramref name="observer"/> as an <see cref="IMentorActionObserver"/>: it receives every decision
+    /// of the tool gate, for every session and every surface of the process.
+    /// </summary>
+    /// <param name="services">The services.</param>
+    /// <param name="observer">The observer, already built.</param>
+    public static IServiceCollection AddMentorActionObserver(this IServiceCollection services, IMentorActionObserver observer)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(observer);
+        services.AddSingleton(observer);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an <see cref="IMentorActionPolicy"/>: it decides whether a user may use each of the application's
+    /// actions, and whether each call may run, on every surface. A singleton, resolved from the application's root
+    /// services; what it needs from the conversation's scope it resolves from <c>MentorActionRequest.Services</c>.
+    /// Every policy registered is asked, in the order of registration. Registering the same type twice registers it
+    /// once.
+    /// </summary>
+    /// <typeparam name="TPolicy">The policy.</typeparam>
+    public static IServiceCollection AddMentorActionPolicy<TPolicy>(this IServiceCollection services)
+        where TPolicy : class, IMentorActionPolicy
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMentorActionPolicy, TPolicy>());
+        return services;
+    }
+
+    /// <summary>
+    /// Registers <paramref name="policy"/> as an <see cref="IMentorActionPolicy"/>: it decides whether a user may use
+    /// each of the application's actions, and whether each call may run, on every surface.
+    /// </summary>
+    /// <param name="services">The services.</param>
+    /// <param name="policy">The policy, already built.</param>
+    public static IServiceCollection AddMentorActionPolicy(this IServiceCollection services, IMentorActionPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(policy);
+        services.AddSingleton(policy);
         return services;
     }
 

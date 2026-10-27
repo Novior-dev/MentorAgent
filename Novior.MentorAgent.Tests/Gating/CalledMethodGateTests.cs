@@ -212,19 +212,91 @@ public sealed class CalledMethodGateTests
     }
 
     [Fact]
-    public async Task In_native_mode_only_the_copy_that_asks_is_marked_for_approval()
+    public async Task In_native_mode_the_copy_offered_is_marked_as_its_own_method_asks()
     {
         await using var host = HostScanningBoth(o => o.HitlMode = MentorHitlMode.Native);
         host.Chat!.Say("hello");
 
         (await host.RunTurnAsync()).Should().BeNull();
 
-        // The Agent Framework wraps every function it is given; the marker is found as the framework finds it.
-        var copies = host.Chat.Calls[0].Tools.Where(t => t.Name == "review_shared_ticket").ToList();
-        copies.Should().HaveCount(2, "both level-1 copies are declared to the model");
-        copies.Single(t => t.UnderlyingMethod?.DeclaringType == typeof(SharedTicketCloser))
-            .GetService<ApprovalRequiredAIFunction>().Should().NotBeNull("the closing copy requires confirmation");
-        copies.Single(t => t.UnderlyingMethod?.DeclaringType == typeof(SharedTicketReader))
-            .GetService<ApprovalRequiredAIFunction>().Should().BeNull("the read-only copy does not");
+        // BUG-195: two functions with one name fail every request from Agent Framework 1.23, so the coordinator is
+        // offered the first copy only. The Agent Framework wraps every function it is given; the marker is found
+        // as the framework finds it.
+        host.Chat.Calls.Should().NotBeEmpty("the turn reaches the model");
+        var copy = host.Chat.Calls[0].Tools
+            .Should().ContainSingle(t => t.Name == "review_shared_ticket", "one function per name").Subject;
+        copy.UnderlyingMethod?.DeclaringType.Should().Be(typeof(SharedTicketReader), "the first copy found stays");
+        copy.GetService<ApprovalRequiredAIFunction>().Should().BeNull(
+            "the read-only copy asks nothing, though the copy left out does: the marker follows the method");
+    }
+
+    [Fact]
+    public async Task A_call_by_a_shared_name_runs_the_first_copy_with_its_own_rules()
+    {
+        // As in 1.1.0, when both copies were declared and the function-invoking client ran the first with the
+        // name: the open, read-only copy runs for an anonymous caller and asks nothing; the Manager's copy,
+        // which would have asked, never runs. Only the list offered to the model changed (BUG-195).
+        await using var host = HostScanningBoth();
+        var seen = Seen.On(host, confirm: true);
+        host.Chat!.CallTool("review_shared_ticket", new { ticketId = 4 }).Say("done");
+
+        (await host.RunTurnAsync("show ticket 4")).Should().BeNull();
+
+        host.Get<SharedTicketReader>().Ran.Should().BeTrue("the first copy is the one offered, with no roles");
+        host.Get<SharedTicketCloser>().Ran.Should().BeFalse("the Manager's copy is left out");
+        seen.Banners.Should().BeEmpty("the copy that ran declares no confirmation");
+        host.Logs.HasWarning("review_shared_ticket (kept SharedTicketReader.ReviewSharedTicket; left out " +
+            "SharedTicketCloser.ReviewSharedTicket)").Should().BeTrue(host.Logs.WarningText);
+    }
+
+    [Fact]
+    public async Task A_name_the_coordinator_shares_with_a_specialist_stays_with_both()
+    {
+        // The two copies of cancel_shipment are in different agents, where they never meet in one request.
+        await using var host = MentorHostFixture.Create(o =>
+        {
+            o.MemoryAutoCapture = false;
+            o.ScanAssemblies = [typeof(TestOrderService).Assembly, typeof(CoordinatorShipments).Assembly];
+        }, services => services.AddScoped<CoordinatorShipments>());
+        host.Chat!.Say("hello");
+
+        (await host.RunTurnAsync()).Should().BeNull();
+
+        host.Chat.Calls[0].Tools.Should().ContainSingle(t => t.Name == "cancel_shipment")
+            .Which.UnderlyingMethod?.DeclaringType.Should().Be(typeof(CoordinatorShipments));
+        SpecialistCancelShipment(host).UnderlyingMethod?.DeclaringType.Should().Be(typeof(TestShippingAgent));
+        host.Logs.Records.Where(r => r.Message.Contains("by more than one tool", StringComparison.Ordinal))
+            .Should().NotContain(r => r.Message.Contains("cancel_shipment", StringComparison.Ordinal),
+                "no agent is offered cancel_shipment twice");
+    }
+
+    // ── The banner of the copy offered, when the first copy is not built ─────────
+
+    [Theory]
+    [InlineData(MentorHitlMode.Blocking)]
+    [InlineData(MentorHitlMode.Native)]
+    public async Task The_banner_reads_as_the_copy_the_coordinator_offers_when_the_first_copy_is_not_built(MentorHitlMode mode)
+    {
+        // BUG-208: with only the closing copy registered, the coordinator is offered it — the first copy that could be
+        // built (BUG-195) — and the banner must be its own. In Native mode the text was looked up by name, and the
+        // first copy discovery finds is the read-only one, never built: the user was asked to confirm "Shows a ticket
+        // for review" for a call that closes the ticket.
+        await using var host = MentorHostFixture.Create(o =>
+        {
+            o.HitlMode = mode;
+            o.MemoryAutoCapture = false;
+            o.ScanAssemblies = [typeof(TestOrderService).Assembly, typeof(CoordinatorShipments).Assembly];
+        }, services => services.AddScoped<SharedTicketCloser>());
+        host.Auth.SignIn("ada", "Manager");
+        var seen = Seen.On(host, confirm: true);
+        host.Chat!.CallTool("review_shared_ticket", new { ticketId = 4 }).Say("done");
+
+        (await host.RunTurnAsync("close ticket 4")).Should().BeNull();
+
+        host.Chat.Calls[0].Tools.Should().ContainSingle(t => t.Name == "review_shared_ticket")
+            .Which.UnderlyingMethod?.DeclaringType.Should().Be(typeof(SharedTicketCloser), "the only copy built");
+        seen.Banners.Should().ContainSingle("mode {0}: the closing copy asks, once", mode)
+            .Which.Should().StartWith("Closes a ticket after its review", "mode {0}: the text of the copy offered", mode);
+        host.Get<SharedTicketCloser>().Ran.Should().BeTrue("the Manager confirmed");
     }
 }

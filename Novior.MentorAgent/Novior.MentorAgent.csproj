@@ -6,8 +6,8 @@
     <!-- Package identity — Version, Authors, License, Symbols inherited from Directory.Build.props -->
     <PackageId>Novior.MentorAgent</PackageId>
     <Title>Novior.MentorAgent</Title>
-    <Description>A Blazor Razor Class Library that adds an AI-powered floating chat assistant to any Blazor application, built on Microsoft Agent Framework. Supports multi-level agent orchestration (tools, handoff, group chat), page navigation, UI actions, contextual memory, streaming, voice, and security — all with zero boilerplate.</Description>
-    <PackageTags>blazor;blazor-server;blazor-auto;ai;chatbot;chat-widget;assistant;agent;multi-agent;handoff;group-chat;microsoft-agent-framework;openai;azure-openai;ollama;rag;retrieval-augmented-generation;mcp;model-context-protocol;a2a;agent-to-agent;signalr;voice;memory;skills;streaming;wasm;mentor;dotnet;csharp</PackageTags>
+    <Description>Add AI agents to your .NET app: your methods become tools with role checks and human confirmation, with a ready-made chat widget for Blazor and MAUI. Install Novior.MentorAgent.Server to connect any frontend through SignalR, SSE, MCP or A2A.</Description>
+    <PackageTags>blazor;blazor-server;blazor-auto;maui;ai;ai-agents;llm;chatbot;chat-widget;assistant;agent;multi-agent;human-in-the-loop;tool-calling;handoff;group-chat;microsoft-agent-framework;openai;azure-openai;ollama;rag;retrieval-augmented-generation;mcp;model-context-protocol;a2a;agent-to-agent;signalr;voice;memory;skills;streaming;mentor;dotnet;csharp</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>IconMA.png</PackageIcon>
     <IsPackable>true</IsPackable>
@@ -22,7 +22,7 @@
 
 
   <ItemGroup>
-    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="..\LICENSE" Pack="true" PackagePath="\" />
     <None Include="..\NOTICE" Pack="true" PackagePath="\" />
     <None Include="IconMA.png" Pack="true" PackagePath="IconMA.png" />
@@ -51,13 +51,13 @@
          (A2A.AspNetCore through Microsoft.Agents.AI.Hosting.A2A.AspNetCore, ModelContextProtocol.AspNetCore)
          require Microsoft.AspNetCore.App, which does not exist for Android, iOS or Mac Catalyst — so they
          belong to Novior.MentorAgent.Server, and a MAUI app can reference this package on every target. -->
-    <PackageReference Include="A2A" Version="1.0.0-preview2" />
-    <PackageReference Include="Microsoft.Agents.AI" Version="1.18.0" />
-    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.18.0" />
+    <PackageReference Include="A2A" Version="1.0.0-preview3" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.26.0" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.26.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="10.0.3" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.7.0" />
-    <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.11.0" />
+    <PackageReference Include="ModelContextProtocol" Version="2.3.0" />
     <!-- Story 141: Azure.AI.OpenAI, Azure.Identity and Microsoft.Extensions.AI.OpenAI are no longer
          dependencies — the library never used them; the host picks its provider package and version.
          They used to bring this one in: ProviderStatus reads the HTTP status of the provider SDKs'

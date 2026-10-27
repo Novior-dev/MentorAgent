@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Novior.MentorAgent.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -42,6 +43,34 @@ public sealed class A2ACardCacheTests
         await cache.GetAsync("k", "billing", "http://x", Fetch, default);
 
         fetches.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_fetch_the_caller_stopped_is_not_remembered_as_an_agent_that_does_not_answer()
+    {
+        // BUG-211: a Stop while the first coordinator read the card was logged as "did not answer: The operation was
+        // canceled", and the agent was not asked again for a minute.
+        var log = new Novior.MentorAgent.Tests.Harness.TestLogCollector();
+        using var factory = LoggerFactory.Create(b => b.AddProvider(new Novior.MentorAgent.Tests.Harness.TestLoggerProvider(log)));
+        var cache = new A2ACardCache(factory.CreateLogger<A2ACardCache>());
+        using var stop = new CancellationTokenSource();
+        var fetches = 0;
+
+        async Task<A2A.AgentCard> StoppedWhileReading(CancellationToken ct)
+        {
+            fetches++;
+            await stop.CancelAsync();
+            await Task.Delay(Timeout.Infinite, ct);
+            return Card();
+        }
+
+        await FluentActions.Awaiting(() => cache.GetAsync("k", "billing", "http://x", StoppedWhileReading, stop.Token))
+            .Should().ThrowAsync<OperationCanceledException>();
+        var card = await cache.GetAsync("k", "billing", "http://x", _ => { fetches++; return Task.FromResult(Card()); }, default);
+
+        card.Name.Should().Be("billing", "the next session reads the card");
+        fetches.Should().Be(2);
+        log.HasWarning("did not answer").Should().BeFalse("a Stop is not an agent that does not answer");
     }
 
     [Fact]

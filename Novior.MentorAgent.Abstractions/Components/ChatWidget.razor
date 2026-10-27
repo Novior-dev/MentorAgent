@@ -1,17 +1,18 @@
 ﻿@using Novior.MentorAgent.Abstractions.Core
 @using Novior.MentorAgent.Abstractions.Models
 @using Microsoft.JSInterop
-@inject MentorLocalizer L
+@inject MentorLocalizer ApplicationL
 @inject IOptions<MentorWidgetOptions> Options
 @inject IJSRuntime JSRuntime
 @implements IDisposable
 
 @* Injects CSS and JS automatically — no changes needed in App.razor *@
 @* The file names are not namespaces: a WASM or MAUI index.html names them, so they stay on a rename.
-   Only the _content/<package id>/ part follows the package (ContractNameTests). *@
+   Only the _content/<package id>/ part follows the package (ContractNameTests).
+   ?v= is the version this assembly was built as, so every release changes it (BUG-209). *@
 <HeadContent>
-    <link rel="stylesheet" href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=10" />
-    <script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=10"></script>
+    <link rel="stylesheet" href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=@AssetVersion" />
+    <script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=@AssetVersion"></script>
 </HeadContent>
 
 @{
@@ -27,12 +28,13 @@
     };
 }
 
-@{
-    var themeVars = BuildThemeVars(opt);
-}
-@if (!string.IsNullOrEmpty(themeVars))
+@* A theme is a stylesheet of this package, linked here and not in <HeadContent>: after everything in
+   <head>, where its :root values win as the inline block it replaces did, and with no HeadOutlet needed.
+   A strict Content-Security-Policy refuses an inline block, not a stylesheet of the page's origin. A
+   PrimaryColor is set from OnAfterRenderAsync, through the CSSOM (BUG-213). *@
+@if (ThemeStylesheet(opt.Theme) is { } theme)
 {
-    <style>:root { @((MarkupString)themeVars) }</style>
+    <link rel="stylesheet" href="_content/Novior.MentorAgent.Abstractions/css/themes/@(theme.File).css?v=@AssetVersion" media="@theme.Media" />
 }
 
 @{
@@ -41,6 +43,8 @@
         : opt.AvatarUrl;
 }
 
+@* The widget's localizer, for its own texts and its children's: in Language when it is set (story 536). *@
+<CascadingValue Value="L" Name="@LocalizerCascade">
 <div class="bm-root @posClass @(_open ? "bm-open" : "")">
 
     @* Backdrop *@
@@ -221,6 +225,15 @@
                 </button>
             </div>
         </header>
+
+        @* EU AI Act, article 50: under the header for the whole conversation — outside the messages, so it never
+           scrolls away, and with nothing to close it. Text, never markup: the host's own words are shown as written. *@
+        @if (opt.ShowAiDisclosure)
+        {
+            <div class="bm-ai-disclosure" role="note">
+                @(string.IsNullOrWhiteSpace(opt.AiDisclosureMessage) ? L.Get("ai.disclosure") : opt.AiDisclosureMessage)
+            </div>
+        }
 
         @* Hosted tools Detail Bar (#15) — which provider-side tools the model may use *@
         @if (opt.ShowHostedToolsStatus && _hostedDetailOpen && ActiveHostedTools.Count > 0)
@@ -416,3 +429,4 @@
 
     </div>
 </div>
+</CascadingValue>
