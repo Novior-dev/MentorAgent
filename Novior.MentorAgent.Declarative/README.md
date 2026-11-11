@@ -153,8 +153,9 @@ them from the agent when it loads and logs a warning naming them:
 [MentorAgent:Declarative] 'shipping.agent.yaml': removed web_search. A definition file can only use the application's own tools (`kind: function`); web search, code interpreter, file search and MCP servers are configured by the host, through MentorOptions.HostedTools and McpServers.
 ```
 
-The agent still loads, with its `function` tools only. If those tools cannot be taken out, the
-whole agent is skipped with an error instead. To give the assistant these capabilities, configure
+The agent still loads, with its `function` tools only, and an `IMentorAgentSourceObserver` receives
+each tool removed as `hosted-tool-removed`, with `Tool` set. If those tools cannot be taken out, the
+whole agent is skipped with an error instead, and reported as `foreign-tools`. To give the assistant these capabilities, configure
 them in the host (`MentorOptions.HostedTools`, `McpServers`), where the host's own controls apply.
 
 **Folded scalars (`>`) are not supported by this reader.** Use `|`, or a single line. With `>` the
@@ -175,21 +176,29 @@ description: Handles shipping.     # ✓
 
 ## Tools: named, not defined
 
-A `tools:` entry **names** a tool; it does not create one. The name must match one of your application's **Level-1 methods**: a public instance method with `[MentorAction]` or `[Description]` on a class in `ScanAssemblies` that is registered in DI, including a `[MentorSkill]` class. That is the whole list the factory is given. The methods of a C# `[MentorAgent]` specialist, MCP client tools, `[MentorTeam]` tools and the built-in tools (navigation, memory, UI actions) are **not** in it, so naming one of them binds nothing real (see below).
+A `tools:` entry **names** a tool; it does not create one. The name must match one of your application's **Level-1 methods**: a public instance method with `[MentorAction]` or `[Description]` on a class in `ScanAssemblies` that is registered in DI, including a `[MentorSkill]` class. That is the whole list the factory is given. The methods of a C# `[MentorAgent]` specialist, MCP client tools, `[MentorTeam]` tools and the built-in tools (navigation, memory, UI actions) are **not** in it, so an entry naming one of them is taken away (see below).
 
 ```yaml
 tools:
   - kind: function              # required — see below
-    name: get_order_status      # must match exactly; a typo gives the agent a declaration with nothing behind it
+    name: get_order_status      # must match exactly; a name that matches no action is taken away, with a warning
 ```
 
 The tool name is the **snake_case of the C# member**, with a trailing `Async` dropped:
-`GetOrderStatusAsync()` → `get_order_status`, matched exactly and case-sensitively. Get it wrong and
-nothing tells you at load time. The agent does not simply go without the tool: for a name that matches
-nothing, the Agent Framework creates a **declaration-only** function of that name and gives it to the
-agent. The model sees it and may call it, but there is no code behind it, so the call never runs and
-the specialist has no data to answer with. Check every name against your `[MentorAction]` /
-`[Description]` methods.
+`GetOrderStatusAsync()` → `get_order_status`, matched exactly and case-sensitively. For a name that
+matches none of the tools it is given, the Agent Framework creates a **declaration-only** function of
+that name, with no code behind it. MentorAgent takes it away from the agent with a warning, and the
+agent loads without it:
+
+```
+[MentorAgent:Declarative] 'shipping.agent.yaml': removed get_order_statu. No action of this application has that name in this session — unknown, or off for this session — so nothing would run behind it. A `kind: function` entry must name one of the application's actions exactly.
+```
+
+The tools a definition is given are the session's: an action that is off for the session
+(`[MentorAction(Enabled = false)]`, or turned off by an `IMentorActionGovernor`) is taken away the same
+way, so its name reaches no model. An `IMentorAgentSourceObserver` receives either as `tool-not-found`,
+with `Tool` set. The specialist still loads, but without the tool it has no data to answer with: check
+every name against your `[MentorAction]` / `[Description]` methods.
 
 This is the design point of the whole package. MentorAgent hands the factory the application's real tool list, **already wrapped in its gate**, so a YAML agent calling `create_order` still hits:
 
@@ -327,7 +336,7 @@ builder.Services.AddMentorAgentDeclarative(o =>
 });
 ```
 
-Inline `Definitions` are loaded first (named `inline[0]`, `inline[1]`, … in the log), then files in a **stable order** (sorted by path), so two definitions declaring the same agent
+Inline `Definitions` are loaded first (named `inline[0]`, `inline[1]`, … in the log and as the `Name` of what an `IMentorAgentSourceObserver` is told was left out; a file is named by its file name), then files in a **stable order** (sorted by path), so two definitions declaring the same agent
 name resolve identically on every machine rather than depending on the file system's enumeration
 order. A missing `Directory` is warned about — almost always a `CopyToOutputDirectory` miss, where
 the assistant otherwise starts fine and is simply missing a specialist nobody thinks to look for.
@@ -378,7 +387,8 @@ ArgumentException: Invalid name: ${name}
 and no agents loaded at all. Naming one section bounds the blast radius to keys you control.
 
 MentorAgent catches that failure and logs the cause rather than letting it surface as a generic
-startup error, then returns no agents:
+startup error, then returns no agents; an `IMentorAgentSourceObserver` receives every definition as
+`invalid-configuration`:
 
 ```
 [MentorAgent:Declarative] The agent factory rejected the configuration exposed to YAML
@@ -401,7 +411,9 @@ actually need substitution.
    ```
 3. Ask something in that agent's area — *"where is order 1001?"*. The answer should come back through it.
 4. **Negative check — a bad file does not take the app down.** Break the YAML deliberately: you get
-   `'shipping.agent.yaml' could not be loaded — skipped`, and everything else still starts.
+   `'shipping.agent.yaml' could not be loaded — skipped`, and everything else still starts. The log also
+   writes `[MentorAgent] Agent source Novior.MentorAgent.Declarative.DeclarativeAgentSource left out: shipping.agent.yaml (invalid-definition).`,
+   and an `IMentorAgentSourceObserver` receives it as `invalid-definition`, with the factory's message in `Detail`.
 5. **Negative check — the gate holds.** Name a tool carrying `RequiredRoles` in the YAML and ask the
    agent to use it while unauthenticated. The agent's model is not offered the tool and says it cannot do
    it here, the same way a C# specialist does, and no action is taken; a call made anyway is refused.
@@ -414,7 +426,7 @@ actually need substitution.
 
 That is a fair price for file-based authoring and pure overhead for everyone else, so it stays out of the `Novior.MentorAgent` core package. Installing this one is an explicit decision to pay it.
 
-The reference is `Microsoft.Agents.AI.Declarative` **1.26.0-rc1**, on the same 1.26 line as `Microsoft.Agents.AI` 1.26.0 in the core package, so adding it does not move the rest of the library onto a different Agent Framework version. The declarative package is still a prerelease upstream.
+The reference is `Microsoft.Agents.AI.Declarative` **1.27.0-rc1**, on the same 1.27 line as `Microsoft.Agents.AI` 1.27.0 in the core package, so adding it does not move the rest of the library onto a different Agent Framework version. The declarative package is still a prerelease upstream.
 
 ---
 

@@ -26,14 +26,17 @@ namespace Novior.MentorAgent.Rag;
 ///
 /// <para>
 /// Scoped: the vector belongs to the session that asked for it and is replaced by the next message.
-/// Registered by <c>AddMentorAgent()</c>; the generator you pass is the one used on a cache miss.
+/// Registered by <c>AddMentorAgent()</c>. The vector is the one <em>your</em> generator makes: a source
+/// whose documents were embedded with another model passes that model and gets its own vector, computed
+/// once per turn as well, never the one of <c>MentorOptions.EmbeddingGenerator</c>.
 /// </para>
 /// </summary>
 public interface IMentorQueryEmbedding
 {
     /// <summary>
-    /// Returns the vector for <paramref name="text"/>, generating it only if it is not the one
-    /// already computed for this turn. An empty text returns an empty vector without calling out.
+    /// Returns the vector <paramref name="generator"/> makes of <paramref name="text"/>, generating it only
+    /// if that generator has not already been asked for it this turn — the same instance, compared by
+    /// reference, so keep the one you pass. An empty text returns an empty vector without calling out.
     /// </summary>
     Task<ReadOnlyMemory<float>> GetAsync(
         string text,

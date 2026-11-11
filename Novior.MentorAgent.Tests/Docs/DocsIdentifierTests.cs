@@ -49,6 +49,7 @@ public sealed class DocsIdentifierTests(ITestOutputHelper output)
                 if (!LooksLikeAToolReference(markdown, candidate.Value)) continue;
                 if (RegisteredTools.Contains(candidate.Value)) continue;
                 if (IsIllustrative(candidate.Value)) continue;
+                if (IsAProviderRequestField(candidate.Value)) continue;
 
                 failures.Add($"{name}: `{candidate.Value}` is presented as a tool but is not registered");
             }
@@ -141,6 +142,12 @@ public sealed class DocsIdentifierTests(ITestOutputHelper output)
         ];
         return examples.Contains(candidate);
     }
+
+    /// <summary>
+    /// A field of the request a provider receives, named where the docs explain how tools are required — not a tool.
+    /// Story 167: <c>tool_choice</c>, which <c>ChatToolMode.RequireAny</c> becomes on the wire.
+    /// </summary>
+    private static bool IsAProviderRequestField(string candidate) => candidate is "tool_choice";
 
     private static HashSet<string> ReadRegisteredTools()
     {

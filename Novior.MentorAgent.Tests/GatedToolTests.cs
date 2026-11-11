@@ -85,6 +85,7 @@ public sealed class GatedToolTests
     /// that actually matters — the method body must not run.
     /// </summary>
     [Fact]
+    [Trait("Rule", "roles.signed-in")]
     public async Task RoleProtectedTool_IsRefusedAndNeverExecuted()
     {
         var target = new ProtectedTools();
@@ -97,6 +98,7 @@ public sealed class GatedToolTests
     }
 
     [Fact]
+    [Trait("Rule", "roles.any-of")]
     public async Task UnprotectedTool_RunsNormallyThroughTheSameGate()
     {
         // The negative control: if wrapping blocked everything, the test above would pass for the

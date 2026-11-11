@@ -235,6 +235,11 @@ breaks except those features.
 
 **The turn's language.** `GET /mentor/chat?message=…&language=it`, or `"language": "it"` in the `POST` body, sets the language of this turn: the name or the ISO code of a `MentorLanguage`. Anything else, or none, is the application's `Language`.
 
+**Requests started by another site are refused.** A browser sends the sign-in cookie with a link click from any site, so without a check one link to `/mentor/chat?message=…` would run a turn as the signed-in user, with a question the link's author chose. The endpoint reads the browser's Fetch Metadata: when `Sec-Fetch-Site` is `cross-site` or `same-site` and `Sec-Fetch-Mode` is not `cors` (a link, a form, an image, an iframe), `GET` and `POST` answer `403` before the turn starts and log a warning `chat.cross-site-refused` with the method and the two headers, never the question (BUG-230). Your own page's `fetch`, an address typed by hand, clients that send no Fetch Metadata (curl, servers, mobile apps) and `cors` requests from another origin, which your [CORS policy](#cors--required-for-cross-origin-clients) governs, work as before. Two cases stay with the host:
+
+- a `SameSite=None` sign-in cookie, typically for a front end on another domain: the browser then sends it with any site's `fetch`, which this check lets through as `cors`, and a simple `GET` runs the turn even when your CORS policy hides the response. Add a check of your own, such as antiforgery tokens or a custom request header;
+- browsers that send no Fetch Metadata (Safari before 16.4): add the same check of your own if you support them.
+
 | Frame | Payload | What it is for |
 |---|---|---|
 | `chunk` | `text`, `aiGenerated` | One streamed fragment of the answer. `aiGenerated` is always `true`: the machine-readable marker of AI-generated text |
@@ -289,7 +294,7 @@ Requires `options.EnableImageInput = true` and a vision-capable model — see [M
 
 ### Option B — SignalR (full feature set)
 
-All 18 events. SSE covers the six that decide what the user sees; SignalR adds the rest — UI actions,
+All 19 events. SSE covers the six that decide what the user sees; SignalR adds the rest — UI actions,
 RAG citations, team collaboration, per-action feedback, MCP and hosted-tool status, busy state.
 Choose it when your client drives the page, not only the conversation.
 
@@ -510,7 +515,12 @@ interface RagSource {
 
 Two files: the hook that manages the SignalR connection, and the component that renders the UI.
 
-All three components (React, Angular, Vue) do the same four things beyond the events:
+All three components (React, Angular, Vue) handle 16 of the 19 events. The other three have sections
+of their own: `HostedToolsDeclared` and `GeneratedImages` in
+[Hosted tools](#hosted-tools-web-search-code-interpreter-file-search-images-remote-mcp), `Cards` in
+[Generative UI — cards](#generative-ui--cards-level-2).
+
+They also do the same four things beyond the events:
 
 - **Same identity on every call.** Approve, cancel and session are HTTP calls, and they are
   owner-checked: they must carry the identity the hub connection carries, or they get `401` (see
@@ -740,8 +750,8 @@ export function MentorChat() {
 
 ### Complete chat component — Angular
 
-Two files: the injectable service and the component. Same identity, checks and reconnect handling
-as the React component (see the list above it).
+Two files: the injectable service and the component. Same 16 events, identity, checks and reconnect
+handling as the React component (see the list above it).
 
 ```bash
 npm install @microsoft/signalr
@@ -966,7 +976,7 @@ export class MentorChatComponent {
 
 ### Complete chat component — Vue
 
-Same identity, checks and reconnect handling as the React component (see the list above it).
+Same 16 events, identity, checks and reconnect handling as the React component (see the list above it).
 
 ```bash
 npm install @microsoft/signalr
@@ -1207,7 +1217,7 @@ anything else, so here is what each endpoint exposes and what to do about it.
 | `POST /mentor/approve` | — | For a confirmation raised over the **hub**: nothing, because only the principal it was raised for may answer it. A confirmation raised over **SSE** (or in-process) has no recorded owner, so anyone holding its `actionId` can answer it. Keep `/mentor/chat` authenticated and treat the `actionId` as a secret. When the hub connection closes, its turn ends with it, and a late answer gets `404` | *(enforced for hub connections)* |
 | `POST /mentor/cancel` | — | Nothing: owner-only, same rule | *(enforced)* |
 | `GET`/`POST /mentor/session` | — | Nothing: owner-only, same rule | *(enforced)* |
-| `GET /mentor/admin/metrics` | — | Nothing, when `DashboardRole` is set | `DashboardRole` |
+| `GET /mentor/admin/metrics` | — | Nothing, when `DashboardRole` is set; with an `IMentorTenantResolver`, an administrator reads only their own tenant's figures | `DashboardRole` |
 | `GET /mentor/tour` | ✅ | Read the tour — public screen names and the descriptions of the actions that need no role, identical for every user, no counts and no per-user data. Deliberate | — |
 | `/mcp` *(if mapped)* | ✅ | Call every **ungated** `[MentorAction]` as an MCP tool (gated actions are withheld there) | `MapMentorAgentMcp(configure: ...)` |
 | `/a2a` + `/.well-known/agent-card.json` *(if mapped)* | ✅ | Run A2A tasks against your assistant (**your model spend**) and read the agent card | `MapMentorAgentA2A(configure: ...)` |
@@ -2154,6 +2164,10 @@ options.DashboardRole = "Admin";   // role required for the endpoint; "" leaves 
 
 `MapMentorAgentServer()` exposes **`GET /mentor/admin/metrics`** returning a `MentorMetricsSnapshot` — now carrying the per-model breakdown (`Models`) and hourly time series (`MetricsRetention`, 7d) plus tokens, cost, deflection and top actions — gated by `DashboardRole`. Fetch it from your React/Vue admin UI, or bind `<MentorDashboard Snapshot="..."/>` in a WASM client to get the identical charts. Never expose it to end users. Cost appears only for priced models — key `ModelPricing` by the model id in the snapshot (for Azure OpenAI, your deployment name).
 
+With an `IMentorTenantResolver`, the snapshot is the caller's tenant's only. The endpoint answers 403 when the
+resolver names no tenant for the caller, and 204 when a custom `IMentorMetrics` keeps nothing per tenant. The whole
+instance is read from OpenTelemetry, where every series carries `mentoragent.tenant`.
+
 > A non-empty `DashboardRole` requires ASP.NET Core authentication/authorization to be configured (`app.UseAuthentication()` / `app.UseAuthorization()`); otherwise the endpoint has authorization metadata with no middleware to enforce it. Use `DashboardRole = ""` only for local development.
 
 **Localization.** `<MentorDashboard/>` is translated through `MentorLocalizer` (10 languages, English fallback). A WASM/Blazor client has no MentorAgent DI, so pass the language: `<MentorDashboard Snapshot="..." Language="MentorLanguage.Italian" />`.
@@ -2426,7 +2440,7 @@ var report = await evaluator.RunAsync(
 report.ThrowIfFailed();
 ```
 
-Plug native evaluators for production-grade quality & safety — `Checks` (e.g. `EvalChecks.ToolCalledCheck(...)`) and `Evaluators` (`FoundryEvals`, or MEAI quality/safety evaluators) both gate the report.
+Plug native evaluators for production-grade quality & safety — `Checks` (e.g. `EvalChecks.KeywordCheck(...)`) and `Evaluators` (`FoundryEvals`, or MEAI quality/safety evaluators) both gate the report. `RunAsync` gives the model no tools: to check tool calls, run conversations through the mentor with `RunConversationsAsync` and `ExpectTools` (library README, *Conversations through the mentor*), where by default every confirmation is answered no.
 
 ---
 
@@ -2461,7 +2475,7 @@ app.MapMentorAgentMcp("/my-mcp");                                 // a path pass
 app.MapMentorAgentMcp(configure: e => e.RequireAuthorization());  // protect the endpoint
 ```
 
-Every `[MentorAction]` method becomes an MCP tool **except the gated ones**. An MCP request has no signed-in user, so an action with `RequiredRoles` is withheld unless you tell MentorAgent who the caller is. An action that needs a confirmation (`RequiresConfirmation` or `RequiresApproval`) is withheld **always**, because nobody is on the far end of an MCP call to answer a dialog — from 1.0.0-rc.15 that includes every `[MentorAction]` declaring neither `ReadOnly = true` nor `RequiresConfirmation` (`RequireConfirmationForWrites`); declare `RequiresConfirmation = false` on a write that must stay published. A startup warning lists the withheld actions. The `RequiresApproval` predicate is asked again at every `tools/list` and `tools/call`, so the warning tells the state at startup: an action the predicate holds back later is no longer listed and, called, is refused as withheld (BUG-202). An `IMentorActionPolicy` (see *Deciding before an action runs* in the MentorAgent README) can also take a tool away from one caller: its `IsAllowedAsync`, asked with the caller `McpCallerPrincipal` resolves, decides each `tools/list`. An action declared `ReadOnly = true` (or through `IsReadOnlyAction`) is published with `readOnlyHint`, and some MCP clients skip their own confirmation for such a tool: declare it only on actions that really only read. Until you protect it, the endpoint is open. It carries no CORS policy (MCP clients are not browsers); a browser-based client needs the opt-in described in the MentorAgent README (MCP Server, Step 2).
+Every `[MentorAction]` method becomes an MCP tool **except the gated ones**. An MCP request has no signed-in user, so an action with `RequiredRoles` is withheld unless you tell MentorAgent who the caller is. An action that needs a confirmation (`RequiresConfirmation` or `RequiresApproval`) is withheld **always**, because nobody is on the far end of an MCP call to answer a dialog — from 1.0.0-rc.15 that includes every `[MentorAction]` declaring neither `ReadOnly = true` nor `RequiresConfirmation` (`RequireConfirmationForWrites`); declare `RequiresConfirmation = false` on a write that must stay published. A startup warning lists the withheld actions. The `RequiresApproval` predicate is asked again at every `tools/list` and `tools/call`, so the warning tells the state at startup: an action the predicate holds back later is no longer listed and, called, is refused as withheld (BUG-202). An `IMentorActionPolicy` (see *Deciding before an action runs* in the MentorAgent README) can also take a tool away from one caller: its `IsAllowedAsync`, asked with the caller `McpCallerPrincipal` resolves, decides each `tools/list`. An action shipped off (`[MentorAction(Enabled = false)]`) is not listed and, called, is refused as an unknown tool, unless an `IMentorActionGovernor` turns it on: the governor is asked at every `tools/list` and `tools/call`. With an `IMentorActionGovernor`, the roles it gives an action decide which callers see and call it, as the code's do: an action withheld only for its roles is published once the governor requires none. With an `IMentorActionGovernor`, its answer about the confirmation decides too: an action that asks for one is published once the governor takes the confirmation away, and one it requires a confirmation for is withheld. With an `IMentorActionGovernor`, `tools/list` shows the description it gives an action, with the code's name, argument schema and annotations; a call is decided with the code's description. An action declared `ReadOnly = true` (or through `IsReadOnlyAction`) is published with `readOnlyHint`, and some MCP clients skip their own confirmation for such a tool: declare it only on actions that really only read. Until you protect it, the endpoint is open. It carries no CORS policy (MCP clients are not browsers); a browser-based client needs the opt-in described in the MentorAgent README (MCP Server, Step 2).
 
 ```csharp
 builder.Services.AddHttpContextAccessor();
@@ -2474,6 +2488,14 @@ builder.Services.AddMentorAgent(options => options.McpServerEnabled = true);
 builder.Services.AddOptions<MentorOptions>().Configure<IHttpContextAccessor>(
     (options, http) => options.McpCallerPrincipal = () => http.HttpContext?.User);
 ```
+
+With an `IMentorTenantResolver` (see *Serving more than one tenant* in the MentorAgent README), the hub,
+`/mentor/chat` and A2A resolve the tenant when a turn starts, and the MCP server for every `tools/list` and
+`tools/call`, with the caller `McpCallerPrincipal` resolves. A request whose tenant the resolver cannot name is
+refused: an error frame, a failed task, an `isError` result, an empty tool list. A snapshot from
+`GET /mentor/session` names its tenant, and `POST /mentor/session` restores it only into a connection of the same
+tenant: otherwise a 400, and the conversation in place is untouched. The MCP server's rate limit counts each
+tenant's callers apart.
 
 Every `tools/call` passes through `OnToolResult`, counts in the dashboard's top actions and against `RateLimitPerUser` (an allowance separate from chat messages, per `NameIdentifier`, `sub` or `oid`; a caller with none is counted by remote address — which `AddHttpContextAccessor()` above makes available — or else shares one allowance with every such caller), and writes one Information line with a fingerprint of the caller (BUG-107). Before the tool runs, the policies are asked with its arguments — `IsAllowedAsync`, then `BeforeActionAsync`, with the request's scope in `MentorActionRequest.Services`: a no answers "Unknown tool", as a missing role does (`denied-policy` in the log); a `Stop` returns an error with the policy's reason (`blocked`); a `Confirm` is refused, since nobody can confirm a call here (`nobody-to-confirm`); a policy that throws or runs out of `ActionPolicyTimeout` stops the call (`policy-failed`).
 
@@ -2635,6 +2657,7 @@ With an absolute `HubUrl` like this one, the WASM client also sends confirmation
 | `RequiredRoles` | ASP.NET Core identity roles: the caller needs **any one** of them (not all), must be authenticated. On the hub, `/mentor/chat` and A2A the user is the request's caller; in a Blazor circuit, the one the host's `AuthenticationStateProvider` reports. The model of the coordinator, and of a specialist, team member or agent source that holds the action, is offered it only in a turn whose user holds one of the roles. Empty = no role check |
 | `ProactiveHint` | Appended to the tool's description as `Guidance: <hint>` for the assistant's own tools (coordinator, specialists, team members) — not on the MCP server surface, and not used by semantic tool filtering |
 | `NavigateTo` | URL the AI navigates to automatically after successful execution |
+| `Enabled` | `false` ships the action off: it stays in `IMentorActionCatalog` and nowhere else — offered to no agent, not on `/mcp` or the A2A card — and a call to it does not run, until an `IMentorActionGovernor` turns it on (see *Governing actions from outside the code* in the MentorAgent README). Default `true` |
 
 ### `[MentorAgent]` parameters
 
@@ -2824,6 +2847,7 @@ first connection.
 | `AppDescription` | `string` | `""` | Domain description for richer AI context |
 | `ChatClient` | `IChatClient?` | `null` | AI provider (recommended) |
 | `Agent` | `AIAgent?` | `null` | Pre-built AI agent (alternative). Two calls with one id in a response of your agent's model are not made unique: your agent runs them before MentorAgent's clients see them (BUG-225). |
+| `CoordinatorSampling` | `MentorSamplingOptions?` | `null` | The coordinator's sampling (temperature, top-p…) on every request of its turns; any value left `null` is the provider's, and the classifiers keep their own. See the library README |
 | `EmbeddingGenerator` | `IEmbeddingGenerator<string, Embedding<float>>?` | `null` | Optional embedding model — enables semantic tool filtering |
 | `ScanAssemblies` | `Assembly[]` | *(required)* | Assemblies to scan for agents, actions, pages |
 | `Language` | `MentorLanguage` | `English` | Language for AI responses, and for the instructions MentorAgent writes that the model could echo (see *What follows `Language`* in the MentorAgent README). Read again on every turn; a client can give a turn its own language (`SendUserMessage`, `language` on `/mentor/chat`) |
@@ -2884,6 +2908,7 @@ first connection.
 | `ToolFilterMinScore` | `float` | `0.35` | Minimum cosine similarity (0–1) for a tool to be relevant |
 | `RequireLookupForRecordQuestions` | `bool` | `false` | Opt-in. When a classifier says a message asks for a value of your records, the first model call must call a declared read-only action (or hand over to a specialist): with semantic tool filtering, one the filter selected; without it, any declared read the user may run. One classifier call per turn whose selection holds a read — without the filter, nearly every turn. Needs declared reads. See [Semantic tool filtering](#semantic-tool-filtering) |
 | `RequireActionForChangeRequests` | `bool` | `false` | Opt-in. When a classifier says a message asks to carry out one of your confirmation-gated actions and gives every input it needs, the first model call must call one of those actions the filter selected (or hand over to a specialist), so the banner comes first; when it asks for a page, `navigate_to`. A request that leaves an input out is not forced. One classifier call per turn, shared with `RequireLookupForRecordQuestions`. Unlike that option, needs `EnableToolFiltering` and an `EmbeddingGenerator`, and `RequireConfirmation` for actions. See [Semantic tool filtering](#semantic-tool-filtering) |
+| `CheckAnnouncedActions` | `bool` | `true` | After a turn in which the coordinator called no tool, asks a model whether its reply announces an action or reports one as done; if so, one more request in the same turn, with the same tools, told to call the tool now or to say it was not done. Never a required call, once per turn. The question goes to `ClassifierChatClient`, or to `ChatClient` without one. No effect with `UseServiceManagedHistory` or a pre-built `Agent`. Read at every turn. BUG-220 |
 | `EnableCompaction` | `bool` | `false` | Compact long conversation history before each call — what is sent, never what is stored (BUG-104). Locally kept history only (Path A); not installed with `UseServiceManagedHistory` |
 | `CompactionTokenThreshold` | `int` | `4000` | Token budget that triggers compaction |
 | `CompactionMaxTurns` | `int` | `8` | Recent turns kept intact |
@@ -2915,7 +2940,7 @@ first connection.
 | `RoutingComplexExemplars` | `IReadOnlyList<string>?` | `null` | `Semantic`: example "complex" turns (null → built-in set) |
 | `RoutingThreshold` | `float` | `0.35` | `Semantic`: cosine floor to escalate |
 | `RoutingClassifierClient` | `IChatClient?` | `null` | `Classifier`/`Cascade`: dedicated judge client (defaults to cheap `ChatClient`) |
-| `ClassifierChatClient` | `IChatClient?` | `null` | Client for MentorAgent's own one-word decisions (input and output safety, hosted-tool scope, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, fact extraction). A small deployment here cuts the wait before every reply; defaults to `ChatClient`. On Path B (a pre-built `Agent`) it is the only client MentorAgent can call on its own: without it the safety checks are skipped |
+| `ClassifierChatClient` | `IChatClient?` | `null` | Client for MentorAgent's own one-word decisions (input and output safety, hosted-tool scope, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, the check of a reply that announced an action (`CheckAnnouncedActions`, on by default, after the reply), fact extraction). A small deployment here cuts the wait before every reply; defaults to `ChatClient`. On Path B (a pre-built `Agent`) it is the only client MentorAgent can call on its own: without it the safety checks are skipped |
 
 > Also available as **services** (resolve from DI): `IMentorStructured` — typed `GenerateAsync<T>`, see [Structured outputs](#structured-outputs) — `MentorEvaluator`, the token/quality regression harness, see [Evaluation & regression testing](#evaluation--regression-testing) — and `IMentorTour`, the [onboarding tour](#onboarding-tour) source, which you can replace with your own registration to script the tour by hand.
 
@@ -2948,6 +2973,7 @@ first connection.
 | `RagMinScore` | `float` | `2` | Minimum relevance score. `0` = no filtering. For keyword search: `2` ≈ two content matches. For vector/cosine similarity: use `0.5`–`0.75`. Not set: the source's `DefaultMinScore` when it declares one |
 | `RagSystemPromptTemplate` | `string` | `"Use the following documents to answer:\n{documents}"` | Prompt template. `{documents}` is the placeholder |
 | `ShowRagSources` | `bool` | `false` | Show citation chips in widget |
+| `RagNoResultsNotice` | `bool` | `false` | Tell the model when the search keeps no document, so it does not answer a question about the documents from memory. In the language of the turn, in that request only |
 
 > RAG is fully semantic: vector search + `RagMinScore` inject nothing on pure commands, so no keyword gating is needed.
 
@@ -2983,6 +3009,7 @@ first connection.
 | `SafetyCheckFailure` | `MentorSafetyCheckFailure` | `Allow` | A check with no verdict (timeout, error): `Allow` = fail open with a warning, `Block` = refuse the message / withhold the reply |
 | `RefuseOutOfScope` | `bool` | `false` | Refuse a message that plainly has nothing to do with the application instead of answering it; defaults to answering when unsure (BUG-105). A short reply ("yes", a choice the assistant offered) is judged with the end of the assistant's last reply, in the same call; the safety check still judges the message alone (BUG-223). With the safety check on it rides in the same classifier call (a longer prompt: the question and the scope); alone it costs one small call per turn, and a turn that is about to declare a hosted tool still asks the tool gate its own question. Counted in `GuardrailBlockCount` |
 | `WarmUpAtStartup` | `bool` | `false` | Build one coordinator at start-up (catalogue embeddings, shared MCP sessions, agent cards) so the first connection does not pay for them. Runs once the host has started; a failed warm-up never fails the boot |
+| `WarmUpChatModel` | `bool` | `false` | With `WarmUpAtStartup`, one minimal request to the chat model (and the strong one) at start-up, so the first turn is not slower. Every start costs one request per client, at most 16 output tokens. See the library README |
 | `MaxMessageLength` | `int` | `4000` | Max message length (0 = unlimited) |
 | `RateLimitPerUser` | `int` | `0` | Max messages per user within `RateLimitWindowSecs` (0 = disabled). Signed-out callers are counted per connection under the default `AnonymousIdentity = PerSession`. MCP `tools/call` has its own allowance with the same limit, per `NameIdentifier`, `sub` or `oid`; a caller with none is counted by remote address when `IHttpContextAccessor` is registered, otherwise all such callers share one |
 | `RateLimitWindowSecs` | `int` | `60` | Rate limiting window in seconds |
@@ -2991,7 +3018,7 @@ first connection.
 | `HitlMode` | `MentorHitlMode` | `Blocking` | `Blocking` (MentorAgent's flow) or `Native` (AF `ApprovalRequiredAIFunction`). Same client protocol either way — see [HITL](#hitl--confirming-actions). A later call of a model response with an id the response or the conversation already holds gets the next free `<id>_n` before the function-invoking client sees it, so two calls of one id no longer break the conversation (BUG-225). |
 | `IsReadOnlyAction` | `Func<string, bool>?` | `null` | Declares by tool name the actions that only read — same as `[MentorAction(ReadOnly = true)]`, for `[Description]` methods or central declaration. Published to MCP clients as `readOnlyHint`, which some clients take as leave to skip their own confirmation; the actions `RequireLookupForRecordQuestions` may require. A confirmation-gated tool is never read-only |
 | `RequiresApproval` | `Func<string, bool>?` | `null` | Forces approval for a tool **by name** — the way to gate MCP tools and skills you don't own. Asked again on every call and on every `tools/list` and `tools/call`: keep it a cheap, pure function of the name |
-| `ActionPolicyTimeout` | `TimeSpan` | `00:00:05` | How long each call to an `IMentorActionPolicy` may take; then the call does not run (`PolicyFailed`), and the action is left out when MentorAgent decides what to offer. `Zero` = no limit |
+| `ActionPolicyTimeout` | `TimeSpan` | `00:00:05` | How long each call to an `IMentorActionPolicy`, or to the `IMentorActionGovernor`, may take; then the call does not run (`PolicyFailed`), and the action is left out when MentorAgent decides what to offer. `Zero` = no limit |
 | `ConfirmationMessage` | `Func<MentorConfirmationContext, string?>?` | `null` | Writes the text of the confirmation banner from the tool, its description, the arguments (in parameter order, cleaned, cut at 200 characters), `Language` and the scope's services. It is the `message` of the hub's `ConfirmationRequired` event and of the SSE `confirmationRequired` frame. `null`, white space or an exception: the default text |
 | `ConfirmationTimeout` | `TimeSpan` | `00:00:00` | How long a confirmation waits for its answer, from when the banner is shown; then it counts as rejected and the action does not run. `Zero` = no limit; a few minutes suits a web host |
 | `AutoApprovalRules` | `IList<Func<ToolAutoApprovalRuleContext, ValueTask<bool>>>` | empty | `Native` mode only. Approves a call before any banner appears, and enables "don't ask again". **Waives the prompt, never `RequiredRoles`** |

@@ -164,7 +164,8 @@ public sealed class TurnLanguageTests
 
         await TurnAsync(host, "bonjour", MentorLanguage.French);
 
-        var all = host.Get<MentorDiscoveryService>().Discover().Level1Methods;
+        // The actions the session is built with: not one shipped off (story 1549).
+        var all = host.Get<MentorDiscoveryService>().Discover().Level1Methods.Where(m => m.EnabledByDefault).ToList();
         var mayRun = all.Count(m => m.ToolName is not ("cancel_order" or "export_ledger"));
         var sent = Instructions(CoordinatorCalls(host)[0]);
         sent.Should().Contain(Line(MentorLanguage.French))
@@ -330,6 +331,7 @@ public sealed class TurnLanguageTests
     }
 
     [Fact]
+    [Trait("RuntimeOption", nameof(MentorOptions.Language))]
     public async Task A_change_of_the_application_language_applies_to_the_next_turn_and_to_the_widget_texts()
     {
         await using var host = MentorHostFixture.Create(o => { o.Language = MentorLanguage.Italian; o.MemoryAutoCapture = false; });

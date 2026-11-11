@@ -38,12 +38,16 @@ public sealed class ToolFilterTests(ITestOutputHelper output)
     /// action is left out for a role the user lacks (BUG-200), and one the filter drops is dropped by the filter.
     /// </summary>
     private static MentorHostFixture WithFilter(
-        Action<Novior.MentorAgent.Options.MentorOptions>? configure = null)
+        Action<Novior.MentorAgent.Options.MentorOptions>? configure = null,
+        Novior.MentorAgent.Abstractions.Interfaces.IMentorActionGovernor? governor = null)
     {
         var host = MentorHostFixture.Create(o =>
         {
             o.EnableToolFiltering = true;
             configure?.Invoke(o);
+        }, s =>
+        {
+            if (governor is not null) s.AddSingleton(governor);
         }, withEmbeddings: true);
         host.Auth.SignIn("ada", "Manager", "Admin");
         return host;
@@ -88,6 +92,29 @@ public sealed class ToolFilterTests(ITestOutputHelper output)
         host.FirstToolsSent.Should().Contain("cancel_order");
         host.FirstToolsSent.Should().NotContain("get_weather",
             "an unrelated action is exactly what the filter exists to remove");
+    }
+
+    [Fact]
+    [Trait("Rule", "describe.external-replace")]
+    public async Task The_filter_ranks_the_description_the_governor_gives()
+    {
+        // Story 1548 — the governor's text is what the model reads, so it is what the message is matched against. The
+        // code's text sits on the unrelated axis; another match clears the line, so nothing travels as a fallback.
+        const string query = "how many orders are still open?";
+        var governor = new Novior.MentorAgent.Tests.Fakes.TestActionGovernor
+        {
+            Description = r => r.ToolName == "count_open_orders" ? "Tells how many orders are still open" : null,
+        };
+        await using var host = WithFilter(o => o.ToolFilterMinTools = 0, governor);
+        SeedOnlyRelevant(host, query,
+            "count_open_orders: Tells how many orders are still open", "get_active_orders: Returns the list of active orders");
+        host.Chat!.SayRepeatedly("ok", times: 2);
+
+        await host.RunTurnAsync(query);
+
+        output.WriteLine(string.Join(", ", host.FirstToolsSent));
+        host.FirstToolsSent.Should().Contain("count_open_orders").And.Contain("get_active_orders")
+            .And.NotContain("get_weather");
     }
 
     [Fact]
@@ -808,5 +835,29 @@ public sealed class ToolFilterTests(ITestOutputHelper output)
 
         host.FirstToolsSent.Should().NotContain("search");
         host.FirstToolsSent.Should().Contain("count_open_orders");
+    }
+
+    [Fact]
+    [Trait("RuntimeOption", nameof(Novior.MentorAgent.Options.MentorOptions.ToolFilterMaxTools))]
+    public async Task Max_tools_raised_while_the_application_runs_applies_to_the_next_session()
+    {
+        // Story 1275: the filter takes its maximum as the session builds the coordinator. The Dell shape falls back to the
+        // best-ranked actions that need no confirmation, as many as the maximum allows.
+        const string query = "Quanto costa il Dell XPS 15?";
+        await using var host = WithFilter(o => { o.ToolFilterMinScore = 0.35f; o.ToolFilterMaxTools = 2; });
+        SeedTheDellShape(host, query);
+        host.Chat!.SayRepeatedly("ok", times: 4);
+
+        await host.RunTurnAsync(query);
+        host.FirstToolsSent.Where(t => ApplicationActions.Contains(t)).Should().HaveCount(2);
+
+        host.Options.ToolFilterMaxTools = 12;
+        var before = host.Chat.Calls.Count;
+        await using (var session = host.Get<IServiceScopeFactory>().CreateAsyncScope())
+            await session.ServiceProvider
+                .GetRequiredService<Novior.MentorAgent.Abstractions.Interfaces.IMentorOrchestrator>().SendMessageAsync(query);
+
+        host.Chat.Calls.Skip(before).First(c => c.Tools.Count > 0).ToolNames.Where(t => ApplicationActions.Contains(t))
+            .Should().Contain("show_order_card", "the new session offers up to the new maximum");
     }
 }

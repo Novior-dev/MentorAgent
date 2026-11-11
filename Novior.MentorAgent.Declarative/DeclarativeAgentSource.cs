@@ -38,12 +38,20 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
 
     public async Task<IReadOnlyList<AIAgent>> GetAgentsAsync(
         MentorAgentSourceContext context, CancellationToken ct = default)
+        => (await LoadAsync(context, ct)).Agents;
+
+    /// <summary>
+    /// Story 1274 — every definition that does not load, and every tool taken away from an agent that does, is in the
+    /// result as well as in the log: whoever governs the agents sees it without reading the server's log.
+    /// </summary>
+    public async Task<MentorAgentSourceResult> LoadAsync(
+        MentorAgentSourceContext context, CancellationToken ct = default)
     {
         var definitions = LoadDefinitions();
         if (definitions.Count == 0)
         {
             _logger.LogInformation("[MentorAgent:Declarative] No agent definition found.");
-            return [];
+            return new([], []);
         }
 
         // The factory wants a mutable IList and holds on to it; hand it a copy so nothing it does
@@ -70,10 +78,14 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
                 "YAML ({Section}). Every key in it becomes a Power Fx variable and must be a valid " +
                 "identifier. Narrow MentorDeclarativeOptions.ConfigurationSection, or leave it null.",
                 _options.ConfigurationSection ?? "(none)");
-            return [];
+            var detail = $"Every key of the configuration section '{_options.ConfigurationSection}' becomes a Power Fx " +
+                         "variable and must be a valid identifier.";
+            return new([], [.. definitions.Select(d =>
+                new MentorAgentRejection(d.Name, MentorAgentRejectionReasons.InvalidConfiguration, detail))]);
         }
 
         var agents = new List<AIAgent>();
+        var rejected = new List<MentorAgentRejection>();
 
         foreach (var (name, yaml) in definitions)
         {
@@ -83,14 +95,16 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
                 var agent = await factory.CreateFromYamlAsync(yaml, ct);
                 if (agent is null)
                 {
-                    // The factory returns null for a definition kind it does not handle — a
-                    // workflow, say, in a file that was meant to hold an agent.
+                    // A factory may answer null for a definition kind it does not handle. The Agent
+                    // Framework's throws instead from 1.27 ("Unsupported root element"), which is
+                    // reported as invalid-definition; this stays as the guard for a null.
                     _logger.LogWarning(
                         "[MentorAgent:Declarative] '{Name}' is not a supported agent definition — skipped.", name);
+                    rejected.Add(new(name, MentorAgentRejectionReasons.NotAnAgent, null));
                     continue;
                 }
 
-                if (!WithoutHostedTools(agent, name))
+                if (!WithTheSessionsToolsOnly(agent, name, rejected))
                     continue;
 
                 agents.Add(agent);
@@ -103,16 +117,19 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
                 // A broken YAML file is a deployment mistake, not a reason for the assistant to be
                 // unavailable. It is logged loudly and the rest still load.
                 _logger.LogError(ex, "[MentorAgent:Declarative] '{Name}' could not be loaded — skipped.", name);
+                // The factory's message describes the text, and is what it takes to correct it.
+                rejected.Add(new(name, MentorAgentRejectionReasons.InvalidDefinition, ex.Message));
             }
         }
 
-        return agents;
+        return new(agents, rejected);
     }
 
     /// <summary>
     /// Removes every tool the definition created itself — <c>webSearch</c>, <c>codeInterpreter</c>,
-    /// <c>fileSearch</c>, <c>mcp</c> — and keeps only the host's functions. Returns false (skip the
-    /// agent) if they cannot be removed.
+    /// <c>fileSearch</c>, <c>mcp</c>, and a function no action of the session matches — and keeps only
+    /// the host's functions, adding each one removed to <paramref name="rejected"/>. Returns false (skip
+    /// the agent, rejected as a whole) if they cannot be removed.
     ///
     /// <para>
     /// Found by the rc.11 README audit, which read the Agent Framework's factory: only <c>function</c>
@@ -123,36 +140,63 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
     /// has and cannot add a capability. The AF exposes the agent's live <see cref="ChatOptions"/>
     /// through <c>GetService</c>, so the extra tools are taken out of the very list the agent runs with.
     /// </para>
+    ///
+    /// <para>
+    /// Story 1274, from the bridge's probe: for a <c>kind: function</c> name that matches none of the tools
+    /// MentorAgent supplies, the factory creates a declaration-only function in its place. The model could
+    /// call it and nothing would run: the agent stopped, and the coordinator read NOT DELEGATED with no log
+    /// to say why. The tools supplied are the session's, so this is also how an action that is off for the
+    /// session reaches no model through a definition that names it (<c>enabled.off-by-default</c>).
+    /// </para>
     /// </summary>
-    private bool WithoutHostedTools(AIAgent agent, string source)
+    private bool WithTheSessionsToolsOnly(AIAgent agent, string source, List<MentorAgentRejection> rejected)
     {
         if (agent.GetService(typeof(ChatOptions)) is not ChatOptions { Tools: { } list })
             return true;   // no tools at all
 
-        // Functions are not hosted tools, so they stay: the ones MentorAgent supplied and, for a name that
-        // matches nothing, the declaration-only function the factory creates in its place — the model can
-        // call it, but no code runs behind it (the README warns about it). Anything else was defined by
-        // the file.
+        // The functions MentorAgent supplied stay, and they are the only ones with code behind them. Anything else
+        // that is not a function was defined by the file; a function with no code is a name nothing matched.
         var foreign = list.Where(t => t is not AIFunctionDeclaration).ToList();
-        if (foreign.Count == 0)
+        var unbound = list.Where(t => t is AIFunctionDeclaration and not AIFunction).ToList();
+        if (foreign.Count == 0 && unbound.Count == 0)
             return true;
 
-        var names = string.Join(", ", foreign.Select(t => t.Name));
         if (list.IsReadOnly)
         {
+            var all = string.Join(", ", foreign.Concat(unbound).Select(t => t.Name));
             _logger.LogError(
                 "[MentorAgent:Declarative] '{Name}' declares tool(s) a definition file may not add ({Tools}), and they " +
-                "could not be removed — the agent is not loaded. Only `kind: function` entries are allowed.", source, names);
+                "could not be removed — the agent is not loaded. Only `kind: function` entries naming one of the " +
+                "application's actions are allowed.", source, all);
+            rejected.Add(new(source, MentorAgentRejectionReasons.ForeignTools, all));
             return false;
         }
 
-        foreach (var tool in foreign)
+        foreach (var tool in foreign.Concat(unbound))
             list.Remove(tool);
 
-        _logger.LogWarning(
-            "[MentorAgent:Declarative] '{Name}': removed {Tools}. A definition file can only use the application's own " +
-            "tools (`kind: function`); web search, code interpreter, file search and MCP servers are configured by the " +
-            "host, through MentorOptions.HostedTools and McpServers.", source, names);
+        if (foreign.Count > 0)
+        {
+            _logger.LogWarning(
+                "[MentorAgent:Declarative] '{Name}': removed {Tools}. A definition file can only use the application's own " +
+                "tools (`kind: function`); web search, code interpreter, file search and MCP servers are configured by the " +
+                "host, through MentorOptions.HostedTools and McpServers.", source, string.Join(", ", foreign.Select(t => t.Name)));
+            rejected.AddRange(foreign.Select(t => new MentorAgentRejection(source, MentorAgentRejectionReasons.HostedToolRemoved,
+                "A definition file can only use the application's own tools; hosted tools are configured by the host.")
+                { Tool = t.Name }));
+        }
+
+        if (unbound.Count > 0)
+        {
+            _logger.LogWarning(
+                "[MentorAgent:Declarative] '{Name}': removed {Tools}. No action of this application has that name in this " +
+                "session — unknown, or off for this session — so nothing would run behind it. A `kind: function` entry " +
+                "must name one of the application's actions exactly.", source, string.Join(", ", unbound.Select(t => t.Name)));
+            rejected.AddRange(unbound.Select(t => new MentorAgentRejection(source, MentorAgentRejectionReasons.ToolNotFound,
+                "No action of this application has this name in this session: it is unknown, or off for this session.")
+                { Tool = t.Name }));
+        }
+
         return true;
     }
 

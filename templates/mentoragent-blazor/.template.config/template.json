@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Novior",
+  "classifications": [ "Web", "Blazor", "AI" ],
+  "identity": "Novior.MentorAgent.Templates.BlazorServer",
+  "groupIdentity": "Novior.MentorAgent.Templates.Blazor",
+  "name": "MentorAgent Blazor Server app",
+  "description": "A small helpdesk in Blazor Server with a MentorAgent assistant: three actions, two of them confirmed by the user and one kept for a role, and tests that run them without a model.",
+  "shortName": "mentoragent-blazor",
+  "sourceName": "MentorAgent-Helpdesk",
+  "preferNameDirectory": true,
+  "tags": {
+    "language": "C#",
+    "type": "solution"
+  },
+  "guids": [
+    "8f3c1d2a-5b6e-4f70-9a1b-2c3d4e5f6a7b"
+  ],
+  "symbols": {
+    "HttpPort": {
+      "type": "generated",
+      "generator": "port",
+      "parameters": { "low": 5000, "high": 5300 },
+      "replaces": "5050"
+    },
+    "HttpsPort": {
+      "type": "generated",
+      "generator": "port",
+      "parameters": { "low": 7000, "high": 7300 },
+      "replaces": "7070"
+    }
+  }
+}

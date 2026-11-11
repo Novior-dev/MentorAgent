@@ -23,8 +23,9 @@ public enum MentorActionOutcome
     Allowed = 0,
 
     /// <summary>
-    /// Refused: a role is missing, nobody is signed in, a policy does not allow the user this action, nobody can
-    /// confirm, or the MCP server does not serve it.
+    /// Refused: the action is off, a role is missing, nobody is signed in, a policy does not allow the user this
+    /// action, nobody can confirm, the MCP server does not serve it, or the model called an action its agent was not
+    /// given.
     /// </summary>
     Denied = 1,
 
@@ -49,8 +50,8 @@ public enum MentorActionOutcome
     Blocked = 6,
 
     /// <summary>
-    /// Not run: an <c>IMentorActionPolicy</c> threw, or did not answer within <c>ActionPolicyTimeout</c>. The
-    /// exception's type is in <see cref="MentorActionDecision.ExceptionType"/>.
+    /// Not run: an <c>IMentorActionPolicy</c> or the <c>IMentorActionGovernor</c> threw, or did not answer within
+    /// <c>ActionPolicyTimeout</c>. The exception's type is in <see cref="MentorActionDecision.ExceptionType"/>.
     /// </summary>
     PolicyFailed = 7,
 

@@ -47,6 +47,7 @@ public sealed class TeamMemberToolTests
     // ── Whose tools ─────────────────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Rule", "kind.member-tools-leave-level1")]
     public void A_class_listed_only_as_member_tools_is_not_a_coordinator_tool()
     {
         var result = Discover();
@@ -54,11 +55,14 @@ public sealed class TeamMemberToolTests
         // Level 1 is what the coordinator, /mcp and the A2A card are built from.
         result.Level1Methods.Should().NotContain(m => m.DeclaringType == typeof(TestAnalysisTools));
         result.Level1Methods.Select(m => m.ToolName).Should().Contain("cancel_order", "the control: level 1 is intact");
+        // forecast_next_quarter is shipped off (story 1549): discovered as the member's, offered to nobody.
         Member(result, "Data Analyst").Tools.Select(t => t.ToolName)
-            .Should().BeEquivalentTo(["read_quarter_revenue", "approve_budget_line"], "they are the member's");
+            .Should().BeEquivalentTo(["read_quarter_revenue", "approve_budget_line", "forecast_next_quarter"], "they are the member's");
     }
 
     [Fact]
+    [Trait("Rule", "kind.member-tools-leave-level1")]
+    [Trait("Rule", "name.team-tool")]
     public async Task A_member_tool_class_registered_in_DI_is_not_offered_to_the_coordinator()
     {
         // The README asks for the class in DI; that is the case that used to turn it into coordinator
@@ -74,6 +78,7 @@ public sealed class TeamMemberToolTests
     }
 
     [Fact]
+    [Trait("Rule", "kind.member-tools-leave-level1")]
     public void Each_class_taken_from_the_coordinator_is_logged_once_with_its_member_and_methods()
     {
         // For a host upgrading from rc.14 this is a silent loss of coordinator tools otherwise — the
@@ -101,6 +106,7 @@ public sealed class TeamMemberToolTests
     }
 
     [Fact]
+    [Trait("Rule", "kind.member-tools-leave-level1")]
     public void A_skill_listed_as_member_tools_keeps_its_level_1_tools()
     {
         var result = Discover();
@@ -114,6 +120,8 @@ public sealed class TeamMemberToolTests
     // ── Which methods ───────────────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Rule", "kind.member-tools-same-rules")]
+    [Trait("Rule", "scan.public-instance-declared")]
     public void Member_tools_follow_the_level_1_rules()
     {
         var names = Member(Discover(), "Data Analyst").Tools.Select(t => t.ToolName).ToList();
@@ -124,6 +132,7 @@ public sealed class TeamMemberToolTests
     }
 
     [Fact]
+    [Trait("Rule", "kind.member-tools-same-rules")]
     public void A_member_tool_keeps_what_its_attribute_declares()
     {
         var tools = Member(Discover(), "Data Analyst").Tools;
@@ -166,6 +175,7 @@ public sealed class TeamMemberToolTests
     }
 
     [Fact]
+    [Trait("Rule", "confirm.beats-read-only")]
     public void A_confirmation_wins_over_a_read_only_claim()
     {
         var analyst = Member(Discover(), "Data Analyst");

@@ -90,7 +90,7 @@ The demo references the library's projects, so it always runs the code of this r
 application, reference the package instead, together with the SDK of the provider you use:
 
 ```xml
-<PackageReference Include="Novior.MentorAgent" Version="1.2.0" />
+<PackageReference Include="Novior.MentorAgent" Version="1.3.0" />
 <PackageReference Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
 <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
 ```

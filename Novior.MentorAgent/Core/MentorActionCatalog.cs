@@ -28,7 +28,7 @@ internal sealed class MentorActionCatalog(
         foreach (var method in found.Level1Methods)
             actions.Add(Info(method, MentorAgentKind.Coordinator, null,
                 mcp?.ExposureOf(method) ?? MentorMcpExposure.NotServed,
-                AgentCardSkills?.Contains(method.ToolName) == true));
+                method.EnabledByDefault && AgentCardSkills?.Contains(method.ToolName) == true));
 
         // A specialist's and a team member's actions are reached through them: the MCP server and the card never
         // publish them.
@@ -58,6 +58,7 @@ internal sealed class MentorActionCatalog(
             RequiredRoles        = [.. method.RequiredRoles],
             RequiresConfirmation = _options.RequireConfirmation && declared,
             ReadOnly             = !declared && (method.ReadOnly || _options.IsReadOnlyAction?.Invoke(method.ToolName) == true),
+            EnabledByDefault     = method.EnabledByDefault,
             McpExposure          = exposure,
             OnAgentCard          = onCard,
         };

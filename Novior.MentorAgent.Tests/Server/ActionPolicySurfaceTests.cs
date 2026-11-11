@@ -251,6 +251,8 @@ public sealed class ActionPolicySurfaceTests
     // ── IMentorActionCatalog ─────────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Rule", "surface.coordinator-only")]
+    [Trait("Rule", "surface.mcp-withholds-gated")]
     public async Task The_catalog_publishes_on_mcp_and_the_card_exactly_what_they_serve()
     {
         await using var app = await McpAsync(new RecordingActionObserver(), null, a2a: true);

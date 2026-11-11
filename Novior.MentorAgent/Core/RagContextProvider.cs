@@ -77,6 +77,12 @@ internal sealed class RagContextProvider : AIContextProvider
     /// <summary>The language of the turn, for the citation rule; without it, <c>MentorOptions.Language</c>.</summary>
     internal MentorTurnLanguage? TurnLanguage { get; init; }
 
+    /// <summary>The heading of the notice that the search kept nothing (story 194), English in every language as the other headings.</summary>
+    internal const string NothingFoundHeading = "## Knowledge base — nothing found for THIS message\n";
+
+    /// <summary>The notice itself, in the language of the turn; without it, <c>MentorOptions.Language</c>.</summary>
+    private string NothingFound => MentorPromptTexts.For(TurnLanguage?.Current ?? _options.Language).RagNothingFound;
+
     /// <summary>How to cite the documents, appended after the host's template: in the language of the turn.</summary>
     private string CiteInstruction
         => (TurnLanguage?.Localizer ?? new Novior.MentorAgent.Abstractions.Core.MentorLocalizer(_options.Language)).Get("rag.cite");
@@ -87,6 +93,47 @@ internal sealed class RagContextProvider : AIContextProvider
     /// <c>UseRag</c> without a source can be reported instead of silently returning nothing.
     /// </summary>
     internal bool HasRealSource => _ragSource is not NullRagSource;
+
+    /// <summary>The types of source already checked for the request overload, once each in the process.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, byte> s_sourcesChecked = new();
+
+    private static readonly MethodInfo s_requestOverload = typeof(IMentorRagSource).GetMethod(
+        nameof(IMentorRagSource.SearchAsync), [typeof(MentorRagRequest), typeof(CancellationToken)])!;
+
+    /// <summary>
+    /// Story 157 — a source that implements only the text overload is never given the tenant: it serves every tenant the
+    /// same documents. Said at its first search with a tenant, once per type of source in the process, since each session
+    /// has a provider of its own; the source may be scoped, so it is not resolved at startup to be checked.
+    /// </summary>
+    private void WarnIfTheSourceIsNeverGivenTheTenant()
+    {
+        var type = _ragSource.GetType();
+        if (!HasRealSource || !s_sourcesChecked.TryAdd(type, 0) || ReadsTheRequest(type)) return;
+        _logger.LogWarning(
+            "[MentorAgent:RAG] {Source} implements only SearchAsync(string, int, CancellationToken), and an " +
+            "IMentorTenantResolver is registered: it is never given the tenant, so it serves every tenant the same " +
+            "documents. Implement SearchAsync(MentorRagRequest, CancellationToken) and filter by MentorRagRequest.TenantId.",
+            type.FullName);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="type"/> implements <see cref="IMentorRagSource.SearchAsync(MentorRagRequest, CancellationToken)"/>
+    /// rather than keeping the interface's default, which calls the text overload. A type that cannot be read counts as one
+    /// that does: no warning on a guess.
+    /// </summary>
+    internal static bool ReadsTheRequest(Type type)
+    {
+        try
+        {
+            var map = type.GetInterfaceMap(typeof(IMentorRagSource));
+            var at = Array.IndexOf(map.InterfaceMethods, s_requestOverload);
+            return at < 0 || map.TargetMethods[at].DeclaringType != typeof(IMentorRagSource);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
+        {
+            return true;
+        }
+    }
 
     // ── Prepare (called BEFORE RunStreamingAsync) ──────────────────────────────
 
@@ -124,10 +171,13 @@ internal sealed class RagContextProvider : AIContextProvider
                 User           = await CurrentUserAsync(ct),
                 PageName       = PageContext?.PageName,
                 PageData       = PageContext?.ContextData ?? new Dictionary<string, object?>(),
+                // Story 157 — the turn's tenant, entered before this search; null for a single tenant.
+                TenantId       = MentorTenantContext.Ambient,
             };
             Remember(new ChatMessage(ChatRole.User, userMessage));
+            if (request.TenantId is not null) WarnIfTheSourceIsNeverGivenTheTenant();
 
-            var raw = await _ragSource.SearchAsync(request, ct);
+            var raw = await SearchAsync(request, ct);
 
             // Apply minimum score threshold — discard low-relevance documents
             // so they are neither injected into the prompt nor shown as source chips.
@@ -179,13 +229,51 @@ internal sealed class RagContextProvider : AIContextProvider
         }
         catch (Exception ex)
         {
+            // Story 195 — the line names the source, as the metric does.
             if (Faults is not null)
-                Faults.Warn(_logger, ex, "[MentorAgent:RAG] PrepareAsync failed — RAG context skipped.");
+                Faults.Warn(_logger, ex, "[MentorAgent:RAG] The search of {Source} failed — RAG context skipped.", SourceName);
             else
-                _logger.LogWarning(ex, "[MentorAgent:RAG] PrepareAsync failed — RAG context skipped.");
+                _logger.LogWarning(ex, "[MentorAgent:RAG] The search of {Source} failed — RAG context skipped.", SourceName);
             _pendingSources = null;
         }
     }
+
+    /// <summary>The source's name, for the log, the metric and the span: its type's full name.</summary>
+    private string SourceName => _ragSource.GetType().FullName ?? _ragSource.GetType().Name;
+
+    /// <summary>
+    /// Story 195 — the search itself, in its <c>mentor.rag.search</c> span, and a failure counted for monitoring with the
+    /// source's name and the exception's type: a failed search used to leave a Warning line only. A source that answers
+    /// with no list fails here, by name, rather than later on a null. A Stop during the search is no failure of the source.
+    /// </summary>
+    private async Task<IReadOnlyList<MentorRagResult>> SearchAsync(MentorRagRequest request, CancellationToken ct)
+    {
+        var source = SourceName;
+        using var span = Telemetry?.StartActivity("mentor.rag.search");
+        span?.SetTag(Observability.MentorTelemetry.RagSourceTag, source);
+        try
+        {
+            return await _ragSource.SearchAsync(request, ct)
+                   ?? throw new InvalidOperationException(
+                       $"{source} answered with no list; a source that finds nothing returns an empty one.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            var type = ex.GetType().FullName ?? ex.GetType().Name;
+            span?.SetTag(Observability.MentorTelemetry.ErrorTypeTag, type);
+            span?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, type);
+            if (Telemetry is { } telemetry)
+            {
+                var tags = Observability.MentorTelemetry.Tags(Observability.MentorTelemetry.RagSourceTag, source);
+                tags.Add(Observability.MentorTelemetry.ErrorTypeTag, type);
+                telemetry.RagFailures.Add(1, tags);
+            }
+            throw;
+        }
+    }
+
+    /// <summary>MentorAgent's instruments, when <c>EnableObservability</c> is on (story 195).</summary>
+    internal Observability.MentorTelemetry? Telemetry { get; init; }
 
     /// <summary>
     /// The threshold this turn applies, and where it came from: <see cref="MentorOptions.RagMinScore"/>
@@ -227,13 +315,36 @@ internal sealed class RagContextProvider : AIContextProvider
     }
 
     /// <summary>
-    /// Forgets the conversation this provider has seen. Called when the session is reset or replaced by a
-    /// restored one: the next search must not be told about messages that are no longer the conversation.
+    /// Forgets the conversation this provider has seen, and tells the source (story 196). Called when the session is
+    /// reset, when a restored conversation takes its place, and when one the service no longer knows is replaced
+    /// (BUG-110): the next search must not be told about messages that are no longer the conversation, and a source that
+    /// keeps state for it clears it. A source that throws, or does not answer within <c>SafetyCheckTimeout</c>, is logged
+    /// and changes nothing else: the conversation has changed already. A Stop is a Stop.
     /// </summary>
-    internal void ForgetConversation()
+    internal async Task ForgetConversationAsync(
+        MentorConversationChangeReason reason, string? sessionId, string? tenantId, CancellationToken ct = default)
     {
         _recent.Clear();
         _pendingSources = null;
+        if (!_options.UseRag || !HasRealSource) return;
+
+        var change = new MentorConversationChange { Reason = reason, SessionId = sessionId, TenantId = tenantId };
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        bounded.CancelAfter(_options.SafetyCheckTimeout);
+        try
+        {
+            await _ragSource.OnConversationChangedAsync(change, bounded.Token).WaitAsync(bounded.Token);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "[MentorAgent:RAG] {Source} failed when told the conversation changed ({Reason}) — the conversation " +
+                "changed anyway.", SourceName, reason);
+        }
     }
 
     // ── AIContextProvider overrides ────────────────────────────────────────────
@@ -242,6 +353,13 @@ internal sealed class RagContextProvider : AIContextProvider
         InvokingContext context,
         CancellationToken cancellationToken = default)
     {
+        // Story 194 — a search that ran to the end and kept nothing, none returned or every one below the threshold, is
+        // said to the model with RagNoResultsNotice; a search that failed (null) or the no-op source says nothing.
+        if (_pendingSources is { Count: 0 })
+            return ValueTask.FromResult(_options.RagNoResultsNotice && HasRealSource
+                ? new AIContext { Instructions = NothingFoundHeading + NothingFound }
+                : new AIContext());
+
         if (_pendingSources is not { Count: > 0 })
             return ValueTask.FromResult(new AIContext());
 

@@ -54,9 +54,12 @@ internal sealed record MethodDiscoveryInfo(
     string? NavigateTo,
     bool ReadOnly = false,
     bool IsMentorAction = false,
-    bool ConfirmationDeclared = false
+    bool ConfirmationDeclared = false,
+    bool EnabledByDefault = true
 )
 {
+    // EnabledByDefault is what the code says: [MentorAction(Enabled = false)], or an action MentorAgent registers off
+    // (story 1549). An IMentorActionGovernor may turn it on; MentorActionGovernance decides.
     // RequiresConfirmation is the EFFECTIVE value: what the attribute declares, or — for a [MentorAction]
     // that declares nothing — MentorOptions.RequireConfirmationForWrites applied to it (story 152). Every
     // consumer (the gate, tool filtering, /mcp, the A2A card, the zero-match fallback) reads this one field.

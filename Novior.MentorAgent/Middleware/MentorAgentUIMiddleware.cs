@@ -104,7 +104,8 @@ internal sealed class MentorAgentUIMiddleware
             ? raw
             : new TokenUsageChatClient(raw, _tokenUsage, _metrics,
                 (_loggerFactory ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance)
-                    .CreateLogger<TokenUsageChatClient>());
+                    .CreateLogger<TokenUsageChatClient>(),
+                _services?.GetService<MentorSessionTokenUsage>());   // story 171
     }
 
     // -- Run middleware (non-streaming) ----------------------------------------
@@ -251,7 +252,7 @@ internal sealed class MentorAgentUIMiddleware
         }
 
         _metrics.RecordGuardrailBlock();
-        _telemetry?.GuardrailBlocks.Add(1);
+        _telemetry?.GuardrailBlocks.Add(1, Observability.MentorTelemetry.Tags());
         _state.NotifyStreamingChunk(L.Get(withheld));
     }
 
@@ -370,9 +371,10 @@ internal sealed class MentorAgentUIMiddleware
         string? description = null)
     {
         _logger.LogDebug("[MentorAgent] Tool call: {Name}", toolName);
+        Turn?.Gated(callId);                 // story 526 — the call was found, and reached the gate
         _metrics.RecordToolCall(toolName);   // Wave 3 #9 — top-actions metric
         // "mentoragent.tool" is a metric tag dashboards group by, not a namespace: keep it on a rename.
-        _telemetry?.ToolCalls.Add(1, new KeyValuePair<string, object?>("mentoragent.tool", toolName));  // #8
+        _telemetry?.ToolCalls.Add(1, Observability.MentorTelemetry.Tags("mentoragent.tool", toolName));  // #8
         using var toolActivity = _telemetry?.StartActivity($"mentor.tool.{toolName}");                   // #8
 
         // In Native mode a confirmed call has been decided up to its confirmation already, by the orchestrator:
@@ -388,9 +390,28 @@ internal sealed class MentorAgentUIMiddleware
         };
         call.Span = toolActivity;
 
+        // A call the governor refused (stories 1549, 1546): its last decision, and what the model reads.
+        object? Refuse(OffCall refusal)
+        {
+            Decide(call, refusal.Outcome, refusal.Reason, exceptionType: refusal.ExceptionType);
+            return refusal.Outcome == MentorActionOutcome.Stopped
+                ? MentorUtils.ToolStopped(refusal.Text, Lang)
+                : MentorUtils.ToolError(refusal.Text);
+        }
+
+        // -- 0. Story 1549: the action is on -----------------------------------
+        // What the code says, or the application's governor, before the roles: an action that is off is refused to
+        // everyone, and nobody is asked to confirm it. A call confirmed in Native mode is asked again, as the roles are.
+        if (await CheckEnabledAsync(call, arguments, cancellationToken) is { } off)
+            return Refuse(off);
+
         // -- 1. Auth check (RequiredRoles) -------------------------------------
-        var roles = await CheckRolesAsync(toolName, cancellationToken, method);
+        // Story 1546 — the governor's roles, when it gives them, in place of the code's: asked at every check.
+        var governed = await GovernedRolesAsync(call, arguments, cancellationToken);
+        if (governed.Refusal is { } governorFailed) return Refuse(governorFailed);
+        var roles = await CheckRolesAsync(toolName, cancellationToken, method, governed.Roles);
         call.Roles = roles.Roles;
+        call.RolesFromOutside = governed.FromOutside;
         call.User  = roles.User ?? call.User;
         if (!roles.Allowed)
         {
@@ -407,8 +428,17 @@ internal sealed class MentorAgentUIMiddleware
             : await ReadUserForDecisionsAsync(cancellationToken);
 
         // Whether the action asks for a confirmation of its own, read for every call that has none yet: a
-        // RequiresApproval that turned true after the coordinator was built counts (BUG-203).
-        var declared = confirmedBefore is null && _confirmations.RequiresApproval(toolName, method);
+        // RequiresApproval that turned true after the coordinator was built counts (BUG-203). Story 1547 — the governor
+        // decides it in place of the code, asked at every call: the call asks when the session's answer or the call's
+        // does, so a confirmation added counts at once, and one taken away from the next session.
+        var confirmation = new ConfirmationAtTheCall(false, false);
+        if (confirmedBefore is null)
+        {
+            var governedConfirmation = await GovernedConfirmationAsync(call, arguments, cancellationToken);
+            if (governedConfirmation.Refusal is { } governorFailedOnConfirmation) return Refuse(governorFailedOnConfirmation);
+            confirmation = Confirms(call, governedConfirmation.Choice);
+        }
+        var declared = confirmation.Asks;
 
         // A call the orchestrator confirmed in Native mode was decided up to its confirmation there, BeforeActionAsync
         // included: IsAllowedAsync is asked again, as the roles are, for a permission lost while the banner waited.
@@ -425,10 +455,11 @@ internal sealed class MentorAgentUIMiddleware
         // orchestrator asks. One that reaches the gate unconfirmed anyway was let through by an auto-approval rule
         // (or "don't ask again") of the framework's middleware, or has no marker, its confirmation declared after the
         // coordinator was built: the gate asks for that one, as in Blocking mode (BUG-203). A policy's Confirm is
-        // asked here in both modes.
+        // asked here in both modes, and so is a confirmation the governor requires: no auto-approval rule, which is the
+        // code's, lets that one through (story 1547).
         var blocking = _options.HitlMode == MentorHitlMode.Blocking || alwaysBlockForApproval;
         var marked = !blocking && ApprovalMarked?.Contains(toolName) == true;
-        var asks = (declared && !marked) || policy.Result == PolicyResult.Confirm;
+        var asks = (declared && (!marked || confirmation.Required)) || policy.Result == PolicyResult.Confirm;
 
         // A task from another agent has nobody to confirm anything: waiting here held the task until the calling
         // agent gave up. Refuse at once, and say why — before Allowed, so the decisions read as the MCP server's, where
@@ -531,7 +562,10 @@ internal sealed class MentorAgentUIMiddleware
             // A role taken away meanwhile must stop the action here, as it does in Native mode, where the
             // approved call comes back through step 1. Without this the Confirm ran an action the user
             // was no longer allowed to run (BUG-143).
-            roles = await CheckRolesAsync(toolName, cancellationToken, method);
+            governed = await GovernedRolesAsync(call, arguments, cancellationToken);
+            if (governed.Refusal is { } governorFailedAfter) return Refuse(governorFailedAfter);
+            roles = await CheckRolesAsync(toolName, cancellationToken, method, governed.Roles);
+            call.RolesFromOutside = governed.FromOutside;
             if (!roles.Allowed)
             {
                 _logger.LogWarning("[MentorAgent] Tool '{Name}' blocked after confirmation: {Reason}", toolName, roles.Error);
@@ -690,6 +724,19 @@ internal sealed class MentorAgentUIMiddleware
     internal MentorActionPolicies? Policies { get; set; }
 
     /// <summary>
+    /// The application's governor of its actions (story 1549). Set by the registration; null when the middleware is
+    /// built by hand, which then follows the code alone.
+    /// </summary>
+    internal MentorActionGovernance? Governance { get; set; }
+
+    /// <summary>
+    /// The roles the governor gave the application's actions as the session was built, by the action's method, in place
+    /// of the code's (story 1546): what the session offers its actions by. Set by the orchestrator; null without a
+    /// governor. A call is checked against the governor's answer at the call (<see cref="GovernedRolesAsync"/>).
+    /// </summary>
+    internal IReadOnlyDictionary<MethodInfo, string[]>? SessionRoles { get; set; }
+
+    /// <summary>
     /// In Native mode, the coordinator's tools that carry the approval marker, by name: the framework stops before a
     /// call to one of them. Set by the orchestrator when it builds the coordinator.
     /// </summary>
@@ -741,6 +788,13 @@ internal sealed class MentorAgentUIMiddleware
             Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
         };
 
+    /// <summary>
+    /// What the governor is asked about a call: the policies' request, with the code's description and confirmation —
+    /// what the governor answers in place of (stories 1547, 1548). The code's roles are the caller's to set.
+    /// </summary>
+    private MentorActionRequest GovernorRequest(GateCall call, IEnumerable<KeyValuePair<string, object?>>? arguments)
+        => PolicyRequest(call, arguments, description: null, _confirmations.CodeRequiresApproval(call.ToolName, call.Method));
+
     /// <summary>What the policies are asked about one of the coordinator's actions, as a turn decides what to offer.</summary>
     internal MentorActionRequest OfferRequest(AIFunction function, ClaimsPrincipal? user, string? agentName)
         => new()
@@ -759,6 +813,155 @@ internal sealed class MentorAgentUIMiddleware
             RequiresConfirmation = _confirmations.RequiresApproval(function.Name, function.UnderlyingMethod),
             Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
         };
+
+    /// <summary>
+    /// What the governor is asked about one of the application's actions as a session builds its tools (story 1549):
+    /// the coordinator's, a specialist's or a team member's.
+    /// </summary>
+    internal MentorActionRequest OfferRequest(MethodDiscoveryInfo method, MentorAgentKind agentKind, string? agentName,
+        ClaimsPrincipal? user)
+        => new()
+        {
+            Stage                = MentorActionStage.Offer,
+            ToolName             = method.ToolName,
+            Description          = string.IsNullOrWhiteSpace(method.Description) ? null : method.Description,
+            User                 = user,
+            Surface              = Turn?.Surface ?? MentorActionSurface.InProcess,
+            AgentKind            = agentKind,
+            AgentName            = agentName,
+            SessionId            = Session?.Id,
+            TurnId               = Turn?.TurnId,
+            PageName             = PageName(),
+            RequiredRoles        = method.RequiredRoles,
+            RequiresConfirmation = _confirmations.CodeRequiresApproval(method.ToolName, method.Method),
+            Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
+        };
+
+    /// <summary>
+    /// Whether the action a call runs is on (story 1549): what the code says, or the application's governor. Null when
+    /// it is, or when the call is not to one of the application's discovered actions — an MCP tool, a team's tool,
+    /// MentorAgent's own — which the governor does not decide. Otherwise the call's last decision and what the model
+    /// reads: off (<see cref="MentorActionReasons.Disabled"/>), the governor failed
+    /// (<see cref="MentorActionReasons.GovernorFailed"/>), or the turn was stopped while it was asked.
+    /// </summary>
+    internal async ValueTask<OffCall?> CheckEnabledAsync(GateCall call, IEnumerable<KeyValuePair<string, object?>>? arguments,
+        CancellationToken ct)
+    {
+        if ((_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method) is not { } action) return null;
+
+        GovernorAnswer answer;
+        if (Governance is not { Any: true } governance)
+        {
+            if (action.EnabledByDefault) return null;
+            answer = new(false);
+            call.User ??= await ReadUserForDecisionsAsync(ct);
+        }
+        else
+        {
+            call.User ??= await ReadUserAsync(ct);
+            try
+            {
+                answer = await governance.IsEnabledAsync(
+                    GovernorRequest(call, arguments),
+                    action.EnabledByDefault, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                _logger.LogDebug("[MentorAgent] The action governor for '{Name}' was cancelled (Stop pressed, or the connection or circuit closed).", call.ToolName);
+                return new(MentorActionOutcome.Stopped, StopReason, L.Get("stop.request"));
+            }
+        }
+
+        if (answer.Enabled) return null;
+        if (answer.Failed)   // the governance logged it
+            return new(MentorActionOutcome.PolicyFailed, MentorActionReasons.GovernorFailed, L.Get("action.stopped.rule.failed"),
+                answer.ExceptionType);
+
+        _logger.LogInformation("[MentorAgent] Tool '{Name}' is off — not run.", call.ToolName);
+        return new(MentorActionOutcome.Denied, MentorActionReasons.Disabled, L.Get("action.disabled"));
+    }
+
+    /// <summary>
+    /// The roles the governor gives the action a call runs (story 1546), asked before every role check, with the code's
+    /// roles in the request: the governor's list, or the code's when it gives none. Null roles, and nothing asked, without
+    /// a governor or for a call that is not to one of the application's discovered actions: the check then reads the
+    /// session's (<see cref="GetRequiredRoles"/>). When the governor fails, or the turn is stopped while it is asked, the
+    /// call's last decision and what the model reads.
+    /// </summary>
+    internal async ValueTask<(string[]? Roles, bool FromOutside, OffCall? Refusal)> GovernedRolesAsync(GateCall call,
+        IEnumerable<KeyValuePair<string, object?>>? arguments, CancellationToken ct)
+    {
+        if (Governance is not { Any: true } governance
+            || (_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method) is not { } action)
+            return (null, false, null);
+
+        call.User ??= await ReadUserAsync(ct);
+        GovernorRoles answer;
+        try
+        {
+            answer = await governance.RequiredRolesAsync(
+                GovernorRequest(call, arguments) with { RequiredRoles = action.RequiredRoles },
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogDebug("[MentorAgent] The action governor for '{Name}' was cancelled (Stop pressed, or the connection or circuit closed).", call.ToolName);
+            return (null, false, new(MentorActionOutcome.Stopped, StopReason, L.Get("stop.request")));
+        }
+
+        if (answer.Failed)   // the governance logged it
+            return (null, false, new(MentorActionOutcome.PolicyFailed, MentorActionReasons.GovernorFailed,
+                L.Get("action.stopped.rule.failed"), answer.ExceptionType));
+
+        return (answer.Roles ?? action.RequiredRoles, answer.Roles is not null, null);
+    }
+
+    /// <summary>
+    /// The governor's answer about the confirmation of the action a call runs (story 1547), asked after the roles, with
+    /// the call's roles and the code's confirmation in the request. <see cref="MentorConfirmationChoice.Code"/>, and
+    /// nothing asked, without a governor or for a call that is not to one of the application's discovered actions. When
+    /// the governor fails, or the turn is stopped while it is asked, the call's last decision and what the model reads.
+    /// </summary>
+    internal async ValueTask<(MentorConfirmationChoice Choice, OffCall? Refusal)> GovernedConfirmationAsync(GateCall call,
+        IEnumerable<KeyValuePair<string, object?>>? arguments, CancellationToken ct)
+    {
+        if (Governance is not { Any: true } governance
+            || (_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method) is null)
+            return (MentorConfirmationChoice.Code, null);
+
+        call.User ??= await ReadUserAsync(ct);
+        GovernorConfirmation answer;
+        try
+        {
+            answer = await governance.ConfirmationAsync(
+                GovernorRequest(call, arguments), ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogDebug("[MentorAgent] The action governor for '{Name}' was cancelled (Stop pressed, or the connection or circuit closed).", call.ToolName);
+            return (MentorConfirmationChoice.Code, new(MentorActionOutcome.Stopped, StopReason, L.Get("stop.request")));
+        }
+
+        if (answer.Failed)   // the governance logged it
+            return (MentorConfirmationChoice.Code, new(MentorActionOutcome.PolicyFailed, MentorActionReasons.GovernorFailed,
+                L.Get("action.stopped.rule.failed"), answer.ExceptionType));
+
+        return (answer.Choice, null);
+    }
+
+    /// <summary>
+    /// Whether a call is confirmed, with the governor's answer at the call (story 1547): when the session's answer or the
+    /// call's asks for it. Sets <see cref="GateCall.ConfirmationFromOutside"/> when that is not what the code says.
+    /// <see cref="ConfirmationAtTheCall.Required"/>: the governor asked for it, for the session or at the call, and no
+    /// auto-approval rule of Native mode lets the call through unconfirmed — those rules are the code's.
+    /// </summary>
+    internal ConfirmationAtTheCall Confirms(GateCall call, MentorConfirmationChoice atTheCall)
+    {
+        var asks = _confirmations.RequiresApproval(call.ToolName, call.Method, atTheCall);
+        call.ConfirmationFromOutside = asks != _confirmations.CodeRequiresApproval(call.ToolName, call.Method);
+        return new(asks, asks && (atTheCall == MentorConfirmationChoice.Required
+                                  || _confirmations.RequiredForTheSession(call.ToolName, call.Method)));
+    }
 
     /// <summary>The page the user is on, for the policies; none in a task from another agent.</summary>
     internal string? PageName()
@@ -851,6 +1054,9 @@ internal sealed class MentorAgentUIMiddleware
                 span.SetStatus(System.Diagnostics.ActivityStatusCode.Error, exceptionType ?? reason);
         }
 
+        // Story 171 — an evaluated conversation reads its turn's tools here, observers or not.
+        Turn?.Decided?.Invoke(call.ToolName, outcome, reason);
+
         if (Decisions is not { HasObservers: true } decisions) return;
 
         decisions.Publish(new MentorActionDecision
@@ -868,6 +1074,8 @@ internal sealed class MentorAgentUIMiddleware
             ConfirmationId = call.ConfirmationId,
             User           = call.User,
             RequiredRoles  = call.Roles,
+            RolesFromOutside = call.RolesFromOutside,
+            ConfirmationFromOutside = call.ConfirmationFromOutside,
             ConfirmedBy    = outcome == MentorActionOutcome.Confirmed ? confirmedBy : null,
             Timestamp      = at ?? decisions.Time.GetUtcNow(),
             ExceptionType  = failed ? exceptionType : null,
@@ -1073,9 +1281,11 @@ internal sealed class MentorAgentUIMiddleware
     /// in Native mode, where Native wrote a Debug line only and Blocking two Warnings for one missing role.
     /// </para>
     /// </summary>
-    internal async ValueTask<RoleCheck> CheckRolesAsync(string toolName, CancellationToken ct, MethodInfo? method = null)
+    internal async ValueTask<RoleCheck> CheckRolesAsync(string toolName, CancellationToken ct, MethodInfo? method = null,
+        string[]? roles = null)
     {
-        var requiredRoles = GetRequiredRoles(toolName, method);
+        // The roles the governor gave this call (story 1546), else the session's.
+        var requiredRoles = roles ?? GetRequiredRoles(toolName, method);
 
         // No roles required -> open access
         if (requiredRoles.Length == 0) return RoleCheck.Open;
@@ -1136,8 +1346,10 @@ internal sealed class MentorAgentUIMiddleware
     {
         _discoveryCache ??= _discovery.Discover();
 
-        return _discoveryCache.Called(toolName, method)?.RequiredRoles
-               ?? []; // Tool not found -> no roles required
+        if (_discoveryCache.Called(toolName, method) is not { } action) return []; // Tool not found -> no roles required
+
+        // Story 1546 — the roles the governor gave the action as the session was built, in place of the code's.
+        return SessionRoles is { } governed && governed.TryGetValue(action.Method, out var roles) ? roles : action.RequiredRoles;
     }
 
     /// <summary>

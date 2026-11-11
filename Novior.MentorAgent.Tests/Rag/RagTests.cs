@@ -501,7 +501,7 @@ public sealed class RagTests
         error.Should().BeNull();
         host.Chat!.Calls.Should().NotBeEmpty("the turn still reached the model");
         FirstPrompt(host).Should().NotContain(Marker);
-        host.Logs.HasWarning("PrepareAsync failed").Should().BeTrue(host.Logs.WarningText);
+        host.Logs.HasWarning("failed — RAG context skipped").Should().BeTrue(host.Logs.WarningText);
     }
 
     [Fact]
@@ -516,7 +516,7 @@ public sealed class RagTests
         var error = await host.RunTurnAsync("anything");
 
         error.Should().BeNull();
-        host.Logs.HasWarning("PrepareAsync failed").Should().BeTrue(host.Logs.WarningText);
+        host.Logs.HasWarning("failed — RAG context skipped").Should().BeTrue(host.Logs.WarningText);
     }
 
     [Fact]

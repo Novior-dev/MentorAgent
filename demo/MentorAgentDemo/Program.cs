@@ -88,6 +88,11 @@ if (model.IsConfigured)
         // of the records, the first call is list_expenses or show_expense (they are ReadOnly), never a list from memory.
         options.RequireLookupForRecordQuestions = true;
 
+        // A reply that announces or reports an action and calls none gets one more request in the same turn, to call it
+        // now or to say that it was not done (BUG-220). On by default; read here so that a measurement can turn it off
+        // from the command line: --MentorAgent:CheckAnnouncedActions=false.
+        options.CheckAnnouncedActions = builder.Configuration.GetValue("MentorAgent:CheckAnnouncedActions", true);
+
         // Tables in the answers, and cards with buttons from show_expense.
         options.EnableRichResponses = true;
         options.EnableGenerativeCards = true;

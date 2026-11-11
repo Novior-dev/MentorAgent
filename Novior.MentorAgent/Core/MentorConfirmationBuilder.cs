@@ -63,14 +63,59 @@ internal sealed class MentorConfirmationBuilder
     }
 
     /// <summary>
-    /// Returns <see langword="true"/> when the tool must be confirmed by the user before it runs.
+    /// What the application's governor answered about the confirmation of its actions as the session was built, by the
+    /// action's method, when it answered other than <see cref="MentorConfirmationChoice.Code"/> (story 1547): what the
+    /// session marks, forces and offers by. Set by the orchestrator; null without a governor.
+    /// </summary>
+    internal IReadOnlyDictionary<MethodInfo, MentorConfirmationChoice>? SessionConfirmations { get; set; }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when the tool must be confirmed by the user before it runs: what the code
+    /// declares, or what the governor answered for this session (story 1547).
     /// Always <see langword="false"/> when <see cref="MentorOptions.RequireConfirmation"/> is off, so
     /// callers can use this as the single gate.
     /// </summary>
     /// <param name="toolName">The tool's name.</param>
     /// <param name="method">The method the function was built from, when the caller has the function.</param>
     public bool RequiresApproval(string toolName, MethodInfo? method = null)
+        => RequiresApproval(toolName, method, atTheCall: MentorConfirmationChoice.None);
+
+    /// <summary>
+    /// Whether a call is confirmed, with the governor's answer <paramref name="atTheCall"/> (story 1547): when the
+    /// session's answer asks for it or the call's does. A confirmation added counts from the call; one taken away, from
+    /// the next session, whose tools are built without it. <see cref="MentorConfirmationChoice.None"/> at the call adds
+    /// nothing to the session's.
+    /// </summary>
+    internal bool RequiresApproval(string toolName, MethodInfo? method, MentorConfirmationChoice atTheCall)
+    {
+        if (!_options.RequireConfirmation) return false;
+
+        // The tools of the MCP servers the application consumes are their server's to gate, not the governor's.
+        var session = _externalApproval.ContainsKey(toolName) ? MentorConfirmationChoice.Code : SessionChoice(toolName, method);
+        return Asks(session) || Asks(atTheCall);
+
+        bool Asks(MentorConfirmationChoice choice) => choice switch
+        {
+            MentorConfirmationChoice.Required => true,
+            MentorConfirmationChoice.None     => false,
+            _                                 => IsDeclaredConfirmationGated(toolName, method),
+        };
+    }
+
+    /// <summary>Whether the governor answered <see cref="MentorConfirmationChoice.Required"/> for the tool as the session was built.</summary>
+    internal bool RequiredForTheSession(string toolName, MethodInfo? method)
+        => !_externalApproval.ContainsKey(toolName) && SessionChoice(toolName, method) == MentorConfirmationChoice.Required;
+
+    /// <summary>Whether the code alone asks for the tool to be confirmed: what a question to the governor carries.</summary>
+    internal bool CodeRequiresApproval(string toolName, MethodInfo? method = null)
         => _options.RequireConfirmation && IsDeclaredConfirmationGated(toolName, method);
+
+    private MentorConfirmationChoice SessionChoice(string toolName, MethodInfo? method)
+        => SessionConfirmations is { Count: > 0 } governed
+           && Discovery.Called(toolName, method) is { } action
+           && governed.TryGetValue(action.Method, out var choice)
+            ? choice
+            : MentorConfirmationChoice.Code;
 
     /// <summary>
     /// Whether the application DECLARES the tool as needing a person's confirmation —

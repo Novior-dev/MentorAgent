@@ -28,7 +28,7 @@
 
   <ItemGroup>
     <!-- The library from this repository. In your own application, reference the package instead:
-         <PackageReference Include="Novior.MentorAgent" Version="1.2.0" /> -->
+         <PackageReference Include="Novior.MentorAgent" Version="1.3.0" /> -->
     <ProjectReference Include="..\..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
   </ItemGroup>
 

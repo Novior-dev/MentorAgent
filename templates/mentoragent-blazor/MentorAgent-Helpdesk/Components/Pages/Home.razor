@@ -1,0 +1,40 @@
+@page "/"
+@implements IDisposable
+@inject TicketStore Tickets
+
+<PageTitle>Tickets · Helpdesk</PageTitle>
+
+<h1>Tickets</h1>
+<p class="muted">
+    Ask the assistant: "Which tickets are open?", "Assign ticket 2 to Alex", "Close ticket 3, the laptop was delivered".
+    It asks you to confirm before it changes a ticket, and it closes tickets only for a support agent: switch to Sam to
+    see the difference.
+</p>
+
+<table class="tickets">
+    <thead>
+        <tr><th>#</th><th>Title</th><th>Requester</th><th>Assigned to</th><th>Opened</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+        @foreach (var ticket in Tickets.All())
+        {
+            <tr class="@(ticket.Status == TicketStatus.Closed ? "is-closed" : "")">
+                <td>@ticket.Id</td>
+                <td>@ticket.Title</td>
+                <td>@ticket.Requester</td>
+                <td>@(ticket.AssignedTo ?? "—")</td>
+                <td>@ticket.Opened.ToString("d MMM yyyy")</td>
+                <td>@ticket.Status@(ticket.Resolution is { } r ? $": {r}" : "")</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    // The assistant changes the tickets from its own turn: the table follows.
+    protected override void OnInitialized() => Tickets.Changed += Refresh;
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Tickets.Changed -= Refresh;
+}

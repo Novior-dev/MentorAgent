@@ -36,6 +36,8 @@ project.fragment.lock.json
 artifacts/
 artifacts-rc*/
 **/Properties/launchSettings.json
+# Except the templates': `dotnet new` copies them into the project it creates, with new ports.
+!templates/*/*/Properties/launchSettings.json
 
 # ── Blazor WASM ───────────────────────────────────────────────────────────────
 wwwroot/_content/

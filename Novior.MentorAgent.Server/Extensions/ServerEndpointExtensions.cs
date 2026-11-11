@@ -240,9 +240,25 @@ public static class ServerEndpointExtensions
         var role = endpoints.ServiceProvider.GetService<IOptions<MentorOptions>>()?.Value.DashboardRole ?? "Admin";
         // A registered IMentorMetricsStore may serve an external aggregate (Prometheus/Azure Monitor);
         // otherwise we return the live in-RAM snapshot (roadmap #9 durable dashboard).
+        // Story 156 — with a tenant resolver, of the caller's tenant only: an administrator of one tenant never reads
+        // another's figures, and one whose tenant the resolver does not name reads none (403). The whole instance is read
+        // from OpenTelemetry. 204 when a custom IMentorMetrics keeps nothing per tenant.
         var metricsEndpoint = endpoints.MapGet("/mentor/admin/metrics",
-            async (IMentorMetrics metrics, IMentorMetricsStore store, CancellationToken ct) =>
-                Results.Ok(await store.QueryAsync(ct) ?? metrics.GetSnapshot()));
+            async (IMentorMetrics metrics, IMentorMetricsStore store, IMentorTenant tenants, CancellationToken ct) =>
+            {
+                string? tenant;
+                try
+                {
+                    tenant = await tenants.GetIdAsync(ct);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status403Forbidden);
+                }
+
+                var snapshot = await store.QueryAsync(tenant, ct) ?? metrics.GetSnapshot(tenant);
+                return snapshot is null ? Results.NoContent() : Results.Ok(snapshot);
+            });
         if (!string.IsNullOrEmpty(role))
             metricsEndpoint.RequireAuthorization(new AuthorizeAttribute { Roles = role });
 

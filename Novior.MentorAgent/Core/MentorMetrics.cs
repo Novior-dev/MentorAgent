@@ -15,6 +15,12 @@ namespace Novior.MentorAgent.Core;
 /// with an hourly time series for the temporal charts. Cost is computed per model, only for models
 /// present in <see cref="MentorOptions.ModelPricing"/>. Conversation-level counters (turns, errors,
 /// guardrail blocks, top actions) are model-independent.
+///
+/// <para>
+/// With an <c>IMentorTenantResolver</c> registered, what a tenant's turn or MCP call records counts in the instance's figures
+/// and in that tenant's, read with <see cref="GetSnapshot(string)"/>. A tenant's figures are kept in RAM since
+/// the process started: <see cref="IMentorMetricsStore"/> saves and seeds the instance's only.
+/// </para>
 /// </summary>
 public sealed class MentorMetrics : IMentorMetrics
 {
@@ -23,14 +29,9 @@ public sealed class MentorMetrics : IMentorMetrics
     private readonly MentorTokenUsage _tokens;
     private readonly MentorOptions _options;
 
-    private long _turns;
-    private long _served;
-    private long _errors;
-    private long _guardrailBlocks;
-    private readonly ConcurrentDictionary<string, long> _actions = new(StringComparer.OrdinalIgnoreCase);
-
-    // Per-model usage buckets, keyed by model id.
-    private readonly ConcurrentDictionary<string, ModelBucket> _models = new(StringComparer.OrdinalIgnoreCase);
+    // The instance's figures, and each tenant's (story 156).
+    private readonly Tally _all = new();
+    private readonly ConcurrentDictionary<string, Tally> _tenants = new(StringComparer.Ordinal);
 
     /// <summary>Primary (cheap) chat model id — set once by the orchestrator. Also used for pricing lookup.</summary>
     public string? ModelId { get; set; }
@@ -47,13 +48,27 @@ public sealed class MentorMetrics : IMentorMetrics
         _options = options.Value;
     }
 
-    public void RecordTurn()           => Interlocked.Increment(ref _turns);
-    public void RecordServed()         => Interlocked.Increment(ref _served);
-    public void RecordError()          => Interlocked.Increment(ref _errors);
-    public void RecordGuardrailBlock() => Interlocked.Increment(ref _guardrailBlocks);
+    public void RecordTurn()           => Record(static t => Interlocked.Increment(ref t.Turns));
+    public void RecordServed()         => Record(static t => Interlocked.Increment(ref t.Served));
+    public void RecordError()          => Record(static t => Interlocked.Increment(ref t.Errors));
+    public void RecordGuardrailBlock() => Record(static t => Interlocked.Increment(ref t.GuardrailBlocks));
 
     public void RecordToolCall(string toolName)
-        => _actions.AddOrUpdate(string.IsNullOrWhiteSpace(toolName) ? "unknown" : toolName, 1, (_, c) => c + 1);
+    {
+        var name = string.IsNullOrWhiteSpace(toolName) ? "unknown" : toolName;
+        Record(t => t.Actions.AddOrUpdate(name, 1, (_, c) => c + 1));
+    }
+
+    /// <summary>
+    /// Records into the instance's figures and, in a turn or an MCP call of a tenant, into that tenant's: the turn and the
+    /// MCP handler enter their tenant in the flow they serve (story 156).
+    /// </summary>
+    private void Record(Action<Tally> record)
+    {
+        record(_all);
+        if (MentorTenantContext.Ambient is { } tenant)
+            record(_tenants.GetOrAdd(tenant, static _ => new Tally()));
+    }
 
     /// <summary>
     /// Records one model round-trip's usage against the given model id (roadmap #9 per-model dashboard).
@@ -82,34 +97,9 @@ public sealed class MentorMetrics : IMentorMetrics
         _tokens.Record(inputTokens, outputTokens);
 
         var id = string.IsNullOrWhiteSpace(modelId) ? (ModelId ?? "unknown") : Canonicalise(modelId);
-        var b = _models.GetOrAdd(id, _ => new ModelBucket());
-        b.Kind = Classify(id);
-
-        Interlocked.Add(ref b.Input, inputTokens);
-        Interlocked.Add(ref b.Output, outputTokens);
-        Interlocked.Increment(ref b.Requests);
-        if (!usageMeasured) Interlocked.Increment(ref b.RequestsWithoutUsage);
-        if (latencyMs is { } l)
-        {
-            Interlocked.Add(ref b.LatencySumMs, (long)l);
-            Interlocked.Increment(ref b.LatencyCount);
-        }
-        if (timeToFirstByteMs is { } t)
-        {
-            Interlocked.Add(ref b.TtfbSumMs, (long)t);
-            Interlocked.Increment(ref b.TtfbCount);
-        }
-
+        var kind = Classify(id);
         var bucket = ToBucketKey(DateTimeOffset.UtcNow);
-        var p = b.Series.GetOrAdd(bucket, _ => new Point());
-        Interlocked.Add(ref p.Input, inputTokens);
-        Interlocked.Add(ref p.Output, outputTokens);
-        Interlocked.Increment(ref p.Requests);
-        if (latencyMs is { } l2)
-        {
-            Interlocked.Add(ref p.LatencySumMs, (long)l2);
-            Interlocked.Increment(ref p.LatencyCount);
-        }
+        Record(tally => tally.AddUsage(id, kind, bucket, inputTokens, outputTokens, latencyMs, timeToFirstByteMs, usageMeasured));
     }
 
     /// <summary>
@@ -177,6 +167,12 @@ public sealed class MentorMetrics : IMentorMetrics
         EmbeddingModelId ??= (_options.EmbeddingGenerator?
             .GetService(typeof(EmbeddingGeneratorMetadata)) as EmbeddingGeneratorMetadata)?.DefaultModelId;
 
+        EnsureRows(_all);
+    }
+
+    /// <summary>The configured models' rows in <paramref name="tally"/>, at zero until they serve traffic.</summary>
+    private void EnsureRows(Tally tally)
+    {
         Ensure(ModelId, MentorModelKind.Cheap);
         Ensure(StrongModelId, MentorModelKind.Strong);
         Ensure(EmbeddingModelId, MentorModelKind.Embedding);
@@ -184,7 +180,7 @@ public sealed class MentorMetrics : IMentorMetrics
         void Ensure(string? id, MentorModelKind kind)
         {
             if (string.IsNullOrWhiteSpace(id)) return;
-            _models.GetOrAdd(id, _ => new ModelBucket()).Kind = kind;
+            tally.Models.GetOrAdd(id, _ => new ModelBucket()).Kind = kind;
         }
     }
 
@@ -193,12 +189,28 @@ public sealed class MentorMetrics : IMentorMetrics
         // Guarantee the configured models are present even if a store restore (Seed) cleared the map
         // after startup registration — so a never-used strong model still shows a (zero) row (#9/#11).
         EnsureConfiguredModels();
+        return Snapshot(_all);
+    }
 
+    /// <inheritdoc/>
+    public MentorMetricsSnapshot? GetSnapshot(string? tenant)
+    {
+        if (tenant is null) return GetSnapshot();
+
+        // A tenant with no use yet shows the configured models at zero, as the instance does before its first turn.
+        EnsureConfiguredModels();
+        var tally = _tenants.TryGetValue(tenant, out var used) ? used : new Tally();
+        EnsureRows(tally);
+        return Snapshot(tally);
+    }
+
+    private MentorMetricsSnapshot Snapshot(Tally tally)
+    {
         var cutoff = ToBucketKey(DateTimeOffset.UtcNow - _options.MetricsRetention);
         var pricing = _options.ModelPricing;
 
-        var models = new List<MentorModelUsage>(_models.Count);
-        foreach (var (id, b) in _models)
+        var models = new List<MentorModelUsage>(tally.Models.Count);
+        foreach (var (id, b) in tally.Models)
         {
             // Prune buckets older than the retention window.
             foreach (var key in b.Series.Keys)
@@ -258,7 +270,7 @@ public sealed class MentorMetrics : IMentorMetrics
         decimal? aggIn  = models.Any(m => m.InputCost  is not null) ? models.Sum(m => m.InputCost  ?? 0) : null;
         decimal? aggOut = models.Any(m => m.OutputCost is not null) ? models.Sum(m => m.OutputCost ?? 0) : null;
 
-        var topActions = _actions
+        var topActions = tally.Actions
             .Select(kv => new MentorActionCount(kv.Key, kv.Value))
             .OrderByDescending(a => a.Count)
             .Take(10)
@@ -269,10 +281,10 @@ public sealed class MentorMetrics : IMentorMetrics
             TotalInputTokens    = totalIn,
             TotalOutputTokens   = totalOut,
             RequestCount        = requests,
-            TurnCount           = Interlocked.Read(ref _turns),
-            ServedCount         = Interlocked.Read(ref _served),
-            ErrorCount          = Interlocked.Read(ref _errors),
-            GuardrailBlockCount = Interlocked.Read(ref _guardrailBlocks),
+            TurnCount           = Interlocked.Read(ref tally.Turns),
+            ServedCount         = Interlocked.Read(ref tally.Served),
+            ErrorCount          = Interlocked.Read(ref tally.Errors),
+            GuardrailBlockCount = Interlocked.Read(ref tally.GuardrailBlocks),
             ModelId             = ModelId,
             InputCost           = aggIn,
             OutputCost          = aggOut,
@@ -286,20 +298,21 @@ public sealed class MentorMetrics : IMentorMetrics
     /// <summary>
     /// Restores counters and per-model buckets from a persisted snapshot (roadmap #9 durable dashboard).
     /// Called once at startup by the persistence hosted service so totals continue across a restart.
+    /// The instance's totals only: a tenant's figures start again from zero.
     /// </summary>
     public void Seed(MentorMetricsSnapshot snapshot)
     {
         _tokens.Seed(snapshot.TotalInputTokens, snapshot.TotalOutputTokens, snapshot.RequestCount);
-        Interlocked.Exchange(ref _turns, snapshot.TurnCount);
-        Interlocked.Exchange(ref _served, snapshot.ServedCount);
-        Interlocked.Exchange(ref _errors, snapshot.ErrorCount);
-        Interlocked.Exchange(ref _guardrailBlocks, snapshot.GuardrailBlockCount);
+        Interlocked.Exchange(ref _all.Turns, snapshot.TurnCount);
+        Interlocked.Exchange(ref _all.Served, snapshot.ServedCount);
+        Interlocked.Exchange(ref _all.Errors, snapshot.ErrorCount);
+        Interlocked.Exchange(ref _all.GuardrailBlocks, snapshot.GuardrailBlockCount);
 
-        _actions.Clear();
+        _all.Actions.Clear();
         foreach (var a in snapshot.TopActions)
-            _actions[a.Action] = a.Count;
+            _all.Actions[a.Action] = a.Count;
 
-        _models.Clear();
+        _all.Models.Clear();
         foreach (var m in snapshot.Models)
         {
             var b = new ModelBucket
@@ -316,27 +329,79 @@ public sealed class MentorMetrics : IMentorMetrics
                     Output   = pt.OutputTokens,
                     Requests = pt.RequestCount,
                 };
-            _models[m.ModelId] = b;
+            _all.Models[m.ModelId] = b;
         }
 
         if (snapshot.ModelId is { } model)
             ModelId ??= model;
     }
 
+    /// <summary>Resets every counter: the instance's and every tenant's.</summary>
     public void Reset()
     {
         _tokens.Reset();
-        Interlocked.Exchange(ref _turns, 0);
-        Interlocked.Exchange(ref _served, 0);
-        Interlocked.Exchange(ref _errors, 0);
-        Interlocked.Exchange(ref _guardrailBlocks, 0);
-        _actions.Clear();
-        _models.Clear();
+        _all.Clear();
+        _tenants.Clear();
     }
 
     // Hourly bucket key = whole hours since the Unix epoch (UTC), so buckets align across models.
     private static long ToBucketKey(DateTimeOffset when) => when.ToUnixTimeSeconds() / (BucketMinutes * 60);
     private static DateTimeOffset FromBucketKey(long key) => DateTimeOffset.FromUnixTimeSeconds(key * BucketMinutes * 60);
+
+    /// <summary>The figures of the instance, or of one tenant.</summary>
+    private sealed class Tally
+    {
+        public long Turns;
+        public long Served;
+        public long Errors;
+        public long GuardrailBlocks;
+        public readonly ConcurrentDictionary<string, long> Actions = new(StringComparer.OrdinalIgnoreCase);
+
+        // Per-model usage buckets, keyed by model id.
+        public readonly ConcurrentDictionary<string, ModelBucket> Models = new(StringComparer.OrdinalIgnoreCase);
+
+        public void AddUsage(string id, MentorModelKind kind, long bucket, long inputTokens, long outputTokens,
+            double? latencyMs, double? timeToFirstByteMs, bool usageMeasured)
+        {
+            var b = Models.GetOrAdd(id, _ => new ModelBucket());
+            b.Kind = kind;
+
+            Interlocked.Add(ref b.Input, inputTokens);
+            Interlocked.Add(ref b.Output, outputTokens);
+            Interlocked.Increment(ref b.Requests);
+            if (!usageMeasured) Interlocked.Increment(ref b.RequestsWithoutUsage);
+            if (latencyMs is { } l)
+            {
+                Interlocked.Add(ref b.LatencySumMs, (long)l);
+                Interlocked.Increment(ref b.LatencyCount);
+            }
+            if (timeToFirstByteMs is { } t)
+            {
+                Interlocked.Add(ref b.TtfbSumMs, (long)t);
+                Interlocked.Increment(ref b.TtfbCount);
+            }
+
+            var p = b.Series.GetOrAdd(bucket, _ => new Point());
+            Interlocked.Add(ref p.Input, inputTokens);
+            Interlocked.Add(ref p.Output, outputTokens);
+            Interlocked.Increment(ref p.Requests);
+            if (latencyMs is { } l2)
+            {
+                Interlocked.Add(ref p.LatencySumMs, (long)l2);
+                Interlocked.Increment(ref p.LatencyCount);
+            }
+        }
+
+        public void Clear()
+        {
+            Interlocked.Exchange(ref Turns, 0);
+            Interlocked.Exchange(ref Served, 0);
+            Interlocked.Exchange(ref Errors, 0);
+            Interlocked.Exchange(ref GuardrailBlocks, 0);
+            Actions.Clear();
+            Models.Clear();
+        }
+    }
 
     private sealed class ModelBucket
     {

@@ -1,0 +1,9 @@
+<Project>
+  <!-- The templates' own build settings, for whoever opens a template's projects here in the repository. Without
+       this file they would inherit the repository root's, which are the packages' rules: XML documentation,
+       package validation against the previous release, release notes from the CHANGELOG. A project that
+       `dotnet new` creates does not see this file: it carries its settings in its own project files. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>

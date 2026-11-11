@@ -54,8 +54,22 @@ internal sealed class MentorWarmUpService(
                 "so it must not throw or depend on running once.",
                 MentorRegistrationSnapshot.RegistrationTimeOptions);
 
+        // Story 156 — one ChatHistoryProvider instance for the whole application keeps every tenant's conversations, whatever
+        // the resolver names: only the provider can key them, and only a factory sees the conversation's scope.
+        if (options.Value.ChatHistoryProvider is not null
+            && !MentorTenantContext.IsSingleTenant(services.GetService<IMentorTenantResolver>()))
+            logger.LogWarning(
+                "[MentorAgent] ChatHistoryProvider is one instance for the whole application, and an IMentorTenantResolver " +
+                "is registered: that provider serves every tenant's conversations unless it keys them itself. Use " +
+                "ChatHistoryProviderFactory, which runs in each conversation's scope, and read IMentorTenant there.");
+
         if (!options.Value.WarmUpAtStartup)
         {
+            // Story 173 — the chat model is warmed by the warm-up, which is off.
+            if (options.Value.WarmUpChatModel)
+                logger.LogWarning(
+                    "[MentorAgent] WarmUpChatModel has no effect without WarmUpAtStartup: the chat model is warmed up by " +
+                    "the start-up warm-up, which is off. Turn WarmUpAtStartup on as well.");
             Completed.TrySetResult();
             return Task.CompletedTask;
         }

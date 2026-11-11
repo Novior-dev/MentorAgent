@@ -65,6 +65,19 @@ public sealed record MentorActionDecision
     public IReadOnlyList<string> RequiredRoles { get; init; } = [];
 
     /// <summary>
+    /// Whether <see cref="RequiredRoles"/> are the <c>IMentorActionGovernor</c>'s, in place of the code's: true when
+    /// the governor answered the roles of this call with a list, empty or not.
+    /// </summary>
+    public bool RolesFromOutside { get; init; }
+
+    /// <summary>
+    /// Whether the <c>IMentorActionGovernor</c> changed, from what the code says, whether this call is confirmed: true
+    /// when it took away a confirmation the code asks for, or asked for one the code does not. False on the decisions
+    /// made before the confirmation is decided.
+    /// </summary>
+    public bool ConfirmationFromOutside { get; init; }
+
+    /// <summary>
     /// On <see cref="MentorActionOutcome.Confirmed"/>, who confirmed: the caller of <c>POST /mentor/approve</c>;
     /// in a circuit, in the MAUI app and through the hub's <c>RespondToApproval</c>, the session's signed-in user.
     /// </summary>

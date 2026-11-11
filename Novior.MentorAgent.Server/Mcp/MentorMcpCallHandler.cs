@@ -37,6 +37,14 @@ namespace Novior.MentorAgent.Server.Mcp;
 /// <c>tools/list</c>, which tools each caller is offered; on <c>tools/call</c>, after the tool is found and before
 /// it runs, whether the call may run. Nobody can confirm a call here, so a policy's Confirm refuses it.
 /// </para>
+///
+/// <para>
+/// And whether the action is on (story 1549): the code's word (<c>[MentorAction(Enabled = false)]</c>) or the
+/// application's <see cref="IMentorActionGovernor"/>, asked on <c>tools/list</c> before the policies and on
+/// <c>tools/call</c> as soon as the tool is found. A tool that is off is refused with the words of an unknown one. With
+/// a governor, the roles it gives an action decide which callers see it and may call it, in place of the code's
+/// (story 1546): an action withheld only for its roles is published once the governor requires none.
+/// </para>
 /// </summary>
 internal sealed class MentorMcpCallHandler(
     MentorAgentMcpToolCollection tools,
@@ -48,7 +56,8 @@ internal sealed class MentorMcpCallHandler(
     MentorTelemetry? telemetry = null,
     MentorActionDecisions? decisions = null,
     MentorActionPolicies? policies = null,
-    Abstractions.Core.MentorLocalizer? localizer = null)
+    Abstractions.Core.MentorLocalizer? localizer = null,
+    MentorActionGovernance? governance = null)
 {
     private readonly MentorOptions _options = options.Value;
 
@@ -58,27 +67,85 @@ internal sealed class MentorMcpCallHandler(
         "Say that it has to be done from the application itself.";
 
     /// <summary>
-    /// The <c>tools/list</c> of this request: the tools the caller may see, less those an <see cref="IMentorActionPolicy"/>
-    /// does not offer this caller.
+    /// The <c>tools/list</c> of this request: the tools the caller may see that are on — by the code, or by the
+    /// <see cref="IMentorActionGovernor"/> — less those an <see cref="IMentorActionPolicy"/> does not offer this caller.
     /// </summary>
     internal async ValueTask<ListToolsResult> ListAsync(
         RequestContext<ListToolsRequestParams> context, CancellationToken cancellationToken)
     {
         // Resolved once for the request, as for a call: the same principal decides the roles and is the policies' user.
         var rolePrincipal = tools.ResolveCaller();
-        var published = tools.GetTools(rolePrincipal);
-        if (policies is not { Any: true })
-            return new ListToolsResult { Tools = [.. published.Select(t => t.ProtocolTool)] };
+
+        // Story 155 — the tenant of this request, before anything is decided for it: a resolver that names none lists
+        // nothing, never the single tenant's tools.
+        if (await TenantAsync(rolePrincipal ?? context.User, context.Services, cancellationToken) is { } tenant)
+        {
+            if (!tenant.Ok)
+            {
+                logger.LogWarning(
+                    "[MentorAgent:MCP] The tenant resolver named no tenant ({Failure}) — tools/list lists nothing.", tenant.Failure);
+                return new ListToolsResult { Tools = [] };
+            }
+            MentorTenantContext.Enter(tenant.Id);
+        }
+
+        // Story 157 — the request's tenant on its log lines, as on a turn's.
+        using var tenantLogScope = MentorTenantLogScope.Begin(logger, MentorTenantContext.Ambient);
+
+        var governor = governance is { Any: true } registered ? registered : null;
+        if (governor is null && policies is not { Any: true })
+            return new ListToolsResult { Tools = [.. tools.GetTools(rolePrincipal).Select(t => t.ProtocolTool)] };
 
         await using var scope = RequestScope.For(context.Services, services);
-        var offered = new List<Tool>(published.Count);
-        foreach (var tool in published)
+        var offered = new List<Tool>();
+
+        // Stories 1549, 1546, 1547, 1548 — with a governor, every action it decides about here: listed when it is on, the
+        // caller holds one of the roles it gives, or the code's, and nobody has to confirm it — the governor took the
+        // code's confirmation away, or neither asks for one — with the description the governor gives, or the code's. The
+        // policies are asked with those roles and that description. A call is asked about with the code's description:
+        // the server keeps no session, and the governor is not asked at a call what the model read.
+        if (governor is not null)
+        {
+            foreach (var governable in tools.GovernableTools())
+            {
+                var name = governable.Tool.ProtocolTool.Name;
+                var request = PolicyRequest(MentorActionStage.Offer, name, governable.Tool.ProtocolTool.Description,
+                    governable.CodeRoles, rolePrincipal ?? context.User,
+                    context.Server?.SessionId, callId: null, arguments: null, scope.Services,
+                    _options.RequireConfirmation && governable.CodeConfirms);
+                if (!(await governor.IsEnabledAsync(request, governable.EnabledByDefault, cancellationToken)).Enabled) continue;
+                var governed = await governor.RequiredRolesAsync(request, cancellationToken);
+                if (governed.Failed) continue;
+                var roles = governed.Roles ?? governable.CodeRoles;
+                if (!tools.IsPublishedTo(roles, rolePrincipal)) continue;
+                var confirmation = await governor.ConfirmationAsync(request with { RequiredRoles = roles }, cancellationToken);
+                if (confirmation.Failed || Asks(confirmation.Choice, governable.CodeConfirms)) continue;
+
+                // Story 1548 — the description the caller's model reads: the governor's, in a copy of the tool.
+                var described = await governor.DescriptionAsync(request with { RequiredRoles = roles }, cancellationToken);
+                if (described.Failed) continue;
+                if (policies is { Any: true }
+                    && !await policies.IsOfferedAsync(request with
+                    {
+                        RequiredRoles = roles,
+                        RequiresConfirmation = false,
+                        Description = described.Description ?? request.Description,
+                    }, cancellationToken))
+                    continue;
+                offered.Add(described.Description is { } text
+                    ? Described(governable.Tool.ProtocolTool, text)
+                    : governable.Tool.ProtocolTool);
+            }
+            return new ListToolsResult { Tools = offered };
+        }
+
+        foreach (var tool in tools.GetTools(rolePrincipal))
         {
             var name = tool.ProtocolTool.Name;
             var request = PolicyRequest(MentorActionStage.Offer, name, tool.ProtocolTool.Description,
                 tools.Find(name, rolePrincipal).RequiredRoles, rolePrincipal ?? context.User,
                 context.Server?.SessionId, callId: null, arguments: null, scope.Services);
-            if (await policies.IsOfferedAsync(request, cancellationToken)) offered.Add(tool.ProtocolTool);
+            if (await policies!.IsOfferedAsync(request, cancellationToken)) offered.Add(tool.ProtocolTool);
         }
         return new ListToolsResult { Tools = offered };
     }
@@ -96,10 +163,31 @@ internal sealed class MentorMcpCallHandler(
         var caller = CallerId(rolePrincipal ?? context.User)
                      ?? RemoteAddress(context.Services);
 
+        // Story 155 — the tenant of this call, before it is counted: one the resolver cannot name is refused, never served
+        // as the single tenant. The action reads it through IMentorTenant, since its class is shared by every call.
+        string? tenantId = null;
+        if (await TenantAsync(rolePrincipal ?? context.User, context.Services, cancellationToken) is { } tenant)
+        {
+            if (!tenant.Ok)
+            {
+                Audit(name, caller, "tenant-unresolved", started);
+                logger.LogWarning(
+                    "[MentorAgent:MCP] The tenant resolver named no tenant ({Failure}) — the call is refused.", tenant.Failure);
+                return Error(Text("tenant.unresolved",
+                    "This request could not be processed: the organization it belongs to could not be identified."));
+            }
+            MentorTenantContext.Enter(tenant.Id);
+            tenantId = tenant.Id;
+        }
+
+        // Story 157 — the call's tenant on its log lines, the one Information line of the call included.
+        using var tenantLogScope = MentorTenantLogScope.Begin(logger, tenantId);
+
         // Rate limit first, so every call counts — an unknown name too, which bounds name probing.
         if (_options.RateLimitPerUser > 0)
         {
-            var key = "mcp:" + (caller ?? "anonymous");   // no id and no address: one shared allowance
+            // No id and no address: one shared allowance — the tenant's own, as every key here (story 156).
+            var key = "mcp:" + MentorTenantContext.Key(tenantId, caller ?? "anonymous");
             var (allowed, _) = rateLimiter.CheckAndIncrement(key);
             if (!allowed)
             {
@@ -117,7 +205,13 @@ internal sealed class MentorMcpCallHandler(
         // A name the server does not list for this caller: a gated action it withholds, one only another
         // role may use, or one that never existed. The same words for all of them, so probing names reveals
         // nothing about gated actions (BUG-101).
-        var lookup = tools.Find(name, rolePrincipal);
+        // Stories 1549, 1546, 1547 — with a governor, an action it decides about is found whatever the code's roles and
+        // confirmation: its answers decide whether it is on, whom it serves and whether it asks to be confirmed.
+        var governable = governance is { Any: true } ? tools.FindGovernable(name) : null;
+        var lookup = governable is { } found
+            ? new MentorAgentMcpToolCollection.Lookup(found.Tool, MentorAgentMcpToolCollection.LookupResult.Found,
+                found.CodeRoles, found.Tool.ProtocolTool.Description, found.EnabledByDefault, CodeConfirms: found.CodeConfirms)
+            : tools.Find(name, rolePrincipal);
         if (lookup.Tool is not { } tool)
         {
             Audit(name, caller, lookup.Result switch
@@ -138,11 +232,29 @@ internal sealed class MentorMcpCallHandler(
             return Error($"Unknown tool: '{name}'. This server does not offer it; tools/list names the tools it does.");
         }
 
+        // Story 1549 — a tool that is off is refused before anything counts it, as a withheld one is.
+        if (await RefusedAsOffAsync(context, lookup, tool.ProtocolTool.Name, rolePrincipal, caller, started,
+                cancellationToken) is { } off)
+            return off;
+
+        if (governable is not null)
+        {
+            var (refusedForRoles, governed) = await GovernedRolesAsync(context, lookup, tool.ProtocolTool.Name, rolePrincipal,
+                caller, started, cancellationToken);
+            if (refusedForRoles is not null) return refusedForRoles;
+
+            // Story 1547 — then its confirmation: nobody can confirm a call here, so one that asks is withheld.
+            var (refusedForConfirmation, confirmed) = await GovernedConfirmationAsync(context, governed, tool.ProtocolTool.Name,
+                rolePrincipal, caller, started, cancellationToken);
+            if (refusedForConfirmation is not null) return refusedForConfirmation;
+            lookup = confirmed;
+        }
+
         // Metered only once the tool is known: an unknown name is the caller's choice, and counting it
         // would let anyone grow the metrics without bound.
         metrics.RecordToolCall(tool.ProtocolTool.Name);
         // "mentoragent.tool" is a metric tag dashboards group by, not a namespace: keep it on a rename.
-        telemetry?.ToolCalls.Add(1, new KeyValuePair<string, object?>("mentoragent.tool", tool.ProtocolTool.Name));
+        telemetry?.ToolCalls.Add(1, MentorTelemetry.Tags("mentoragent.tool", tool.ProtocolTool.Name));
         using var activity = telemetry?.StartActivity($"mentor.mcp.tool.{tool.ProtocolTool.Name}");
         var toolName = tool.ProtocolTool.Name;
 
@@ -232,13 +344,191 @@ internal sealed class MentorMcpCallHandler(
         return Error(r.Text);
     }
 
+    /// <summary>
+    /// Whether the tool of a call is off (story 1549): the code ships it off and no governor turned it on, or the
+    /// governor turned it off or failed. When it is, the call gets its last decision and its audit line here, and the
+    /// result is what the caller reads — for a tool that is off, the words of an unknown one (BUG-101); null when it is on.
+    /// </summary>
+    private async ValueTask<CallToolResult?> RefusedAsOffAsync(RequestContext<CallToolRequestParams> context,
+        MentorAgentMcpToolCollection.Lookup lookup, string toolName, ClaimsPrincipal? rolePrincipal, string? caller,
+        long started, CancellationToken cancellationToken)
+    {
+        GovernorAnswer answer;
+        if (governance is not { Any: true } governor)
+        {
+            if (lookup.EnabledByDefault) return null;
+            answer = new(false);
+        }
+        else
+        {
+            await using var scope = RequestScope.For(context.Services, services);
+            try
+            {
+                answer = await governor.IsEnabledAsync(PolicyRequest(MentorActionStage.Call, toolName, lookup.Description,
+                    lookup.RequiredRoles, rolePrincipal ?? context.User, context.Server?.SessionId,
+                    context.JsonRpcRequest?.Id.ToString(), context.Params?.Arguments, scope.Services,
+                    _options.RequireConfirmation && lookup.CodeConfirms),
+                    lookup.EnabledByDefault, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Audit(toolName, caller, "cancelled", started);
+                Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Stopped, MentorActionReasons.Stop);
+                throw;
+            }
+        }
+
+        if (answer.Enabled) return null;
+
+        if (answer.Failed)   // the governance logged it
+        {
+            Audit(toolName, caller, "governor-failed", started);
+            Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.PolicyFailed, MentorActionReasons.GovernorFailed,
+                exceptionType: answer.ExceptionType);
+            return Error(Text("action.stopped.rule.failed", "Stopped: the check before this action could not be completed."));
+        }
+
+        Audit(toolName, caller, "disabled", started);
+        Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Denied, MentorActionReasons.Disabled);
+        return Error($"Unknown tool: '{toolName}'. This server does not offer it; tools/list names the tools it does.");
+    }
+
+    /// <summary>
+    /// The roles the governor gives the tool of a call (story 1546), in place of the code's, and whether this caller
+    /// holds one, by the rule of the code's roles: the lookup with them, or the refusal, with its last decision and audit
+    /// line — withheld without <c>McpCallerPrincipal</c>, else denied for the role — and the words of an unknown tool
+    /// (BUG-101). A governor that fails stops the call.
+    /// </summary>
+    private async ValueTask<(CallToolResult? Refused, MentorAgentMcpToolCollection.Lookup Lookup)> GovernedRolesAsync(
+        RequestContext<CallToolRequestParams> context, MentorAgentMcpToolCollection.Lookup lookup, string toolName,
+        ClaimsPrincipal? rolePrincipal, string? caller, long started, CancellationToken cancellationToken)
+    {
+        GovernorRoles governed;
+        await using (var scope = RequestScope.For(context.Services, services))
+        {
+            try
+            {
+                governed = await governance!.RequiredRolesAsync(PolicyRequest(MentorActionStage.Call, toolName,
+                    lookup.Description, lookup.RequiredRoles, rolePrincipal ?? context.User, context.Server?.SessionId,
+                    context.JsonRpcRequest?.Id.ToString(), context.Params?.Arguments, scope.Services,
+                    _options.RequireConfirmation && lookup.CodeConfirms), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Audit(toolName, caller, "cancelled", started);
+                Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Stopped, MentorActionReasons.Stop);
+                throw;
+            }
+        }
+
+        if (governed.Failed)   // the governance logged it
+        {
+            Audit(toolName, caller, "governor-failed", started);
+            Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.PolicyFailed, MentorActionReasons.GovernorFailed,
+                exceptionType: governed.ExceptionType);
+            return (Error(Text("action.stopped.rule.failed", "Stopped: the check before this action could not be completed.")), lookup);
+        }
+
+        lookup = lookup with { RequiredRoles = governed.Roles ?? lookup.RequiredRoles, RolesFromOutside = governed.Roles is not null };
+        if (tools.IsPublishedTo(lookup.RequiredRoles, rolePrincipal)) return (null, lookup);
+
+        var reason = _options.McpCallerPrincipal is null ? MentorActionReasons.Withheld
+            : rolePrincipal?.Identity?.IsAuthenticated == true ? MentorActionReasons.RoleMissing
+            : MentorActionReasons.LoginRequired;
+        Audit(toolName, caller, reason == MentorActionReasons.Withheld ? "withheld" : "denied-role", started);
+        Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Denied, reason);
+        return (Error($"Unknown tool: '{toolName}'. This server does not offer it; tools/list names the tools it does."), lookup);
+    }
+
+    /// <summary>
+    /// Whether the governor's answer about the confirmation of a call (story 1547) lets it run here, where nobody can
+    /// confirm it: the lookup, with whether the answer changed that from the code's, or the refusal — withheld, with its
+    /// last decision and audit line, and the words of an unknown tool (BUG-101). A governor that fails stops the call.
+    /// </summary>
+    private async ValueTask<(CallToolResult? Refused, MentorAgentMcpToolCollection.Lookup Lookup)> GovernedConfirmationAsync(
+        RequestContext<CallToolRequestParams> context, MentorAgentMcpToolCollection.Lookup lookup, string toolName,
+        ClaimsPrincipal? rolePrincipal, string? caller, long started, CancellationToken cancellationToken)
+    {
+        GovernorConfirmation answer;
+        await using (var scope = RequestScope.For(context.Services, services))
+        {
+            try
+            {
+                answer = await governance!.ConfirmationAsync(PolicyRequest(MentorActionStage.Call, toolName,
+                    lookup.Description, lookup.RequiredRoles, rolePrincipal ?? context.User, context.Server?.SessionId,
+                    context.JsonRpcRequest?.Id.ToString(), context.Params?.Arguments, scope.Services,
+                    _options.RequireConfirmation && lookup.CodeConfirms), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Audit(toolName, caller, "cancelled", started);
+                Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Stopped, MentorActionReasons.Stop);
+                throw;
+            }
+        }
+
+        if (answer.Failed)   // the governance logged it
+        {
+            Audit(toolName, caller, "governor-failed", started);
+            Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.PolicyFailed, MentorActionReasons.GovernorFailed,
+                exceptionType: answer.ExceptionType);
+            return (Error(Text("action.stopped.rule.failed", "Stopped: the check before this action could not be completed.")), lookup);
+        }
+
+        var asks = Asks(answer.Choice, lookup.CodeConfirms);
+        lookup = lookup with { ConfirmationFromOutside = asks != lookup.CodeConfirms };
+        if (!asks) return (null, lookup);
+
+        Audit(toolName, caller, "withheld", started);
+        Decide(context, lookup, toolName, rolePrincipal, MentorActionOutcome.Denied, MentorActionReasons.Withheld);
+        return (Error($"Unknown tool: '{toolName}'. This server does not offer it; tools/list names the tools it does."), lookup);
+    }
+
+    /// <summary>
+    /// Whether a call asks for a confirmation, by the governor's answer (story 1547): what it requires, or the code's —
+    /// declared, by default or by the <c>RequiresApproval</c> predicate, whatever <c>RequireConfirmation</c> says, for
+    /// nobody can confirm one here.
+    /// </summary>
+    private static bool Asks(MentorConfirmationChoice choice, bool codeConfirms)
+        => choice == MentorConfirmationChoice.Required || (choice == MentorConfirmationChoice.Code && codeConfirms);
+
+    /// <summary>
+    /// <paramref name="tool"/> as <c>tools/list</c> shows it with the governor's description (story 1548): a copy, so the
+    /// tool the server built keeps the code's, with every other field — the name, the schemas, the annotations — as it
+    /// is, those a later version of the protocol adds included.
+    /// </summary>
+    private static Tool Described(Tool tool, string description)
+    {
+        var copy = System.Text.Json.JsonSerializer.Deserialize<Tool>(
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(tool, ModelContextProtocol.McpJsonUtilities.DefaultOptions),
+            ModelContextProtocol.McpJsonUtilities.DefaultOptions)!;
+        copy.Description = description;
+        return copy;
+    }
+
+    /// <summary>
+    /// Story 155 — the tenant of this request, asked of the application's resolver about the caller the roles are decided
+    /// for, in the request's scope; null with a single tenant, where there is nothing to ask. The handler enters it itself:
+    /// an async-local value set in here would end with this method.
+    /// </summary>
+    private async Task<(bool Ok, string? Id, string? Failure)?> TenantAsync(
+        ClaimsPrincipal? caller, IServiceProvider? requestServices, CancellationToken cancellationToken)
+    {
+        var resolver = services.GetService<IMentorTenantResolver>();
+        if (MentorTenantContext.IsSingleTenant(resolver)) return null;
+
+        await using var scope = RequestScope.For(requestServices, services);
+        return await MentorTenantContext.AskAsync(resolver!, caller, MentorActionSurface.Mcp, scope.Services, cancellationToken);
+    }
+
     /// <summary>The localized text, in the language of the application, or the English one without a localizer.</summary>
     private string Text(string key, string english) => localizer?.Get(key) ?? english;
 
     /// <summary>What a policy is asked about a tool of this server.</summary>
     private static MentorActionRequest PolicyRequest(MentorActionStage stage, string toolName, string? description,
         string[] roles, ClaimsPrincipal? user, string? sessionId, string? callId,
-        IDictionary<string, System.Text.Json.JsonElement>? arguments, IServiceProvider scopeServices)
+        IDictionary<string, System.Text.Json.JsonElement>? arguments, IServiceProvider scopeServices,
+        bool requiresConfirmation = false)
         => new()
         {
             Stage         = stage,
@@ -252,6 +542,7 @@ internal sealed class MentorMcpCallHandler(
             SessionId     = sessionId is { Length: > 0 } ? "mcp#" + Fingerprint(sessionId) : null,
             CallId        = callId,
             RequiredRoles = roles,
+            RequiresConfirmation = requiresConfirmation,
             Services      = scopeServices,
         };
 
@@ -331,6 +622,8 @@ internal sealed class MentorMcpCallHandler(
             CallId        = context.JsonRpcRequest?.Id.ToString(),
             User          = user?.Identity?.IsAuthenticated == true ? user : null,
             RequiredRoles = lookup.RequiredRoles,
+            RolesFromOutside = lookup.RolesFromOutside,
+            ConfirmationFromOutside = lookup.ConfirmationFromOutside,
             Timestamp     = decisions.Time.GetUtcNow(),
             ExceptionType = failed ? exceptionType : null,
             Detail        = detail,

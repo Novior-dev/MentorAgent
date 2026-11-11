@@ -20,15 +20,25 @@ internal sealed class TokenUsageChatClient : DelegatingChatClient
     private readonly MentorMetrics _metrics;
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// Story 171 — the counter of the session this client serves, next to the process-wide one: an evaluation reads a
+    /// turn's tokens from it, exactly, whatever else the process is doing. <see langword="null"/> for a client built
+    /// outside a session's scope.
+    /// </summary>
+    private readonly MentorSessionTokenUsage? _session;
+
     /// <summary>The inner client's own deployment, read once, for responses that name no model.</summary>
     private string? _deploymentId;
 
-    public TokenUsageChatClient(IChatClient innerClient, MentorTokenUsage usage, MentorMetrics metrics, ILogger logger)
+    public TokenUsageChatClient(
+        IChatClient innerClient, MentorTokenUsage usage, MentorMetrics metrics, ILogger logger,
+        MentorSessionTokenUsage? session = null)
         : base(innerClient)
     {
         _usage = usage;
         _metrics = metrics;
         _logger = logger;
+        _session = session;
     }
 
     public override async Task<ChatResponse> GetResponseAsync(
@@ -115,6 +125,7 @@ internal sealed class TokenUsageChatClient : DelegatingChatClient
 
         // Per-model attribution + latency for the dashboard; this also updates the global token totals.
         _metrics.RecordModelUsage(modelId, inTok, outTok, latencyMs, ttfbMs, usageMeasured);
+        _session?.Record(inTok, outTok);
 
         _logger.LogInformation(
             "[MentorAgent] Tokens — model: {Model}, in: {In}, out: {Out}, call total: {CallTotal}, {Latency:0}ms | " +

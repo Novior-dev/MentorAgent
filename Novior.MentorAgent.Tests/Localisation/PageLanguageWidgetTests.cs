@@ -48,10 +48,17 @@ public sealed class PageLanguageWidgetTests : ComponentTestBase
     private static string Placeholder(IRenderedComponent<ChatWidget> cut)
         => cut.Find("textarea.bm-input").GetAttribute("placeholder") ?? "";
 
-    private static void Send(IRenderedComponent<ChatWidget> cut, string text)
+    /// <summary>
+    /// Sends <paramref name="text"/> and waits until the orchestrator has it. The widget hands the turn over after an
+    /// await (it scrolls the transcript first), so the click returns before the turn is sent: under load an assertion
+    /// right after the click found the turn missing.
+    /// </summary>
+    private void Send(IRenderedComponent<ChatWidget> cut, string text)
     {
+        var sent = _orchestrator.Messages.Count;
         cut.Find("textarea.bm-input").Input(text);
         cut.Find(".bm-send-btn").Click();
+        cut.WaitForAssertion(() => _orchestrator.Messages.Should().HaveCount(sent + 1), TimeSpan.FromSeconds(5));
     }
 
     [Fact]

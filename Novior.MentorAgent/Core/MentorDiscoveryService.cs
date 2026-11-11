@@ -328,7 +328,8 @@ internal sealed class MentorDiscoveryService
                     NavigateTo: mentorAttr.NavigateTo,
                     ReadOnly: mentorAttr.ReadOnly,
                     IsMentorAction: true,
-                    ConfirmationDeclared: mentorAttr.RequiresConfirmationDeclared
+                    ConfirmationDeclared: mentorAttr.RequiresConfirmationDeclared,
+                    EnabledByDefault: mentorAttr.Enabled
                 ));
                 continue;
             }

@@ -56,6 +56,7 @@ public sealed class ConfirmationDefaultTests
     // ── The banner ───────────────────────────────────────────────────────────────
 
     [Theory]
+    [Trait("Rule", "confirm.default-for-writes")]
     [InlineData(MentorHitlMode.Blocking)]
     [InlineData(MentorHitlMode.Native)]
     public async Task An_action_that_declares_nothing_asks_and_runs_once_approved(MentorHitlMode mode)
@@ -69,6 +70,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Theory]
+    [Trait("Rule", "confirm.declared-decides")]
     [InlineData(MentorHitlMode.Blocking)]
     [InlineData(MentorHitlMode.Native)]
     public async Task An_action_that_opts_out_runs_without_a_banner(MentorHitlMode mode)
@@ -82,6 +84,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Fact]
+    [Trait("Rule", "confirm.default-for-writes")]
     public async Task A_read_only_action_never_asks()
     {
         await using var host = MentorHostFixture.Create(o => o.MemoryAutoCapture = false);
@@ -90,6 +93,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Fact]
+    [Trait("Rule", "confirm.default-for-writes")]
     public async Task An_action_the_host_declares_read_only_by_name_does_not_ask()
     {
         await using var host = MentorHostFixture.Create(o =>
@@ -102,6 +106,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Fact]
+    [Trait("Rule", "confirm.default-for-writes")]
     public async Task With_the_default_off_an_undeclared_action_runs_unasked_as_in_rc14()
     {
         await using var host = MentorHostFixture.Create(o =>
@@ -115,6 +120,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Fact]
+    [Trait("Rule", "confirm.beats-read-only")]
     public async Task A_declared_confirmation_still_wins_over_a_read_only_claim()
     {
         // rc.14: "a confirmation-gated action is never read-only". issue_refund declares the confirmation; a
@@ -130,6 +136,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Theory]
+    [Trait("Rule", "confirm.default-for-writes")]
     [InlineData(true, false)]
     [InlineData(false, true)]
     public async Task Native_auto_approval_treats_a_defaulted_action_like_a_declared_one(bool approves, bool expectBanner)
@@ -151,6 +158,7 @@ public sealed class ConfirmationDefaultTests
     // ── What the default withholds from other surfaces ─────────────────────────
 
     [Fact]
+    [Trait("Rule", "surface.mcp-withholds-gated")]
     public async Task A_defaulted_action_is_withheld_from_mcp_and_an_opted_out_one_is_published()
     {
         await using var app = await ServerAppFactory.CreateAsync(
@@ -165,6 +173,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.mcp-withholds-gated")]
     public async Task With_the_default_off_mcp_publishes_the_undeclared_action_again()
     {
         await using var app = await ServerAppFactory.CreateAsync(
@@ -177,6 +186,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.card-ungated-only")]
     public async Task A_defaulted_action_is_not_a_skill_on_the_a2a_card()
     {
         await using var app = await ServerAppFactory.CreateAsync(
@@ -192,6 +202,7 @@ public sealed class ConfirmationDefaultTests
     // ── The startup warning (198) ───────────────────────────────────────────────
 
     [Fact]
+    [Trait("Rule", "confirm.unconfirmed-writes-warned")]
     public async Task The_warning_lists_the_opted_out_actions_as_the_hosts_choice()
     {
         await using var host = MentorHostFixture.Create(o => o.MemoryAutoCapture = false);
@@ -206,6 +217,8 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Fact]
+    [Trait("Rule", "confirm.unconfirmed-writes-warned")]
+    [Trait("Rule", "confirm.description-only-not-defaulted")]
     public async Task The_warning_lists_the_description_only_methods_as_not_covered()
     {
         await using var host = MentorHostFixture.Create(o => o.MemoryAutoCapture = false);
@@ -218,6 +231,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Fact]
+    [Trait("Rule", "confirm.unconfirmed-writes-warned")]
     public async Task A_description_only_method_declared_read_only_is_not_listed()
     {
         await using var host = MentorHostFixture.Create(o =>
@@ -232,6 +246,7 @@ public sealed class ConfirmationDefaultTests
     }
 
     [Fact]
+    [Trait("Rule", "confirm.unconfirmed-writes-warned")]
     public async Task Nothing_is_listed_when_every_write_asks()
     {
         // The control: the warning is about writes that run unasked, not about every action there is.

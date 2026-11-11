@@ -34,11 +34,22 @@ public sealed record MentorActionInfo
     /// </summary>
     public bool ReadOnly { get; init; }
 
-    /// <summary>Whether, and to whom, MentorAgent's MCP server publishes it now.</summary>
+    /// <summary>
+    /// Whether the code ships the action on. <see langword="false"/> for <c>[MentorAction(Enabled = false)]</c>: it is
+    /// offered nowhere and a call to it does not run, until an <c>IMentorActionGovernor</c> turns it on. The catalogue
+    /// says what the code says; it does not ask the governor.
+    /// </summary>
+    public bool EnabledByDefault { get; init; } = true;
+
+    /// <summary>
+    /// Whether, and to whom, MentorAgent's MCP server publishes it now, by the code: an action the code ships off is
+    /// <see cref="MentorMcpExposure.Withheld"/>.
+    /// </summary>
     public required MentorMcpExposure McpExposure { get; init; }
 
     /// <summary>
-    /// Whether the A2A agent card lists it as a skill. The card is built once, when the host maps the A2A endpoint;
+    /// Whether the A2A agent card lists it as a skill. The card is built once, when the host maps the A2A endpoint,
+    /// from the code: an action the code ships off is never on it, even when a governor turns it on.
     /// <see langword="false"/> when the host does not serve A2A.
     /// </summary>
     public bool OnAgentCard { get; init; }

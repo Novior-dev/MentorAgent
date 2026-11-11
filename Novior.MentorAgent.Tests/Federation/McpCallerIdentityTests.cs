@@ -61,6 +61,7 @@ public sealed class McpCallerIdentityTests
             authenticationType: "Test"));
 
     [Fact]
+    [Trait("Rule", "surface.mcp-withholds-gated")]
     public void With_no_resolver_a_role_gated_tool_is_still_not_published()
     {
         // The default, and the property BUG-021 and BUG-035 cost. It must not change.
@@ -72,6 +73,7 @@ public sealed class McpCallerIdentityTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.mcp-withholds-gated")]
     public void A_resolver_publishes_role_gated_tools_the_caller_is_entitled_to()
     {
         var names = Build(o => o.McpCallerPrincipal = () => Principal("Admin"))
@@ -82,6 +84,7 @@ public sealed class McpCallerIdentityTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.mcp-withholds-gated")]
     public void A_resolver_does_not_publish_tools_the_caller_is_not_entitled_to()
     {
         // The half that makes this an identity story rather than an off switch.
@@ -93,6 +96,7 @@ public sealed class McpCallerIdentityTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.mcp-withholds-gated")]
     public void A_confirmation_gated_tool_is_never_published_however_privileged_the_caller()
     {
         // No dialog, no one to answer it. A principal cannot stand in for consent.
@@ -106,6 +110,7 @@ public sealed class McpCallerIdentityTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.mcp-withholds-gated")]
     public void A_predicate_gated_tool_is_never_published_either()
     {
         // BUG-035's gate. options.RequiresApproval expresses "ask before doing this", which is the
@@ -299,6 +304,7 @@ public sealed class McpCallerIdentityTests
     }
 
     [Fact]
+    [Trait("Rule", "roles.any-of")]
     public void Role_names_are_matched_as_IsInRole_matches_them()
     {
         // Ordinal, as IsInRole and [Authorize(Roles)] compare. A later "case-insensitive" shortcut in

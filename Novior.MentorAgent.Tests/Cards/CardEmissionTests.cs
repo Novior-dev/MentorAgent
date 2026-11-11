@@ -380,4 +380,19 @@ public sealed class CardEmissionTests
 
         CardsShown(host).Should().ContainSingle().Which.Title.Should().Be("Ticket #1");
     }
+
+    [Fact]
+    [Trait("RuntimeOption", nameof(Novior.MentorAgent.Options.MentorOptions.EnableGenerativeCards))]
+    public async Task Cards_turned_off_while_the_application_runs_stop_from_the_next_turn()
+    {
+        // Story 1275: the gate decides at every result whether it becomes a card.
+        await using var host = await CardTurnAsync(o => o.MemoryAutoCapture = false);
+        host.Recorder!.Count(nameof(RecordingStateService.NotifyCardsReady)).Should().Be(1);
+
+        host.Options.EnableGenerativeCards = false;
+        host.Chat!.CallTool("show_order_card", new { orderId = 7 }).Say("Here it is again.");
+        await host.RunTurnAsync("show me order 7 again");
+
+        host.Recorder.Count(nameof(RecordingStateService.NotifyCardsReady)).Should().Be(1, "the next result is not a card");
+    }
 }

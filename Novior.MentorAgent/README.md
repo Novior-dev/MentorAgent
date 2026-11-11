@@ -1,5 +1,12 @@
 ﻿# MentorAgent
 
+MentorAgent is an open-source .NET library that puts AI agents inside your applications, under your rules: your C#
+methods become tools, and on each one you declare which roles may use it and whether the user must confirm it first.
+Use the ready-made chat widget in Blazor and MAUI, or connect any front end (React, Angular, Vue, mobile) over SignalR
+or SSE; AI assistants and other agents reach the same tools over MCP and A2A.
+
+**Website:** [mentoragent.net](https://mentoragent.net) · **Documentation:** [docs.mentoragent.net](https://docs.mentoragent.net)
+
 > **New package IDs.** From 1.0.0 the packages, their namespaces and their assemblies are `Novior.MentorAgent.*`; up to 1.0.0-rc.15 they were `MentorAgent.*`. See [Migrating from the MentorAgent.* packages](#migrating-from-the-mentoragent-packages).
 
 ## Package Family
@@ -12,12 +19,10 @@
 | [Novior.MentorAgent.Abstractions](https://www.nuget.org/packages/Novior.MentorAgent.Abstractions) | **Never install directly** — transitive dependency included automatically |
 | [Novior.MentorAgent.Declarative](https://www.nuget.org/packages/Novior.MentorAgent.Declarative) | **Optional** — define Level-2 specialist agents in YAML instead of C# |
 
-**MentorAgent** adds AI agents to a .NET application: your C# methods become tools the assistant calls, with role
-checks and a human confirmation before the ones that change data. A ready-made chat widget serves Blazor (Server,
-WebAssembly and Auto) and .NET MAUI Blazor Hybrid apps. Any other frontend — React, Angular, Vue, mobile — or a
-headless backend connects through `Novior.MentorAgent.Server`, over SignalR or SSE, and other AI clients and agents
-through MCP and A2A. Multi-agent orchestration, contextual memory, RAG, Agent Skills and voice are all configured
-with a single `AddMentorAgent()` call.
+The chat widget serves Blazor (Server, WebAssembly and Auto) and .NET MAUI Blazor Hybrid apps; any other front end,
+or a headless backend, connects through `Novior.MentorAgent.Server`, which also serves MCP and A2A. Multi-agent
+orchestration, cost control, contextual memory, RAG, Agent Skills and voice are all configured with a single
+`AddMentorAgent()` call.
 
 Built on top of **[Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/)**
 (`Microsoft.Agents.AI`), MentorAgent turns the complexity of multi-agent systems into an attribute-driven
@@ -104,7 +109,7 @@ MentorAgent turns a .NET application into an AI-assisted one. It provides:
 - A **Main Coordinator agent** that understands the application context and routes requests.
 - An **attribute-driven discovery system** that scans your assemblies and turns plain C# methods and classes into AI tools and agents — zero boilerplate.
 - Full integration with **Microsoft Agent Framework**, supporting Handoff Workflows, Group Chat teams, and any AI provider compatible with the `IChatClient` abstraction.
-- **RAG** — inject relevant documents into every AI response, read through an `IMentorRagSource` you implement over your own store.
+- **RAG** — inject relevant documents into every AI response, read through an `IMentorRagSource` you implement over your own store, or `MentorVectorStoreRagSource` over any `Microsoft.Extensions.VectorData` collection.
 - **MCP** — consume external MCP servers as additional tools, and expose MentorAgent's own actions as an MCP server for other AI clients.
 - **A2A** — connect to remote AI agents via the Agent-to-Agent protocol, and expose MentorAgent as a federatable A2A agent.
 
@@ -129,7 +134,7 @@ UI actions registered by the current page are injected as **individually named A
 | 🗺️ **Page navigation** | AI navigates to any page decorated with `[MentorPage]` |
 | 💬 **Session management** | Conversation history managed by Agent Framework (`AgentSession`) |
 | 💾 **Persistent history** | Pluggable `ChatHistoryProvider` (CosmosDB, Redis, custom) |
-| 📚 **RAG** | Retrieval-Augmented Generation — inject relevant documents into every AI response, read through an `IMentorRagSource` you implement over your own store |
+| 📚 **RAG** | Retrieval-Augmented Generation — inject relevant documents into every AI response, read through an `IMentorRagSource` you implement over your own store, or `MentorVectorStoreRagSource` over any `Microsoft.Extensions.VectorData` collection |
 | 🔌 **MCP Client** | Consume external MCP servers as additional Level-1 tools for the coordinator |
 | 🖥️ **MCP Server** | Expose your Level-1 actions (`[Description]` and `[MentorAction]` methods) as MCP tools — any MCP client can connect (Claude Desktop, VS Code, etc.). Gated actions (`RequiresConfirmation`, `RequiredRoles`, `RequiresApproval`) are withheld — an MCP caller cannot confirm anything — except a role-gated one published to a caller that `McpCallerPrincipal` identifies as holding the role |
 | 🌐 **A2A Consumer** | Connect to remote A2A agents; the coordinator delegates to them through the same handoff workflow as local specialists, and every answer says which system it came from. A request that arrived over A2A is answered locally, never passed on to another peer |
@@ -263,7 +268,7 @@ In `MainLayout.razor` (or `App.razor`):
 <ChatWidget />
 ```
 
-That's it. The widget injects its own CSS and JS automatically — no changes to `App.razor` or `_Host.cshtml` are required. Only `ChatWidget` does this: a surface composed from the package's components without `ChatWidget` must add the `<link>` to `_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.2.0` and the `<script>` for `_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.2.0` itself, or it renders unstyled and voice, paste and drag-and-drop stay off. The `?v=` is the version of the package you install: change it when you upgrade.
+That's it. The widget injects its own CSS and JS automatically — no changes to `App.razor` or `_Host.cshtml` are required. Only `ChatWidget` does this: a surface composed from the package's components without `ChatWidget` must add the `<link>` to `_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.3.0` and the `<script>` for `_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.3.0` itself, or it renders unstyled and voice, paste and drag-and-drop stay off. The `?v=` is the version of the package you install: change it when you upgrade.
 
 > **The widget must be interactive.** In a Blazor Web App make the app interactive as a whole — `<Routes @rendermode="InteractiveServer" />` in `App.razor` (the template's *Interactivity location: Global*). In a layout that renders statically, `<ChatWidget />` shows its button and nothing happens when it is clicked. A page rendered statically has no circuit either, so it cannot register `IMentorPageContext` data or UI actions. For Auto / WebAssembly apps see [Blazor Server vs Blazor WASM](#blazor-server-vs-blazor-wasm).
 
@@ -327,6 +332,41 @@ options.ChatClient = new OpenAIClient(
 // Ollama's default context (4096 tokens) is shorter than MentorAgent's prompt and is truncated from the
 // start without an error — create a variant with `PARAMETER num_ctx 16384` (ollama create).
 // On a slow local model also raise SafetyCheckTimeout, or point the checks at a fast ClassifierChatClient.
+// WarmUpChatModel, with WarmUpAtStartup, loads the local model when the application starts instead of on
+// the first turn.
+// Ollama ignores tool_choice: RequireLookupForRecordQuestions and RequireActionForChangeRequests have no
+// effect with it, and a warning says so at the first turn (see Semantic tool filtering). For them, use
+// llama-server or vLLM below.
+
+// ── llama-server (llama.cpp, local) — the same SDK on its OpenAI-compatible endpoint. Tool calls need the
+//    Jinja chat template; -c sets the context (0, the default, takes the model's):
+//      llama-server --jinja -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M -c 16384 --port 8080
+options.ChatClient = new OpenAIClient(
+		new System.ClientModel.ApiKeyCredential("local"),   // the SDK requires one
+		new OpenAIClientOptions
+		{
+			Endpoint       = new Uri("http://localhost:8080/v1"),
+			NetworkTimeout = TimeSpan.FromMinutes(20),
+		})
+	.GetChatClient("qwen2.5-7b-instruct").AsIChatClient();
+// llama.cpp's documentation does not say whether tool_choice "required" is honoured: the warning tells you
+// at the first turn that ignored it.
+
+// ── vLLM — the same SDK. Tool calls need --enable-auto-tool-choice and the parser of the model's family:
+//    hermes for Qwen 2.5 and Hermes, mistral for Mistral, llama3_json (with its --chat-template) for
+//    Llama 3.1 and 3.2; the others are on vLLM's tool-calling page. tool_choice "required" is supported
+//    from vLLM 0.8.3:
+//      vllm serve Qwen/Qwen2.5-7B-Instruct --enable-auto-tool-choice --tool-call-parser hermes
+options.ChatClient = new OpenAIClient(
+		new System.ClientModel.ApiKeyCredential("local"),
+		new OpenAIClientOptions { Endpoint = new Uri("http://localhost:8000/v1") })
+	.GetChatClient("Qwen/Qwen2.5-7B-Instruct").AsIChatClient();
+
+// ── Sampling of the coordinator — for a local model whose defaults suit chat rather than tool calls.
+//    Any value left null is the provider's. The coordinator's only: the classifiers keep their own settings,
+//    and a reasoning model may refuse a temperature (leave it unset there).
+//    In configuration: "Mentor": { "CoordinatorSampling": { "Temperature": 0.2 } }
+options.CoordinatorSampling = new MentorSamplingOptions { Temperature = 0.2f, TopP = 0.9f };
 
 // ── Azure AI Foundry (AIProjectClient) — requires AIAgent, and:
 //    <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="[1.17.0-preview.260804.1]" />
@@ -391,6 +431,10 @@ MentorAgent organizes AI capabilities in three progressive levels of complexity.
 
 The simplest level. Decorate C# methods with `[Description]` (standard .NET, zero dependencies) or `[MentorAction]` (adds confirmation, roles, navigation, hints).
 
+Which methods become actions, what they are called and how roles and confirmations add up is set by
+rules with stable names, each one covered by a test: see
+[ACTION-RULES.md](https://github.com/Novior-dev/MentorAgent/blob/main/ACTION-RULES.md).
+
 ```csharp
 // Register the service in DI as usual
 builder.Services.AddScoped<OrderService>();
@@ -421,7 +465,7 @@ MentorAgent discovers the service via `ScanAssemblies` and exposes its methods a
 
 | Parameter | Description |
 |---|---|
-| `Description` | **Required.** Natural language description used as the AI tool description |
+| `Description` | **Required.** Natural language description used as the AI tool description. An `IMentorActionGovernor` can replace it for the model; the confirmation banner keeps it |
 | `Category` | Published as the tag of this action's skill on the A2A agent card. It groups nothing and is not used anywhere else |
 | `RequiresConfirmation` | Shows a confirmation banner before executing. Use for destructive or irreversible operations |
 | `RequiresConfirmationDeclared` | Read-only, not set in the attribute: `true` when the attribute writes `RequiresConfirmation`, true or false. It tells an action that declares nothing, which asks with `RequireConfirmationForWrites` on, from one that declares `RequiresConfirmation = false`, which does not: `RequiresConfirmation` reads `false` for both |
@@ -429,6 +473,7 @@ MentorAgent discovers the service via `ScanAssemblies` and exposes its methods a
 | `RequiredRoles` | ASP.NET Core identity roles allowed to invoke the action — holding **any one** of them is enough (`["Manager", "Admin"]` means Manager *or* Admin). The user must be authenticated and an `AuthenticationStateProvider` must be registered, otherwise the call is refused. The model of the coordinator — or of the specialist, team member or agent source that holds the action — is offered it only in a turn whose user holds one of the roles, and the coordinator counts it among its actions only then; for everyone else it is left out, as from the MCP server's `tools/list`. Empty = no role check, accessible to everyone including anonymous users |
 | `ProactiveHint` | Guidance for the model on when or how to use the action. Appended to the tool's description as `Guidance: <hint>` for the assistant's own tools (coordinator, specialists, team members); not added on the MCP server surface, and ignored by semantic tool filtering (tools are matched on `name: description` without the hint) |
 | `NavigateTo` | URL the AI navigates to automatically after successful execution |
+| `Enabled` | `false` ships the action off: it stays in `IMentorActionCatalog` and nowhere else — offered to no agent, not on `/mcp` or the A2A card — and a call to it does not run, until an `IMentorActionGovernor` turns it on (see [Governing actions from outside the code](#governing-actions-from-outside-the-code--imentoractiongovernor)). Default `true` |
 
 #### Which methods become tools
 
@@ -1122,6 +1167,9 @@ builder.Services.AddScoped<IMentorRagSource, MyVectorDbRagSource>();
 
 // Any custom implementation
 // builder.Services.AddScoped<IMentorRagSource, MyCustomRagSource>();
+
+// A Microsoft.Extensions.VectorData collection needs no source of its own:
+// AddMentorVectorStoreRag, see "A vector store source" below
 ```
 
 **Step 2** — Enable RAG in options:
@@ -1134,6 +1182,7 @@ builder.Services.AddMentorAgent(options =>
 	options.RagMinScore            = 0.5f; // optional: overrides the source's DefaultMinScore (see below)
 	options.RagSystemPromptTemplate = "Use the following documents to answer:\n{documents}";
 	options.ShowRagSources         = true; // show citation chips below AI messages
+	options.RagNoResultsNotice     = true; // optional: tell the model when no document was found
 });
 ```
 
@@ -1174,6 +1223,7 @@ MentorAgent calls `SearchAsync(MentorRagRequest request, CancellationToken ct)`.
 | `RecentMessages` | The conversation before this message, oldest first: the user's messages and the assistant's replies of the last three turns of **this** conversation, text only. Empty on the first turn, and it starts again after a reset or a restore. Over SSE every `/mentor/chat` request is a conversation of its own, so it is always empty there |
 | `User` | The caller of the hub, of `/mentor/chat` or of an A2A request (Novior.MentorAgent.Server), and in a Blazor circuit the user the host's `AuthenticationStateProvider` reports. `null` when the host has no authentication at all; an anonymous visitor, or a peer agent that did not authenticate, has an unauthenticated principal. Filter restricted documents on it |
 | `PageName`, `PageData` | What the current page set with `IMentorPageContext.SetPageName` and `Set` |
+| `TenantId` | The tenant of the turn, as `IMentorTenant.Id` names it; `null` without an `IMentorTenantResolver`. MentorAgent passes it and filters nothing: a source that holds several tenants' documents returns this one's. A source that implements only the `(query, maxResults)` overload never sees it, and a Warning says so at its first search with a tenant |
 
 Each result can carry `Metadata`. The model sees it under the document's title, one `key: value` per entry, so it can tell the 2025 price list from the 2026 one. It does not stay with the model: it travels to the client with the citation chips (`metadata` in `RagSourcesReady`), and the model may repeat it in its answer. Put nothing in it that the user should not see.
 
@@ -1190,6 +1240,86 @@ public async Task<IReadOnlyList<MentorRagResult>> SearchAsync(
 ```
 
 The `(query, maxResults)` overload stays part of the interface, so a source that implements the request overload still implements that one too. Do not make each call the other: the search would never return.
+
+### A vector store source
+
+For a collection of `Microsoft.Extensions.VectorData` — pgvector, Qdrant, Azure AI Search, in memory and the others — you need no source of your own: register your store's connector, then `AddMentorVectorStoreRag` with the collection and what of a record is the document. The source is `MentorVectorStoreRagSource`, registered as scoped; call it before or after `AddMentorAgent`, and with `UseRag = true`. It is the application's one source: with another `IMentorRagSource` already registered it throws an `InvalidOperationException`.
+
+```csharp
+public sealed class Doc
+{
+	[VectorStoreKey]  public Guid Id { get; set; }
+	[VectorStoreData] public string Text { get; set; } = "";
+	[VectorStoreData] public string? Title { get; set; }
+	[VectorStoreData] public string? Url { get; set; }
+	[VectorStoreData] public string? Tenant { get; set; }
+	[VectorStoreVector(1536, DistanceFunction = DistanceFunction.CosineDistance)]
+	public ReadOnlyMemory<float> Vector { get; set; }
+}
+
+builder.Services.AddMentorVectorStoreRag(
+	sp => sp.GetRequiredService<VectorStore>().GetCollection<Guid, Doc>("docs"),
+	new MentorVectorStoreRagOptions<Doc>
+	{
+		Content   = d => d.Text,          // required: a record with no text is left out
+		Title     = d => d.Title,
+		SourceUrl = d => d.Url,
+		Filter    = request => d => d.Tenant == request.TenantId,   // with a tenant resolver
+	});
+builder.Services.AddMentorAgent(options => { options.UseRag = true; /* EmbeddingGenerator = … */ });
+```
+
+| Option | What it does |
+|---|---|
+| `Content` | The text of the document, the part the model reads. Required |
+| `Title`, `SourceUrl`, `Metadata` | The document's title, link and facts, in the prompt and on the citation chips as for any source |
+| `Filter` | The records a request may see, as the collection's filter built from the `MentorRagRequest`: its `TenantId`, its `User`. Without it the whole collection is searched |
+| `DistanceFunction` | The collection's distance function; without it, the one on the record's `[VectorStoreVector]` attribute |
+| `VectorProperty` | The vector to search, for a record with more than one |
+| `DefaultMinScore` | The threshold when the host sets no `RagMinScore`. Default 0.5 |
+| `EmbeddingGenerator` | The model that embeds the message, when the documents were embedded with a model other than `MentorOptions.EmbeddingGenerator` |
+
+**Scores are read as similarities**, higher is nearer, whatever the collection's distance function:
+
+| Distance function of the collection | Score the source uses |
+|---|---|
+| `CosineSimilarity`, `DotProductSimilarity` | As it is |
+| `CosineDistance`, the Postgres and pgvector default | 1 − distance |
+| `NegativeDotProductSimilarity` | Its negation |
+
+Without this, with pgvector `RagMinScore` would discard the nearest documents and keep the farthest. When neither the options nor the attribute name a function, or it is `EuclideanDistance`, a Manhattan or a Hamming distance, the registration fails at startup: each store has a default of its own, and those distances have no scale a threshold could be set on.
+
+**The message's vector.** With `MentorOptions.EmbeddingGenerator`, the message is embedded once per turn and the source uses the same vector as routing, tool filtering and memory ([`IMentorQueryEmbedding`](#reusing-the-turns-embedding--imentorqueryembedding)), at no extra call. An `EmbeddingGenerator` in the options wins, and its vector too is computed once per turn, apart from the other model's. Without either, the collection receives the text and embeds it with its own generator.
+
+**Tenants and failures.** With an `IMentorTenantResolver` and no `Filter`, the first search with a tenant is logged as a warning: it searches every tenant's documents. A collection that throws is handled like any source: a warning, the `mentoragent.rag_failures` counter, and the turn goes on without documents.
+
+**PostgreSQL with pgvector.** Use `CommunityToolkit.VectorData.PgVector` (1.0.2): its `PostgresCollection<TKey, TRecord>` is the collection to pass. The table has to exist before the first search: create it once, with the connector's own method or with your migrations. Do not use `Microsoft.SemanticKernel.Connectors.PgVector` 1.74.0-preview: it is built on `Microsoft.Extensions.VectorData` 10.1, and with the 10.10 MentorAgent references every search fails with a `MissingMethodException`.
+
+```csharp
+// using CommunityToolkit.VectorData.PgVector;
+var docs = new PostgresCollection<Guid, Doc>(connectionString, "docs", new PostgresCollectionOptions());
+
+builder.Services.AddMentorVectorStoreRag(_ => docs, new MentorVectorStoreRagOptions<Doc> { Content = d => d.Text });
+```
+
+### When the conversation changes
+
+A source that keeps state for a conversation — what it already showed, a running filter, a cursor — is told when the session's conversation changes: `OnConversationChangedAsync(MentorConversationChange change, CancellationToken ct)`, whose default does nothing. `change.Reason` is `Reset` (New conversation, `ResetSessionAsync`), `Restored` (a saved conversation took its place) or `Replaced` (a restored conversation the service no longer knew was replaced by a new one, BUG-110); `SessionId` and `TenantId` say whose. It is called with `UseRag` on, on the instance the session searches with: a scoped source clears its own state, a singleton keys it on `SessionId`. Keep it quick: it is bounded by `SafetyCheckTimeout`, and a source that throws or does not answer in time is logged as a warning while the conversation changes anyway.
+
+```csharp
+public sealed class MySessionSource : IMentorRagSource   // registered as scoped
+{
+	private readonly HashSet<string> _shown = [];
+
+	public Task OnConversationChangedAsync(MentorConversationChange change, CancellationToken ct = default)
+	{
+		_shown.Clear();
+		return Task.CompletedTask;
+	}
+
+	// SearchAsync(MentorRagRequest, …) and SearchAsync(string, int, …) as above
+}
+```
 
 ### Reusing the turn's embedding — `IMentorQueryEmbedding`
 
@@ -1208,7 +1338,7 @@ public sealed class MyVectorRagSource(
 	public async Task<IReadOnlyList<MentorRagResult>> SearchAsync(
 		string query, int maxResults, CancellationToken ct = default)
 	{
-		// Free when something already embedded this message; computed with `embeddings` otherwise.
+		// Free when this same generator already embedded this message this turn; computed with it otherwise.
 		var vector = await queryEmbedding.GetAsync(query, embeddings, ct);
 		var hits   = await db.SearchAsync(vector, maxResults, ct);
 		return hits.Select(h => new MentorRagResult(
@@ -1221,6 +1351,8 @@ public sealed class MyVectorRagSource(
 ```
 
 `IMentorQueryEmbedding` is registered (scoped) by `AddMentorAgent()`, and an empty text returns an empty vector without calling out.
+
+To share the vector routing, tool filtering and memory already computed, pass the same instance you gave `MentorOptions.EmbeddingGenerator`: register one and use it for both, since it is compared by reference. A source whose documents were embedded with another model passes that model's generator and gets that model's vector, once per turn as well, never the other one's (BUG-229).
 
 ### RAG source citations in the widget
 
@@ -1248,8 +1380,11 @@ RAG is applied **only at the coordinator level**, not on L2/L3 specialist agents
 | `RagMinScore` | `2` | Minimum relevance score a document must reach to be injected into the prompt. Documents below this threshold are discarded. Scale depends on the `IMentorRagSource` implementation: for keyword search, `2` ≈ two content matches or one title match; for vector/cosine similarity, typical values are `0.5`–`0.75`. When you do not set it, the source's `DefaultMinScore` applies if it declares one. Set to `0` to disable filtering |
 | `RagSystemPromptTemplate` | `"Use the following documents to answer:\n{documents}"` | Template injected into the system prompt. Use `{documents}` as placeholder |
 | `ShowRagSources` | `false` | Show citation chips below AI messages in the widget |
+| `RagNoResultsNotice` | `false` | When the search keeps no document — none returned, or every one below `RagMinScore` — the request tells the model so, in the language of the turn: a question the documents would cover is answered "not found in the documents" rather than from memory, and a greeting or an action as usual. Not after a search that failed, nor without a source |
 
-> RAG is fully semantic: the vector search embeds every message and `RagMinScore` discards anything below the threshold, so a pure command like *"update the price of X"* simply retrieves nothing relevant and injects nothing — no keyword pre-gate needed, as long as `RagMinScore` is on your source's scale (see *Which threshold applies* above).
+> RAG is fully semantic: the vector search embeds every message and `RagMinScore` discards anything below the threshold, so a pure command like *"update the price of X"* simply retrieves nothing relevant and injects nothing — no keyword pre-gate needed, as long as `RagMinScore` is on your source's scale (see *Which threshold applies* above). With `RagNoResultsNotice` the model is also told when nothing was found, so a question the documents should answer is not answered from memory; the notice says that a message needing no document is answered as usual.
+>
+> A source that fails — it throws, or answers with no list — leaves the turn without documents: a Warning names the source, and with `EnableObservability` the failure is counted on `mentoragent.rag_failures`, with the source and the exception's type.
 >
 > The other side of it: the search runs on **every** message, before the model is called. Each message is one `SearchAsync` on your `IMentorRagSource`, with what it costs — an embedding call, the search, a reranker if your source has one — added to the time of every reply, commands included.
 
@@ -1372,7 +1507,7 @@ app.MapMentorAgentMcp(configure: e => e.RequireAuthorization());
 
 Requiring authorization decides who may connect. Which role-gated actions an authenticated caller may see is still decided by `McpCallerPrincipal` (Step 3).
 
-Every `tools/call` goes through the same gates as a tool the model calls (BUG-107): `OnToolResult` runs on the result before the caller sees it — a hook that throws withholds it, and the caller gets an `isError` result — the call counts in the dashboard's top actions, and `RateLimitPerUser` bounds it in an allowance of its own, separate from chat messages. The caller is the principal `McpCallerPrincipal` resolves, else the request's user, counted by its `NameIdentifier`, `sub` or `oid` claim (else its name). A caller with none of them is counted by its remote address when the host registers `IHttpContextAccessor` (`builder.Services.AddHttpContextAccessor()`; behind a proxy, apply forwarded headers or every caller is the proxy); otherwise all such callers share one allowance, and one busy client can use it up for the others. Each call writes one Information line — tool, outcome, time, and a fingerprint of the caller, never the id itself. The outcome is `ok`, `error` (`OnToolResult` threw, and the caller got an error result), `failed` (the action threw), `cancelled`, `rate-limited`, `denied-role`, `withheld` (an action the server never publishes), `unknown` (a name nothing defines) or `denied-policy` (an [`IMentorActionPolicy`](#deciding-before-an-action-runs--imentoractionpolicy) does not allow the caller the tool); the caller gets the same answer for the last four. A policy's other answers are `blocked` (a `Stop`: the caller reads "Stopped by a rule:" and its reason), `nobody-to-confirm` (a `Confirm`: nobody can confirm a call here, and the caller is told to do it from the application) and `policy-failed` (it threw, or did not answer within `ActionPolicyTimeout`).
+Every `tools/call` goes through the same gates as a tool the model calls (BUG-107): `OnToolResult` runs on the result before the caller sees it — a hook that throws withholds it, and the caller gets an `isError` result — the call counts in the dashboard's top actions, and `RateLimitPerUser` bounds it in an allowance of its own, separate from chat messages. The caller is the principal `McpCallerPrincipal` resolves, else the request's user, counted by its `NameIdentifier`, `sub` or `oid` claim (else its name). A caller with none of them is counted by its remote address when the host registers `IHttpContextAccessor` (`builder.Services.AddHttpContextAccessor()`; behind a proxy, apply forwarded headers or every caller is the proxy); otherwise all such callers share one allowance, and one busy client can use it up for the others. Each call writes one Information line — tool, outcome, time, and a fingerprint of the caller, never the id itself. The outcome is `ok`, `error` (`OnToolResult` threw, and the caller got an error result), `failed` (the action threw), `cancelled`, `rate-limited`, `denied-role`, `withheld` (an action the server never publishes), `unknown` (a name nothing defines) or `denied-policy` (an [`IMentorActionPolicy`](#deciding-before-an-action-runs--imentoractionpolicy) does not allow the caller the tool); the caller gets the same answer for the last four. A policy's other answers are `blocked` (a `Stop`: the caller reads "Stopped by a rule:" and its reason), `nobody-to-confirm` (a `Confirm`: nobody can confirm a call here, and the caller is told to do it from the application) and `policy-failed` (it threw, or did not answer within `ActionPolicyTimeout`). An action that is off is logged as `disabled`, and the caller reads that it is an unknown tool; a governor that fails is logged as `governor-failed`, and the call is stopped.
 
 **CORS.** The endpoint carries **no CORS policy**, and MCP clients need none: desktop and IDE clients, and the MCP Inspector's proxy, are not browsers. Steps 1 and 2 are all a host needs. Until rc.13 the endpoint carried a policy that allowed any origin, and on a pipeline without `app.UseCors()` every request failed with a 500 (BUG-108).
 
@@ -1681,6 +1816,73 @@ options.ChatHistoryProvider = new MyRedisChatHistoryProvider(redisConnection);
 > With `UseServiceManagedHistory = true` no local provider is installed at all: the service owns
 > the conversation, and a configured `ChatHistoryProvider` is ignored with a warning.
 
+### Recipe: the history in PostgreSQL
+
+A provider that keeps every conversation in a PostgreSQL table, so it outlives a reload of the page and a restart of the application. It follows the rules above:
+
+- **Registered with `ChatHistoryProviderFactory`**, one provider per coordinator. A scope with nobody behind it — an A2A task, a call to the MCP server, the start-up warm-up — keeps the built-in in-memory history.
+- **Each row is keyed by its owner and its conversation.** The owner is whoever the application knows the caller as: the signed-in user, or a browser cookie in an application without sign-in. The conversation is a `Guid` kept in the session's `StateBag`, not in a field, so that **New conversation opens a new one**: the first session of a circuit takes up the owner's latest conversation (that is the reload and the restart), and every later session without a key gets a new id.
+- **The message is stored as `text`, not `jsonb`.** It is the JSON of `AIJsonUtilities.DefaultOptions`, and `jsonb` reorders the keys of every object: the `$type` of a polymorphic `AIContent` is no longer the first property, and the message cannot be read back.
+- **The reducer is the provider's own**: every message is stored, and the model is sent what `MentorChatReducer` keeps, as with the built-in history.
+
+```sql
+CREATE TABLE IF NOT EXISTS public.mentor_chat_history (
+    id              bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    owner_key       text        NOT NULL,
+    conversation_id uuid        NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    message         text        NOT NULL   -- not jsonb
+);
+CREATE INDEX IF NOT EXISTS mentor_chat_history_conversation ON public.mentor_chat_history (conversation_id, id);
+CREATE INDEX IF NOT EXISTS mentor_chat_history_owner ON public.mentor_chat_history (owner_key, id DESC);
+```
+
+```csharp
+options.ChatHistoryProviderFactory = sp =>
+{
+    var reducer = new MentorChatReducer(50);
+    return sp.GetService<HistoryOwner>()?.Key is { Length: > 0 } owner
+        ? new PostgresChatHistoryProvider(sp.GetRequiredService<PostgresChatHistoryStore>(), owner, reducer)
+        : new InMemoryChatHistoryProvider(new InMemoryChatHistoryProviderOptions { ChatReducer = reducer });
+};
+
+public sealed class PostgresChatHistoryProvider(PostgresChatHistoryStore store, string owner, IChatReducer reducer)
+    : ChatHistoryProvider
+{
+    private readonly ProviderSessionState<Conversation> _conversation =
+        new(_ => new Conversation(), nameof(PostgresChatHistoryProvider), AIJsonUtilities.DefaultOptions);
+    private int _resumed;   // the circuit's first session takes up the owner's latest conversation
+
+    protected override async ValueTask<IEnumerable<ChatMessage>> ProvideChatHistoryAsync(
+        InvokingContext context, CancellationToken ct = default)
+        => await reducer.ReduceAsync(await store.LoadAsync(owner, await IdAsync(context.Session!, ct), ct), ct);
+
+    protected override async ValueTask StoreChatHistoryAsync(InvokedContext context, CancellationToken ct = default)
+    {
+        var id = await IdAsync(context.Session!, ct);
+        // save context.RequestMessages and context.ResponseMessages in your table, under (owner, id)
+    }
+
+    private async Task<Guid> IdAsync(AgentSession session, CancellationToken ct)
+    {
+        var state = _conversation.GetOrInitializeState(session);
+        if (state.Id is { } id) return id;
+        Guid? latest = null;
+        if (Interlocked.Exchange(ref _resumed, 1) == 0)
+        {
+            // read the owner's latest conversation id from your table into latest
+        }
+        state.Id = latest ?? Guid.NewGuid();   // New conversation: a session with no id yet gets a new one
+        _conversation.SaveState(session, state);
+        return state.Id.Value;
+    }
+
+    public sealed class Conversation { public Guid? Id { get; set; } }
+}
+```
+
+`PostgresChatHistoryStore` is your data access (Npgsql): it reads a conversation's rows in order and deserializes each `message`, inserts the turn's messages, each serialized with `AIJsonUtilities.DefaultOptions`, and finds the conversation of the owner's newest row; the sample's `PostgresChatHistoryStore` has the whole code. The source sample of the samples repository runs this recipe on PostgreSQL, with the knowledge base on pgvector, when it is given a connection string.
+
 ### How the built-in history is trimmed
 
 The in-memory history keeps at most `MaxSessionMessages` messages (default 50) and trims them by
@@ -1869,7 +2071,7 @@ builder.Services.AddMentorAgentBlazor(options =>
 ```
 
 > ⚠️ **Three WASM-only setup steps** not required in Blazor Server:
-> 1. **CSS/JS links** — in a standalone WASM app the static `index.html` is served before the .NET runtime starts, so the widget cannot inject its own assets. A Blazor Web App has no `index.html`: prerendered, the widget writes the tags itself; without prerendering they go in `App.razor`. Where you add them, add `<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.2.0" rel="stylesheet" />` and `<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.2.0"></script>` manually — **set the `?v=` to the version of the package you install and change it on every upgrade**, because nothing fingerprints these two and a cached older `MentorAgent.js` silently costs you the onboarding tour and streaming voice.
+> 1. **CSS/JS links** — in a standalone WASM app the static `index.html` is served before the .NET runtime starts, so the widget cannot inject its own assets. A Blazor Web App has no `index.html`: prerendered, the widget writes the tags itself; without prerendering they go in `App.razor`. Where you add them, add `<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.3.0" rel="stylesheet" />` and `<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.3.0"></script>` manually — **set the `?v=` to the version of the package you install and change it on every upgrade**, because nothing fingerprints these two and a cached older `MentorAgent.js` silently costs you the onboarding tour and streaming voice.
 > 2. **CORS + absolute `HubUrl`** when the WASM app and the server are on different origins (different ports). Confirmations and Stop (`POST /mentor/approve`, `/mentor/cancel`) then go to the hub's origin with the `AccessTokenProvider` token, through the `HttpClient` the client registers (step 3). See the [Novior.MentorAgent.Server](https://www.nuget.org/packages/Novior.MentorAgent.Server) and [Novior.MentorAgent.Blazor](https://www.nuget.org/packages/Novior.MentorAgent.Blazor) READMEs.
 > 3. **An `HttpClient` in the client project** — the widget sends Stop and confirmations through it, and `AddMentorAgentBlazor()` does not register one. The standalone WebAssembly template does; the client project of a Blazor Web App does not, and without it the WebAssembly runtime does not start (`CannotResolveService … HttpClient`). Add `builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) });` to its `Program.cs`, as in the snippet above.
 
@@ -1900,7 +2102,7 @@ with `NU1605`: `Microsoft.Extensions.Hosting` came in with the same server depen
 
 ```xml
 <!-- in the <ItemGroup> the MAUI template generated -->
-<PackageReference Include="Novior.MentorAgent" Version="1.2.0" />
+<PackageReference Include="Novior.MentorAgent" Version="1.3.0" />
 ```
 
 **2 · Reference the widget's static assets.** A MAUI app serves `wwwroot/index.html` itself, and the
@@ -2308,14 +2510,14 @@ The log names the exception's type, never its message.
 | Property | What it holds |
 |---|---|
 | `Stage` | Whether MentorAgent is deciding what to offer (`Offer`) or a call is about to run (`Call`) |
-| `ToolName`, `Description` | The tool's technical name, as on `MentorActionDecision`, and the description the model reads |
+| `ToolName`, `Description` | The tool's technical name, as on `MentorActionDecision`, and the description the model reads; `null` when it has none. The description is the `IMentorActionGovernor`'s when it gives one, except on a call to the MCP server, which carries the code's; a question to the governor itself carries the code's |
 | `Arguments` | At `Call`, the arguments by parameter name, as the model or the MCP client sent them — in general a `JsonElement` each. **Nothing has checked them**: read them as you would read a request's body. `null` at `Offer` |
 | `User` | The signed-in user, or `null` when nobody is; read for every action, those that require no role too. On the MCP server, the caller `McpCallerPrincipal` resolves, else the request's user |
 | `Surface`, `AgentKind`, `AgentName` | Where the call comes from and which agent asks for it, as on `MentorActionDecision` |
 | `SessionId`, `TurnId`, `CallId` | As on `MentorActionDecision`. `CallId` is `null` at `Offer`, and `TurnId` on the MCP server |
 | `PageName` | The page the user is on, as it named itself with `IMentorPageContext.SetPageName`; `null` when no page did, on the MCP server and in a task from another agent |
-| `RequiredRoles` | The roles the action requires, any one of which is enough; empty when it requires none |
-| `RequiresConfirmation` | Whether the action asks for a confirmation of its own — the attribute, `RequiresApproval` or an MCP server's `RequiresConfirmation` — with `RequireConfirmation` on |
+| `RequiredRoles` | The roles the action requires, any one of which is enough; empty when it requires none. They are the `IMentorActionGovernor`'s when it gives them; a question to the governor itself carries the code's |
+| `RequiresConfirmation` | Whether the action asks for a confirmation of its own — the attribute, `RequiresApproval` or an MCP server's `RequiresConfirmation` — with `RequireConfirmation` on; the `IMentorActionGovernor`'s answer when it gives one. A question to the governor itself carries the code's |
 | `Services` | The services of the conversation's scope: the circuit, the hub connection, the request, the A2A task; on the MCP server, the request's. Never the root services: resolve a scoped service of yours there, a `DbContext` or the current tenant |
 
 **Where policies are asked:**
@@ -2351,13 +2553,106 @@ var writesOnMcp = catalog.GetActions()
 Each one carries `ToolName`, `Description`, `AgentKind` (`Coordinator`, `Specialist` or `TeamMember`) and
 `AgentName`, `RequiredRoles`, `RequiresConfirmation` (whether a call asks for a confirmation now, the
 `RequiresApproval` predicate included), `ReadOnly` (declared as only reading, and gated by no confirmation),
-`OnAgentCard` (whether the A2A card lists it; `false` when the host does not serve A2A) and `McpExposure`:
+`OnAgentCard` (whether the A2A card lists it; `false` when the host does not serve A2A), `EnabledByDefault` (`false`
+for an action shipped off, which is then `Withheld` on MCP and never `OnAgentCard`: the catalogue says what the code
+says, and does not ask the governor) and `McpExposure`:
 `Published` to every caller, `PublishedToRoles` to the callers `McpCallerPrincipal` identifies with one of its roles,
 `Withheld` (it asks for a confirmation, the predicate holds it back, or it requires a role and no
 `McpCallerPrincipal` is set) or `NotServed` (the host does not map the MCP server, the action belongs to a specialist
 or a team, or its class is not registered). It is decided again at every call, by the rules of the MCP server and of
 the card; a policy may still leave an action out for one user. The tools of the MCP servers the application consumes,
 and those of an agent source, are not in it.
+
+### Governing actions from outside the code — `IMentorActionGovernor`
+
+An action can ship off: `[MentorAction(Enabled = false)]` keeps it in `IMentorActionCatalog` (`EnabledByDefault` is
+`false`) and nowhere else. No agent is offered it, no model reads about it, the MCP server does not list it, the A2A
+card does not show it, and a call to it does not run (`Denied`, `disabled`). Without a governor it stays off.
+
+An `IMentorActionGovernor` decides from outside the code whether each of the application's actions is on, the
+roles it requires, whether the user confirms it, and the description the model reads, from an administration
+console for example:
+
+```csharp
+// Shipped off: it runs only where the governor turns it on
+[MentorAction(Description = "Archives an order", Enabled = false)]
+public string ArchiveOrder(int orderId) => orders.Archive(orderId);
+
+public sealed class ConsoleGovernor(IConsoleCatalog console) : IMentorActionGovernor
+{
+    // null: what the code says
+    public ValueTask<bool?> IsEnabledAsync(MentorActionRequest request, CancellationToken ct)
+        => console.IsEnabledAsync(request.SessionId, request.ToolName, ct);
+
+    // null: the code's roles; []: nobody needs one
+    public ValueTask<IReadOnlyList<string>?> GetRequiredRolesAsync(MentorActionRequest request, CancellationToken ct)
+        => console.GetRolesAsync(request.SessionId, request.ToolName, ct);
+
+    // Code: what the code says; Required: ask; None: do not ask, even if the code does
+    public ValueTask<MentorConfirmationChoice> GetConfirmationAsync(MentorActionRequest request, CancellationToken ct)
+        => console.GetConfirmationAsync(request.SessionId, request.ToolName, ct);
+
+    // null: the code's description; the name and the argument schema never change
+    public ValueTask<string?> GetDescriptionAsync(MentorActionRequest request, CancellationToken ct)
+        => console.GetDescriptionAsync(request.SessionId, request.ToolName, ct);
+}
+
+builder.Services.AddMentorActionGovernor<ConsoleGovernor>();
+```
+
+- `null` leaves the code's word, `false` turns the action off, `true` turns it on, also one the code ships off.
+  **Registering a governor gives whoever implements it the power to widen what the code allows**: an action the code
+  ships off runs once it turns it on, one that requires a role runs for anybody once it requires none, and one the
+  code confirms runs without asking once it takes the confirmation away. What may be widened, when, and with whose
+  approval is the governor's to check.
+- `GetRequiredRolesAsync` gives the roles an action requires in place of the code's, which the request carries in
+  `RequiredRoles`. `null` leaves the code's; an empty list requires none, so anybody may run the action, signed in or
+  not; a list requires any one of its roles, tested as the code's are. They decide whom the action is offered to on
+  each turn, the check before a confirmation and again after it, and on the MCP server which callers see and call
+  it: an action withheld there only for its roles is published once the governor requires none, and one that
+  requires roles is published only with `McpCallerPrincipal`. A decision says where its roles came from:
+  `RolesFromOutside`.
+- `GetConfirmationAsync` decides whether the user confirms an action in place of the code, which the request
+  carries in `RequiresConfirmation`. `MentorConfirmationChoice.Code` leaves the code's word; `Required` asks even if
+  the code does not; `None` does not ask even if the code does, whether the confirmation is declared, by default for
+  writes, or by `RequiresApproval`. Only the code's confirmation is the governor's: an `IMentorActionPolicy` that
+  answers `Confirm` still asks, a hosted MCP server's approval still comes from its provider, and with
+  `RequireConfirmation` off nobody is asked. In Native mode a confirmation the governor requires is asked even when
+  an `AutoApprovalRules` rule would let the call through. An action whose confirmation is taken away still counts as
+  one that changes data: tool filtering never sends it alone, and `RequireActionForChangeRequests` never makes the
+  model call it. On the MCP server, where nobody can confirm, an action that asks is not published, and one whose
+  confirmation the governor takes away is. A decision says when the governor changed whether a call is confirmed:
+  `ConfirmationFromOutside`.
+- `GetDescriptionAsync` gives the description the model reads for an action in place of the code's, which the
+  request carries in `Description`. `null` or a blank text leaves the code's. It is what the coordinator, the
+  specialists and the team members read, what tool filtering ranks the message against, and what the MCP server's
+  `tools/list` shows; the action's name and argument schema never change, and the code's `ProactiveHint` still
+  follows it. **What the user sees stays the programmer's**: the confirmation banner, the bar of the running action
+  and the decisions' `DisplayName` keep the code's description, so a description written outside the code speaks to
+  the model and never changes what a user is asked to confirm. It is asked as a session builds its tools and on
+  every `tools/list`, never at a call; on a call to the MCP server the policies are asked with the code's
+  description. Whoever writes it writes part of the model's instructions about the action.
+- It is asked once as a session builds its tools (for the coordinator, the specialists and the team members), on
+  every `tools/list` of the MCP server, and before every call, ahead of the roles, the policies and the confirmation.
+  `MentorActionRequest.SessionId` names the session every time, so an answer can stay the same for a whole session; on
+  the MCP server it is a fingerprint of the MCP session. A session keeps the tools it was built with: turning an
+  action off takes effect at once for its calls, which are refused, while turning one on counts from the next
+  session. The roles go the same way: what is offered follows the answer given as the session was built, a call
+  the answer at that moment. For the confirmation, narrowing takes effect at once and widening from the next
+  session: a confirmation added counts from the call, one taken away from the next session, and a call is confirmed
+  when the session's answer or the call's asks for it. The description is asked only as a session builds its tools
+  and on every `tools/list`. On `/mentor/chat` the session is the request.
+- There is one per application: a second `AddMentorActionGovernor` throws. It is a singleton; what it needs from the
+  conversation's scope it resolves from `MentorActionRequest.Services`.
+- A governor that throws, or does not answer within `ActionPolicyTimeout`, stops the action: it is not offered, and
+  the call does not run (`PolicyFailed`, `governor-failed`). Going back to the code would undo what the governor
+  narrowed. Only the exception's type is logged.
+- **The A2A card follows the code only.** It is built once, for every caller: an action shipped off is not on it, and
+  one a governor turns on is not added to it, even though a task can then call it. The onboarding tour, built once
+  too, suggests no action shipped off. The roles, the confirmation and the description on
+  the card, and in `IMentorActionCatalog`, are the code's too.
+- It decides the application's own actions, those `IMentorActionCatalog` lists: not the tools of the MCP servers the
+  application consumes, not an agent source's own, never MentorAgent's.
 
 ### Auditing the gate's decisions — `IMentorActionObserver`
 
@@ -2376,6 +2671,10 @@ public sealed class AuditObserver(ILogger<AuditObserver> logger) : IMentorAction
     {
         logger.LogInformation("{Outcome} ({Reason}) {Tool} by {User} on {Surface}, turn {Turn}",
             d.Outcome, d.ReasonCode, d.ToolName, d.User?.Identity?.Name ?? "nobody", d.Surface, d.TurnId);
+        if (d.RolesFromOutside)
+            logger.LogInformation("{Tool}: roles from the governor ({Roles})", d.ToolName, string.Join(", ", d.RequiredRoles));
+        if (d.ConfirmationFromOutside)
+            logger.LogInformation("{Tool}: confirmation decided by the governor", d.ToolName);
         return ValueTask.CompletedTask;
     }
 }
@@ -2403,6 +2702,8 @@ read the user for an action that requires no role.
 | `ConfirmationId` | The `ActionId` of the confirmation, on the decisions that belong to one |
 | `User` | Who asked for the action, or `null` when nobody is signed in |
 | `RequiredRoles` | The roles the action requires, any one of which is enough; empty when it requires none |
+| `RolesFromOutside` | `true` when `RequiredRoles` are the `IMentorActionGovernor`'s, in place of the code's: it answered the roles of this call with a list, empty or not |
+| `ConfirmationFromOutside` | `true` when the `IMentorActionGovernor` changed, from what the code says, whether this call is confirmed: it took away a confirmation the code asks for, or asked for one the code does not. `false` on the decisions made before the confirmation is decided |
 | `ConfirmedBy` | On `Confirmed`, who confirmed: the caller of `POST /mentor/approve`; in a circuit and in the MAUI app, the session's signed-in user |
 | `Timestamp` | When the gate decided, in UTC |
 | `ExceptionType` | On `Failed` and `PolicyFailed`, the full name of the exception's type. Never its message |
@@ -2414,13 +2715,13 @@ the CHANGELOG says so.
 | `Outcome` | When | `ReasonCode` |
 |---|---|---|
 | `Allowed` | The roles and every [`IMentorActionPolicy`](#deciding-before-an-action-runs--imentoractionpolicy) allow the call; the confirmation, when the action or a policy asks for one, comes next | `allowed`; `auto-approved` when, in `Native` mode, an `AutoApprovalRules` rule let a call that asks for confirmation run without asking |
-| `Denied` | Refused | `role-missing`, `login-required` (a role is required and nobody is signed in), `auth-not-configured` (no `AuthenticationStateProvider`), `auth-check-failed` (reading the user threw), `not-authorized` (a policy does not allow this user the action), `nobody-to-confirm` (the action or a policy asks for a confirmation nobody can give: a task from another agent, a call to the MCP server); on the MCP server also `withheld` (an action it does not publish) and `rate-limited` |
+| `Denied` | Refused | `disabled` (the action is off: shipped off and not turned on, or turned off by the governor), `role-missing`, `login-required` (a role is required and nobody is signed in), `auth-not-configured` (no `AuthenticationStateProvider`), `auth-check-failed` (reading the user threw), `not-authorized` (a policy does not allow this user the action), `nobody-to-confirm` (the action or a policy asks for a confirmation nobody can give: a task from another agent, a call to the MCP server), `not-offered` (the model called an action of the application its agent was not given in the turn — one that is off, or another agent's: no gate saw the call, and nothing ran); on the MCP server also `withheld` (an action it does not publish) and `rate-limited` |
 | `ConfirmationRequested`, `Confirmed`, `Rejected` | The user is asked, says yes, says no | `operator`; `policy` on `ConfirmationRequested` when a policy asked for a confirmation the action does not ask for itself; `confirmation-timeout` on `Rejected` when nobody answered within `ConfirmationTimeout` |
 | `Stopped` | Stopped before it finished | `stop` (Stop, `/mentor/cancel`, the MCP client cancelled the call, or the caller cancelled the A2A task — also after the confirmation, before the action started), `session-ended` (the circuit, the hub connection or the request closed), `turn-ended` (in `Native` mode, the turn ended before a confirmed call could run) |
 | `Executed` | The action ran | `completed`; `result-withheld` when `OnToolResult` threw — on the MCP server the caller then gets an error result |
 | `Failed` | The action threw | `exception` |
 | `Blocked` | A policy stopped the call before it ran; its reason is in `Detail` | `policy` |
-| `PolicyFailed` | A policy threw, or did not answer within `ActionPolicyTimeout`: the call did not run | `policy-exception`, with the exception's type in `ExceptionType`; `policy-timeout` |
+| `PolicyFailed` | A policy or the governor threw, or did not answer within `ActionPolicyTimeout`: the call did not run | `policy-exception`, with the exception's type in `ExceptionType`; `policy-timeout`; `governor-failed` (the governor; the exception's type in `ExceptionType` when it threw) |
 
 A call goes through them in one of these orders, the same in `Blocking` and in `Native` mode:
 
@@ -2750,9 +3051,26 @@ options.RequireActionForChangeRequests = true;
 
 Only actions that will ask a person first are ever required: declared confirmation (`RequiresConfirmation`, the `RequiresApproval` predicate, an MCP server with `RequiresConfirmation`) with `RequireConfirmation` on — and, from 1.0.0-rc.15, every `[MentorAction]` that `RequireConfirmationForWrites` makes ask, so with the default more of your actions can be required than in rc.14. With `HitlMode.Native`, no `AutoApprovalRules` rule is consulted for a required call: it is always shown to a person, while the calls the model makes on its own are the rules' to decide, as before. A page request is matched against your `[MentorPage]` pages, which the classifier is shown: a page the application does not have, or something within the page already open, is not forced. A request from another agent is never required to navigate, and the turn that answers an approval a Stop left open is never forced. It costs one small classifier call per turn while the application has a page or the message selected such an action; with `RequireLookupForRecordQuestions` on as well, one call answers both. The classifier is asked only about what this message's selection could satisfy, so with reads alone it is asked the question measured above, unchanged. Both run it at temperature 0, the temperature it was measured at.
 
+**A provider that ignores `tool_choice`.** Both options require the first call with `ChatToolMode.RequireAny`, which the provider receives as `tool_choice: "required"`. Ollama ignores it and answers with text, so with Ollama the two options have no effect. The first time a request that required a tool call comes back without one, a Warning says so, once per provider client (`MentorOptions.ChatClient`) in the process; a streamed reply is not held back for it. vLLM supports `"required"`; the recipes for llama-server and vLLM are in [AI providers](#ai-providers).
+
 The threshold decides which actions count as a match. `ToolFilterMinTools` (default 0) can also send the next best-ranked actions with a lone match, whatever their score. It is a trade-off, measured both ways. Asked *"Quante unità di iPad Air ci sono in magazzino?"*, a shop's stock-update action (*"Aggiorna la quantità in stock di un prodotto"*) scored 0.351 and was the only action above 0.35, while the actions that read stock ranked just below. Sent alone, the write action was called with a quantity of 0 and the stock was set to 0; with a floor of 3 the read actions travelled with it and nothing was written. But asked *"Quanto ha speso Anna Ferrari?"*, the lone match was the right search, and with a floor of 3 the model picked a by-email lookup instead and answered that no such customer exists, four times of four. Neither setting tells a wrong lone match from a right one. **Let every action that changes data ask for confirmation** — a `[MentorAction]` that declares nothing does, from 1.0.0-rc.15 — that is what stops a model that picked the wrong tool. On a task from another agent, where nobody can confirm, such an action is refused at once.
 
 > Applies only to the pipeline MentorAgent builds around `ChatClient` (Path A). With a pre-built `Agent` (Path B) the option has no effect and a startup warning says so. Filter the tools on your own agent instead.
+
+**Checking a reply that announced an action and called none (on by default).** With `MentorHitlMode.Blocking` and a Chat Completions client, the model can end its reply with *"Procedo a registrare la nota…"* and call nothing: the note is not registered, and the user is left waiting (BUG-220). A rule in the prompt against it only moved the miss: the model then wrote that the note was registered, still without calling anything. `CheckAnnouncedActions` checks the reply instead. After a turn in which the coordinator called no tool, a model is asked whether the reply announces an action (*"I'm registering the note…"*) or reports one as done; when it does, the coordinator gets one more request in the same turn, with the same tools, told to call the tool now or to say, in one sentence, that it was not done. The question names the tools the model was sent in the turn, and the answer names the one that does the action: the second request then tells the model that this tool is there to call now, and not to say that it cannot be done or that signing in is needed.
+
+```csharp
+options.CheckAnnouncedActions = true;                  // the default
+options.ClassifierChatClient  = smallDeploymentClient; // where the question goes; ChatClient without it
+```
+
+- **Never a required call.** The second request keeps the tool mode it had: an action that asks no one first must not run on a judgement that may be wrong. The call it makes passes the gate as any other: one that asks for confirmation shows the banner.
+- **Once per turn.** The reply of the second request is not checked again, and the request that reads the tool's result is not told again to call it.
+- **Nothing is held back.** The first reply streams as before; the second follows in the same turn, as a message of its own, as the approval rounds of `MentorHitlMode.Native` do. The instruction is that request's last message, read after the reply it is about — a message of the user, since many chat templates (Mistral and Ministral, Gemma, others served by llama-server or vLLM) refuse a system message that is not the first (BUG-231) — and it is never added to the conversation, so it is not stored or carried into later turns.
+- **What it costs.** One small call after every reply that called no tool, while the coordinator has an action of the application to call (your `[MentorAction]` methods, specialists, teams, remote agents or MCP servers): the user's message and the reply, each cut to one line, the names of the tools the model was sent, and an answer of one or two words. A turn that called a tool, or an application with no actions, is not checked. The question goes to `ClassifierChatClient`, or to `ChatClient` without one; unlike the other checks on that client, this one is on by default, so a small, fast deployment there is worth configuring. It is bounded by `SafetyCheckTimeout` and asked at temperature 0.
+- **What it cannot see.** It reads the reply, not the application: a reply that says *"done"* after a tool that did something else is not its case. A question that fails, runs out of time or answers anything unreadable leaves the turn as it is. A line at Information in the log gives the verdict of every reply it checks — `ANNOUNCED`, `CLAIMED`, `NONE` or `unreadable`, with the time and the tokens it took — and another says when the second request was made and whether it called a tool. A call to an action of the application the agent was not given in the turn — one that is off, or another agent's — runs nothing, and the turn is checked as one in which nothing ran. With this option on or off, an `IMentorActionObserver` receives that call's one decision: `Denied`, `not-offered`.
+
+> Applies to the pipeline MentorAgent builds around `ChatClient` (Path A), with the history MentorAgent keeps. With `UseServiceManagedHistory`, or with a pre-built `Agent` (Path B), the option has no effect.
 
 ### History compaction
 
@@ -2874,10 +3192,17 @@ On top of the GenAI spans, MentorAgent emits these under `ObservabilitySourceNam
 | `mentor.turn` | span | Once per user turn that got past the input checks |
 | `mentor.tool.{toolName}` | span | Once per tool call through MentorAgent's gate — in `Native` mode also for a call refused, rejected or stopped before it runs. Tags: `mentoragent.tool`, `mentoragent.tool.outcome` (the call's last outcome: `executed`, `failed`, `denied`, `rejected`, `stopped`, `blocked`, `policy-failed`…), `mentoragent.tool.reason` (a [reason code](#auditing-the-gates-decisions--imentoractionobserver)), `mentoragent.tool.confirmation` (`none`, `requested`, `confirmed`, `rejected`, `auto-approved`, `unavailable`, `timed-out` when nobody answered within `ConfirmationTimeout`), `mentoragent.surface` (`in-process`, `hub`, `sse`, `a2a`) and, when the agent has a name, `mentoragent.agent`. A failed call, and one whose policy failed, sets the status to error |
 | `mentor.mcp.tool.{toolName}` | span | Once per `tools/call` to a tool the MCP server publishes, with the same tags: `mentoragent.surface` is `mcp` and `mentoragent.tool.confirmation` is `none`, or `unavailable` when a policy asked for a confirmation |
+| `mentor.rag.search` | span | Once per knowledge-base search (`UseRag`). Tag `mentoragent.rag.source`, the source's type's full name; when the search failed, the status is Error and `mentoragent.error.type` names the exception's type, never its message |
 | `mentoragent.turns` | counter | User turns processed |
 | `mentoragent.tool_calls` | counter, tag `mentoragent.tool` | Tool invocations |
 | `mentoragent.errors` | counter | Turns that ended in an error |
 | `mentoragent.guardrail_blocks` | counter | Messages refused by the input check (`RefuseOutOfScope` refusals included), replies withheld by the output check |
+| `mentoragent.rag_failures` | counter, tags `mentoragent.rag.source`, `mentoragent.error.type` | Knowledge-base searches that failed — the source threw, or answered with no list — so the turn went on without documents. A Stop during the search is not counted |
+
+With an `IMentorTenantResolver` registered, every counter and the `mentor.turn` span carry one more tag,
+`mentoragent.tenant`: the tenant of the turn or of the MCP call. Without a resolver the tag is absent and every
+series is as before. Read the whole instance, tenant by tenant, from here: the dashboard below shows one tenant
+at a time.
 
 > The GenAI chat spans come from the pipeline MentorAgent builds around `ChatClient` (Path A). With a pre-built `Agent` (Path B) you get the `mentor.*` spans and `mentoragent.*` counters only. Instrument your own agent's chat client for the rest.
 
@@ -2932,7 +3257,26 @@ builder.Services.AddSingleton<IMentorMetricsStore, PrometheusMetricsStore>();   
 builder.Services.AddMentorAgent(options => { ... });
 ```
 
-`LoadForSeedAsync` restores totals at startup, `SaveAsync` persists them (timer via `MetricsPersistenceInterval`, default 30s, + graceful shutdown), and `QueryAsync` lets an external source serve the authoritative aggregate — the admin endpoint returns `await store.QueryAsync() ?? metrics.GetSnapshot()`. The default `NullMetricsStore` keeps the RAM-only behaviour with zero overhead. Working `FileMetricsStore`, `PrometheusMetricsStore` and `AzureMonitorMetricsStore` implementations ship in the `MentorAgentServer` sample.
+`LoadForSeedAsync` restores totals at startup, `SaveAsync` persists them (timer via `MetricsPersistenceInterval`, default 30s, + graceful shutdown), and `QueryAsync` lets an external source serve the authoritative aggregate — the admin endpoint returns `await store.QueryAsync(tenant) ?? metrics.GetSnapshot(tenant)`, with `tenant` `null`
+without a resolver. The default `NullMetricsStore` keeps the RAM-only behaviour with zero overhead. Working `FileMetricsStore`, `PrometheusMetricsStore` and `AzureMonitorMetricsStore` implementations ship in the `MentorAgentServer` sample.
+
+### With more than one tenant
+
+With an `IMentorTenantResolver` registered (see [Serving more than one tenant](#serving-more-than-one-tenant)),
+`<MentorDashboard/>` and `GET /mentor/admin/metrics` show the figures of the reader's tenant only — tokens, cost,
+turns, errors, guardrail blocks and top actions, the MCP server's calls included — never another tenant's. A
+reader whose tenant the resolver does not name sees no figures, and the endpoint answers 403.
+
+- **Reading a tenant in code.** `IMentorMetrics.GetSnapshot(tenant)` gives a tenant's snapshot; `GetSnapshot(null)`
+  is the instance's, the same as `GetSnapshot()`.
+- **Kept in RAM.** A tenant's figures are kept in RAM since the process started. A registered
+  `IMentorMetricsStore` saves and seeds the instance's totals only.
+- **An external store.** A store that reads an external backend can serve a tenant too, by overriding
+  `QueryAsync(string? tenant, CancellationToken)` and filtering on the `mentoragent.tenant` tag. Without that
+  override the store is asked for the instance only, and a tenant's reader gets the tenant's in-RAM figures.
+- **A custom `IMentorMetrics`** keeps working unchanged: the new `GetSnapshot(string? tenant)` has a default, which
+  answers the instance's snapshot for `null` and nothing for a tenant. With a resolver, that dashboard therefore
+  shows a tenant no figures rather than the whole instance's, and the endpoint answers 204.
 
 ### Reading the numbers yourself
 
@@ -3108,6 +3452,12 @@ options.ClassifierChatClient = new AzureOpenAIClient(endpoint, credential)
 // embeddings, the shared MCP connections and the remote agent cards are the same for every
 // visitor, and without this the first one to arrive pays for all three.
 options.WarmUpAtStartup = true;
+
+// Optional, with WarmUpAtStartup: one minimal request to ChatClient (and StrongChatClient, when set) once the
+// coordinator is built — its instructions, tools and CoordinatorSampling, ChatToolMode.None, MaxOutputTokens 16.
+// The first turn then finds the connection open, the provider's prompt cache warm and a local model loaded.
+// Every start costs one request per client; a failure is a warning and the application goes on.
+options.WarmUpChatModel = true;
 ```
 
 The decision uses the latest user message and applies to the whole turn; the chosen model is logged at `Debug` level (`… routing → strong/cheap model`; set the `Novior.MentorAgent.Middleware.RoutingChatClient` category to `Debug` to see it). Any routing failure falls back to the cheap model. Semantic without an `EmbeddingGenerator`, or Custom without a predicate, disables routing (cheap only) with a warning. The [dashboard](#token--cost-dashboard) attributes tokens and cost **per model**, so cheap vs strong spend is broken out separately. Note: the routing decision's own auxiliary calls (Classifier's label, Cascade's cheap probe + completeness judge) are made below the token meter and are not counted.
@@ -3289,12 +3639,80 @@ Save the definition as `Agents/shipping.agent.yaml`. By default only `*.agent.ya
 
 Declarative agents run on `ChatClient` (Path A). With a pre-built `Agent` they are skipped and a warning is logged.
 
-The `tools` section **names** tools; it does not define them. Only `kind: function` entries are kept: their names are resolved against the Level-1 tools your application already registers, and they arrive **already wrapped in the gate** — so `RequiredRoles`, human approval, action feedback and per-tool metrics keep working inside the agent's own function-calling loop. Entries of kind `webSearch`, `codeInterpreter`, `fileSearch` or `mcp` are **removed** from the agent with a warning (`removed web_search …`); web search, code interpreter, file search and MCP are configured by the host (`HostedTools`, `McpServers`), never by a definition file. A definition file gets no capability the application did not already have.
+The `tools` section **names** tools; it does not define them. Only `kind: function` entries are kept: their names are resolved against the Level-1 tools your application already registers, as the session has them, and they arrive **already wrapped in the gate** — so `RequiredRoles`, human approval, action feedback and per-tool metrics keep working inside the agent's own function-calling loop. Entries of kind `webSearch`, `codeInterpreter`, `fileSearch` or `mcp` are **removed** from the agent with a warning (`removed web_search …`); web search, code interpreter, file search and MCP are configured by the host (`HostedTools`, `McpServers`), never by a definition file. A `kind: function` entry that names no action of the session — unknown to the application, or off for this session — is removed the same way, with a warning (`removed get_order_statu …`), so an action that is off reaches no model through a definition that names it. Both are reported to the observers below (`hosted-tool-removed`, `tool-not-found`). A definition file gets no capability the application did not already have.
 
 > **A definition file is code.** It chooses the model, writes the system instructions and names the
 > callable tools. Load it only from deploy-time locations and review it like a `.cs` file.
 
 To supply agents from somewhere else entirely — a database, a configuration service — implement `IMentorAgentSource` and register it. `AddMentorAgentDeclarative` is one implementation of that interface, not a privileged path.
+
+**When a source is asked.** A source is asked whenever a coordinator is built: at least once per session — once per Blazor circuit, MAUI app scope or hub connection, and at every request on `/mentor/chat` and every task over A2A, where a request is a session of its own. A turn never asks again. `MentorAgentSourceContext.SessionId` names the session, with the same opaque id as `MentorActionRequest.SessionId` and `MentorActionDecision.SessionId`, so a source can give each session the agents of one version. The coordinator that `WarmUpAtStartup` builds has a session of its own.
+
+**What it left out.** MentorAgent calls `IMentorAgentSource.LoadAsync`, which returns a `MentorAgentSourceResult`: the agents, and a `MentorAgentRejection` for each definition left out or tool taken away. Its default body returns the agents of `GetAgentsAsync` and leaves nothing out, so a source that implements only `GetAgentsAsync` works as before. One bad definition is a rejection, not an exception. A source that throws is skipped and reported as `source-failed`, with the exception's type and never its message; the other sources still load. A source that reports what it left out:
+
+```csharp
+public async Task<MentorAgentSourceResult> LoadAsync(MentorAgentSourceContext context, CancellationToken ct)
+{
+    var agents = new List<AIAgent>();
+    var rejected = new List<MentorAgentRejection>();
+    foreach (var definition in await store.ForSessionAsync(context.SessionId, ct))
+    {
+        try { agents.Add(await factory.CreateFromYamlAsync(definition.Yaml, ct)); }
+        catch (Exception ex) { rejected.Add(new(definition.Name, MentorAgentRejectionReasons.InvalidDefinition, ex.Message)); }
+    }
+    return new(agents, rejected);
+}
+```
+
+**Who hears it.** An `IMentorAgentSourceObserver`, registered with `AddMentorAgentSourceObserver<T>()` (a singleton; every one registered is called), receives one `MentorAgentSourceReport` per source every time a coordinator is built, also when the source loaded nothing. It is called on the path that builds the session, before the first answer: return quickly, and hand anything slow — a call to another service — to a queue of your own. An observer that throws is logged with the exception's type and stops nothing. Each source that left something out also writes one Warning, `[MentorAgent] Agent source <type> left out: <name> (<code>), <tool> of <name> (<code>)…`.
+
+```csharp
+builder.Services.AddMentorAgentSourceObserver<AgentLoadLog>();
+
+public sealed class AgentLoadLog(ILogger<AgentLoadLog> log) : IMentorAgentSourceObserver
+{
+    public void OnAgentsLoaded(MentorAgentSourceReport report)
+    {
+        log.LogInformation("{Source} at {Time}: {Agents}", report.Source, report.Timestamp, string.Join(", ", report.Loaded));
+        foreach (var r in report.Rejected)   // r.Tool is set when only one tool of a loaded agent was taken away
+            log.LogWarning("{Source} left out {Name} {Tool}: {Code} {Detail} (session {Session})",
+                report.Source, r.Name, r.Tool, r.ReasonCode, r.Detail, report.SessionId);
+    }
+}
+```
+
+`MentorAgentSourceReport`:
+
+| Property | Type | Meaning |
+|---|---|---|
+| `Source` | `string` | The full type name of the source |
+| `SessionId` | `string?` | The session the coordinator was built for |
+| `Loaded` | `IReadOnlyList<string>` | The names of the agents that joined the coordinator, in the order the source gave them |
+| `Rejected` | `IReadOnlyList<MentorAgentRejection>` | What was left out; empty when everything loaded as written |
+| `Timestamp` | `DateTimeOffset` | When the source answered |
+
+`MentorAgentRejection`:
+
+| Property | Type | Meaning |
+|---|---|---|
+| `Name` | `string` | What was left out: for the Declarative package the file name, or `inline[n]` for the n-th of `Definitions`; for `source-failed`, the source's full type name |
+| `ReasonCode` | `string` | One of `MentorAgentRejectionReasons`, or a code of the source's own |
+| `Detail` | `string?` | What to correct: for `invalid-definition` the agent factory's message, which describes the text; for `source-failed` the exception's type, never its message |
+| `Tool` | `string?` | The tool taken away, when the agent loaded without it; `null` when the whole definition was left out |
+
+The codes of `MentorAgentRejectionReasons` stay the same from one version to the next; a new one comes only in a minor version, and the CHANGELOG says so:
+
+| Code | When |
+|---|---|
+| `invalid-definition` | The agent factory refused the text: it does not parse, does not describe a valid agent, or describes something else — a workflow in a file meant for an agent (`Detail`: `Unsupported root element: …`) |
+| `not-an-agent` | The definition gave no agent and no error. The Agent Framework's factory refuses another kind instead (`invalid-definition`): this is for a factory or a source that answers with nothing |
+| `foreign-tools` | The definition adds tools it may not add, or names a function the session does not have, and they could not be taken away: the agent is not loaded |
+| `invalid-configuration` | The configuration exposed to the definitions is not valid for Power Fx: every definition of the source is left out |
+| `source-failed` | The whole source threw (added by MentorAgent) |
+| `tool-not-found` | With `Tool`: a `kind: function` entry names no action of this session — unknown, or off for it. The agent loads without it |
+| `hosted-tool-removed` | With `Tool`: a `webSearch`, `codeInterpreter`, `fileSearch` or `mcp` entry was taken away. The agent loads with the application's own tools |
+
+**Nothing is added at runtime.** There is no API to hand MentorAgent agents or YAML texts while the application runs: a source supplies them when it is asked.
 
 See the [package README](https://www.nuget.org/packages/Novior.MentorAgent.Declarative) for the YAML reference, including two format details the Agent Framework guide does not document: every `tools` entry needs `kind`, and folded scalars (`>`) are not supported.
 
@@ -3841,7 +4259,7 @@ Role checks, the confirmation banner, action feedback, `NavigateTo`, `OnToolResu
 
 ## Evaluation & regression testing
 
-`MentorEvaluator` is a small prompt/token regression harness. It sends each case straight to your configured `ChatClient` (system prompt = `SystemInstructions`; no tools and no MentorAgent pipeline), reads the provider's real token usage from the response, applies a built-in non-empty check and an optional lightweight LLM judge, and **fails** when a run exceeds a token budget or drops below a quality bar, so you can gate CI on prompt/token regressions. It needs a `ChatClient` (Path A) and throws `InvalidOperationException` without one. When you add native Agent Framework `Checks` / `Evaluators` (below), the cases are also run through a `ChatClientAgent` with `agent.EvaluateAsync(...)` and their verdicts gate the report. That second run is one extra model call per case, is not counted in `TotalTokens`, and if it throws, a warning is logged and only the core gates apply. Inject `MentorEvaluator`:
+`MentorEvaluator` is a small prompt/token regression harness. It sends each case straight to your configured `ChatClient` (system prompt = `SystemInstructions`; no tools and no MentorAgent pipeline), reads the provider's real token usage from the response, applies a built-in non-empty check and an optional lightweight LLM judge, and **fails** when a run exceeds a token budget or drops below a quality bar, so you can gate CI on prompt/token regressions. It needs a `ChatClient` (Path A) and throws `InvalidOperationException` without one. When you add native Agent Framework `Checks` / `Evaluators` (below), the cases are also run through a `ChatClientAgent` with `agent.EvaluateAsync(...)` and their verdicts gate the report. That second run is one extra model call per case, is not counted in `TotalTokens`, and if it throws, a warning is logged and only the core gates apply. To test the whole mentor — tools, filters, roles, RAG, memory, several turns, streaming — use `RunConversationsAsync` ([Conversations through the mentor](#conversations-through-the-mentor)). Inject `MentorEvaluator`:
 
 ```csharp
 var report = await evaluator.RunAsync(
@@ -3867,7 +4285,7 @@ new MentorEvalOptions
 {
     // Native deterministic checks applied to every case (Microsoft.Agents.AI). The evaluation
     // agent is your ChatClient + SystemInstructions with NO tools, so a tool-call check cannot
-    // pass here. To assert tool use, drive IMentorOrchestrator and read IMentorMetrics instead.
+    // pass here. To assert tool use, run a conversation: RunConversationsAsync with ExpectTools.
     Checks = [ EvalChecks.KeywordCheck("benefit") ],
 
     // Native LLM-judged evaluators — their pass/fail also gates the report:
@@ -3878,6 +4296,73 @@ new MentorEvalOptions
 }
 ```
 
+### Conversations through the mentor
+
+`RunAsync` sends each case to the model alone. `RunConversationsAsync` runs whole conversations through the mentor itself: each `EvalConversation` gets a session of its own, and its `EvalTurn`s go one after another through the real orchestrator, streamed, with the full pipeline (tools, filters, roles, RAG, memory) and the history between turns. The report is the same `MentorEvalReport`.
+
+> **By default every confirmation is answered no: an evaluation does not write data on its own.** The call still counts in `ToolsCalled`, and the notes say `confirmation asked: <tool> — denied`. With `ApproveConfirmations = true` the answer is yes and the action really runs, on the services of the evaluation's scope — use it only on data made for it. It holds with `MentorHitlMode.Blocking` and `MentorHitlMode.Native` alike.
+
+```csharp
+var report = await evaluator.RunConversationsAsync(
+    [
+        new EvalConversation("refund",
+        [
+            new EvalTurn("Hi, I have a problem with order 1001."),
+            new EvalTurn("Refund it, please.")
+            {
+                ExpectTools = ["issue_refund"],
+                MaxTimeToFirstToken = TimeSpan.FromSeconds(3),
+            },
+        ]),
+    ],
+    new MentorEvalOptions
+    {
+        PrepareSession = (sp, ct) =>
+        {
+            /* sign in a test user, set the page — anonymous otherwise */
+            return Task.CompletedTask;
+        },
+        // ApproveConfirmations = true,   // default: every confirmation is answered no
+        MaxTotalTokens = 20_000,
+    });
+
+foreach (var r in report.Results.Where(r => !r.Passed))
+    output.WriteLine($"✗ {r.Conversation} turn {r.Turn}: called [{string.Join(", ", r.ToolsCalled)}] — {r.Notes}");
+
+report.ThrowIfFailed();
+```
+
+| `EvalTurn` member | Meaning |
+|---|---|
+| `Input` | The user's message |
+| `ExpectTools` | Tools the turn must call |
+| `ForbidTools` | Tools the turn must not call |
+| `Expectation` | What the judge checks the reply against |
+| `MaxTokens` | The turn's token budget |
+| `MaxTimeToFirstToken` | How soon the first streamed text must arrive |
+| `ExpectRefusal` | The refusal the turn must show instead of an answer: `EvalRefusal.OutOfScope`, `EvalRefusal.Guardrail` or `EvalRefusal.Any` |
+
+**Expecting a refusal.** A turn that should not be answered says so with `ExpectRefusal`. A refusal is one of the two judgements on the message: `OutOfScope`, a message outside the application's scope with `RefuseOutOfScope`; `Guardrail`, a message the safety check (`EnableSafetyCheck`) or the host's `InputGuardrail` judged unsafe, or one the model itself refused. When the expected refusal comes, the turn passes, its notes say `refused: out of scope` or `refused: guardrail`, and the conversation goes on; with `Any`, either one will do. A turn that was answered fails (`expected an out-of-scope refusal, the turn was answered`), and so does the other refusal (`expected an out-of-scope refusal, refused: guardrail; error: …`). A safety check that could not answer (`SafetyCheckFailure = Block`), a message too long, the rate limit and a missing tenant are not refusals: they fail the turn even with the expectation (`expected a refusal, the turn failed; error: …`), so a case that must be refused does not pass just when the guardrail is down. The turn's other rules still apply — `ExpectTools` on a refused turn fails — and a refused turn's missing text does not count as an empty response. Without `ExpectRefusal` nothing changes: a refusal fails the turn with `error: …`, and the result's `Refusal` says which one it was.
+
+```csharp
+new EvalConversation("scope",
+[
+    new EvalTurn("Write me a poem about the sea") { ExpectRefusal = EvalRefusal.OutOfScope },
+    new EvalTurn("How many open orders are there?") { ExpectTools = ["count_open_orders"] },
+]);
+// After the run, the first turn's result.Refusal is EvalRefusal.OutOfScope and its notes say "refused: out of scope".
+```
+
+- **One session per conversation.** Each conversation has a DI scope of its own, like a new circuit, closed when it ends: a conversation never sees another's history, nor the application's sessions. `RunConversationsAsync` needs the `MentorEvaluator` from the container; one built by hand throws `InvalidOperationException` there, while its `RunAsync` works as before.
+- **Who is asking.** A conversation runs outside any request or circuit, so it is anonymous and the tools that need a role are taken away. `PrepareSession` is called with the conversation's services before its first turn: set the user there, and the page if a turn needs one. In a Blazor Server host, for example: `((IHostEnvironmentAuthenticationStateProvider)sp.GetRequiredService<AuthenticationStateProvider>()).SetAuthenticationState(Task.FromResult(new AuthenticationState(user)))`.
+- **`ToolsCalled`.** The tools the gate let through — run, or asked for a confirmation whatever the answer — and the page's UI actions, each once, in the order of their first call. A call the gate refuses (a policy, a role) is not there, and the notes say `not run: <tool> (<reason code>)`; a tool the role filter removed is not even offered to the model. It is read from the gate, so it holds with `EnableActionFeedback = false` too.
+- **Tokens.** A turn's tokens are every chat-model call of its session: the coordinator, the classifiers and the agents under it, exact even while other sessions talk in the same process. Embedding calls are not counted. `RunAsync` counts only the case's own reply.
+- **`TimeToFirstToken`** runs from the start of the turn to its first streamed text, `null` when the turn has none.
+- **A turn fails** when an expected tool is missing (`expected X, called none`), a forbidden one was called (`called forbidden X`), it showed an error (`error: …`, a refusal shown as an error included, unless the turn expected it with `ExpectRefusal`), it has no text (`empty response`), it is over `MaxTokens` (`tokens N > M`), its first text came late or never (`first token after N ms > M ms`), or the judge scored it below `MinQuality`. A failed turn does not stop the conversation: the next turns run on the history it left. The report's gates are those of `RunAsync` (`MaxTotalTokens`, the mean of `MinQuality`, every result), over every turn, and `FailureReason` names the first failed turn, for example `1 of 2 turn(s) failed — first: 'orders' turn 2: expected count_open_orders, called none`.
+- **`RunAsync` only:** `SystemInstructions`, `Checks` and `Evaluators`. A conversation runs with the mentor's instructions; with those options set, a warning says so.
+- **The judge** is `JudgeClient`, or `ChatClient` without it. With neither, and the judge on for turns that have an `Expectation`, `InvalidOperationException` is thrown before the first turn.
+- **Cancellation** stops the run with `OperationCanceledException`; no later turn runs.
+
 ### Reading the report
 
 `ThrowIfFailed()` is the one-liner for CI, but the report carries everything you need to print a
@@ -3887,7 +4372,7 @@ diff or fail with a useful message.
 
 | Member | Type | Meaning |
 |---|---|---|
-| `Results` | `IReadOnlyList<MentorEvalResult>` | One entry per case, in the order you supplied them |
+| `Results` | `IReadOnlyList<MentorEvalResult>` | One entry per case, or per turn of each conversation, in the order you supplied them |
 | `Passed` | `bool` | The gate. False if any case failed, or a budget/quality bar was missed |
 | `FailureReason` | `string?` | Why, when `Passed` is false |
 | `TotalTokens` | `long` | Sum across cases — the number to trend over time |
@@ -3905,6 +4390,10 @@ diff or fail with a useful message.
 | `QualityScore` | `double?` | `0`–`1` when judged, else `null` |
 | `Passed` | `bool` | This case's verdict |
 | `Notes` | `string?` | What the checks or judge objected to |
+| `Conversation` / `Turn` | `string?` / `int?` | The conversation's name and the turn, from 1; `null` for an `EvalCase` |
+| `ToolsCalled` | `IReadOnlyList<string>` | The tools the turn called; empty for an `EvalCase` |
+| `Refusal` | `EvalRefusal?` | The refusal the turn showed instead of an answer, `OutOfScope` or `Guardrail`, expected or not; `null` when it was answered, and for an `EvalCase` |
+| `TimeToFirstToken` / `TurnDuration` | `TimeSpan?` | Time to the first streamed text, and of the whole turn; `null` for an `EvalCase` |
 
 So a failing CI run can say which case regressed rather than just that one did:
 
@@ -3932,7 +4421,7 @@ report.ThrowIfFailed();
 Track `TotalTokens` between runs to catch the regression that matters most in practice — a prompt
 edit that quietly doubles cost while every case still passes.
 
-For full-pipeline token checks, drive the mentor and assert on `IMentorMetrics.GetSnapshot()`.
+For full-pipeline token checks, run conversations: `RunConversationsAsync` meters each turn's whole session, classifiers and agents included.
 
 ---
 
@@ -4006,6 +4495,60 @@ builder.Services.AddMentorAgent(options =>
   configuration (no `ChatClient` or `Agent`, empty `ScanAssemblies`, both `ChatHistoryProvider` and
   `ChatHistoryProviderFactory`…) stops the start with the reason, before the first request. A MAUI app has
   no such start: there the error comes the first time MentorAgent is used.
+- **A few options can change while the application runs** — see the next section.
+
+### Changing options while the application runs
+
+`MentorOptions` is one object for the process: the value of `IOptions<MentorOptions>`. Most options are read
+before the application starts, and are set there. The ones in the table below are read again for every session
+or at every turn, so a change made while the application runs applies:
+
+- **Turn**: from the next turn of every session;
+- **Session**: to the sessions that begin after the change.
+
+To change one, assign its property on that object, and replace a collection rather than change it in place. A
+turn already running may still read the value from before. `MentorRuntimeOptions.Changeable` lists them in code,
+each with `MentorOptionReadAt.Turn` or `MentorOptionReadAt.Session`; `MentorRuntimeOptions.IsChangeable(name)`
+answers for one.
+
+```csharp
+// An admin page that turns on the safety check without a restart.
+public sealed class SafetySwitch(IOptions<MentorOptions> options)
+{
+    public void TurnOn()
+    {
+        if (MentorRuntimeOptions.IsChangeable(nameof(MentorOptions.EnableSafetyCheck)))
+            options.Value.EnableSafetyCheck = true;   // from the next turn of every session
+    }
+}
+```
+
+| Option | Applies | What a change does |
+|---|---|---|
+| `Language` | Turn | The language of the next turn of every session, and the widget's texts |
+| `RateLimitPerUser` | Turn | The limit the next message is counted against; 0 turns it off |
+| `RateLimitWindowSecs` | Turn | The window the next message is counted in |
+| `ConfirmationMessage` | Turn | The text of the next confirmation banner |
+| `ConfirmationTimeout` | Turn | The deadline of the next confirmation |
+| `ActionPolicyTimeout` | Turn | The deadline of the next question to a policy or to the governor |
+| `EnableActionFeedback` | Turn | Whether the next action shows the bar of the running action |
+| `EnableGenerativeCards` | Turn | Whether the next card-shaped result becomes a card |
+| `EnableSafetyCheck` | Turn | Whether the next message is checked |
+| `CheckAnnouncedActions` | Turn | Whether the next reply that called no tool is checked for an action it announced or reported as done |
+| `MentorshipLevel` | Session | The behaviour block of a new session's instructions |
+| `ProactiveNextSteps` | Session | Whether a new session's Proactive level closes with next steps |
+| `EnableRichResponses` | Session | Whether a new session's instructions carry the formatting block |
+| `RefuseOutOfScope` | Session | Whether a new session refuses the messages outside the application's scope |
+| `ToolFilterMaxTools` | Session | The most tools a new session's filter sends |
+| `MaxSessionMessages` | Session | The history budget of a new session |
+
+Every other option is read before the application starts: one may happen to work when changed later, but
+nothing promises it. `RequireConfirmation` is not in the table, because the MCP server decides at start-up which
+actions it publishes, so a later change would apply only in part; nor is `MaxMessageLength`, because the widget's
+composer receives a copy at start-up. The widget's options (`BotName`, `Theme`, `EnableVoiceInput`…) are copied
+to `MentorWidgetOptions` at registration. Each option in the table has a test that changes it on a running
+application and sees the change apply, and every option of `MentorOptions` declares when it is read, so a new
+one cannot ship without that decision.
 
 ### Core
 
@@ -4018,6 +4561,7 @@ builder.Services.AddMentorAgent(options =>
 | `ProactiveNextSteps` | `bool` | `false` | With `MentorshipLevel.Proactive`, close answers with 1-3 suggested next steps. Off by default: even limited to what the request can do, the model offered steps the application does not have, 3 in 15 measured turns (BUG-074). The other levels ignore it |
 | `ChatClient` | `IChatClient?` | `null` | AI provider via IChatClient (Azure OpenAI, OpenAI, Ollama…) |
 | `Agent` | `AIAgent?` | `null` | Pre-built AIAgent (Foundry, Anthropic…). Two calls with one id in a response of your agent's model are not made unique: your agent runs them before MentorAgent's clients see them (BUG-225). |
+| `CoordinatorSampling` | `MentorSamplingOptions?` | `null` | The coordinator's sampling on every request of its turns, the forced first call and the tool loop included: `Temperature`, `TopP`, `TopK`, `MaxOutputTokens`, `FrequencyPenalty`, `PresencePenalty`, `Seed`; a value left `null` is the provider's. The classifiers, an `Agent` you build, specialists, teams and the compaction summary keep their own. A negative temperature, a `TopP` outside (0, 1], or a `TopK` or `MaxOutputTokens` below 1 stops the application at startup |
 | `EmbeddingGenerator` | `IEmbeddingGenerator<string, Embedding<float>>?` | `null` | Optional embedding model — enables semantic tool filtering |
 | `ScanAssemblies` | `Assembly[]` | *(required)* | Assemblies to scan for agents, actions, and pages |
 
@@ -4175,6 +4719,7 @@ asking for its language, and a Warning is logged.
 | `RagMinScore` | `float` | `2` | Minimum relevance score to include a document. `0` = no filtering. Keyword search: integer-like (2 = two matches); vector/cosine: `0.5`–`0.75`. Not set: the source's `DefaultMinScore` when it declares one |
 | `RagSystemPromptTemplate` | `string` | `"Use the following documents to answer:\n{documents}"` | Prompt template. Use `{documents}` as placeholder |
 | `ShowRagSources` | `bool` | `false` | Show citation chips below AI messages in the widget |
+| `RagNoResultsNotice` | `bool` | `false` | Tell the model when the search keeps no document, so it does not answer a question about the documents from memory. In the language of the turn, in that request only. See [RAG configuration options](#rag-configuration-options) |
 
 ### MCP
 
@@ -4183,7 +4728,7 @@ asking for its language, and a Warning is logged.
 | `McpServers` | `MentorMcpServer[]?` | `null` | External MCP servers to connect as L1 tools |
 | `MentorMcpServer.Shared` | `bool?` | `null` | Whether one connection serves the whole process. Unset decides by transport: **`ServerUrl` → shared**, **`Command` → per session**. Set `true` on a stateless local server to start one child process instead of one per visitor (measured: two browser tabs = 8 node processes, 580 MB); set `false` on a URL server that keeps per-connection state |
 | `McpServerEnabled` | `bool` | `false` | Expose MentorAgent as an MCP server. Needs `Novior.MentorAgent.Server`: also call `builder.Services.AddMentorAgentMcp()` (or `AddMentorAgentServer()`) and `app.MapMentorAgentMcp()` |
-| `McpCallerPrincipal` | `Func<ClaimsPrincipal?>?` | `null` | Resolves who is calling the MCP server, so **role**-gated actions can be published to callers entitled to them. Default `null` withholds every gated action — the safe default. A null principal, an unauthenticated one, or a resolver that throws all withhold too. **Confirmation gates are never satisfied by it**: `RequiresConfirmation` and `RequiresApproval` mean "ask a human", and there is none on the far end of an MCP call |
+| `McpCallerPrincipal` | `Func<ClaimsPrincipal?>?` | `null` | Resolves who is calling the MCP server, so **role**-gated actions can be published to callers entitled to them. Default `null` withholds every gated action — the safe default. A null principal, an unauthenticated one, or a resolver that throws all withhold too. **Confirmation gates are never satisfied by it**: `RequiresConfirmation` and `RequiresApproval` mean "ask a human", and there is none on the far end of an MCP call — only an `IMentorActionGovernor` can take such a confirmation away |
 | `McpServerPath` | `string` | `"/mcp"` | Path `MapMentorAgentMcp()` maps the MCP endpoint at when called without a path. A path passed to the method wins |
 | `ShowMcpStatus` | `bool` | `false` | Show MCP server connection status badge in the widget header |
 
@@ -4204,8 +4749,9 @@ asking for its language, and a Warning is logged.
 |---|---|---|---|
 | `EnableToolFiltering` | `bool` | `false` | Send only the tools semantically relevant to the message. **Requires `EmbeddingGenerator`**; without it, all tools are sent |
 | `ToolFilterMaxTools` | `int` | `12` | Max matched business tools to send (core tools always kept on top) |
-| `RequireLookupForRecordQuestions` | `bool` | `false` | Opt-in. When a classifier says a message asks for a value of your records, the first model call must call a declared read-only action (or hand over to a specialist): with semantic tool filtering, one the filter selected; without it, any declared read the user may run. One classifier call per turn whose selection holds a read — without the filter, nearly every turn. Needs declared reads. See [Semantic tool filtering](#semantic-tool-filtering) |
-| `RequireActionForChangeRequests` | `bool` | `false` | Opt-in. When a classifier says a message asks to carry out one of your confirmation-gated actions and gives every input it needs, the first model call must call one of those actions the filter selected and the user may run (or hand over to a specialist), so the banner comes first; when it asks for a page, `navigate_to`. A request that leaves an input out is not forced. One classifier call per turn, shared with `RequireLookupForRecordQuestions`. Unlike that option, needs `EnableToolFiltering` and an `EmbeddingGenerator`, and `RequireConfirmation` for actions. See [Semantic tool filtering](#semantic-tool-filtering) |
+| `RequireLookupForRecordQuestions` | `bool` | `false` | Opt-in. When a classifier says a message asks for a value of your records, the first model call must call a declared read-only action (or hand over to a specialist): with semantic tool filtering, one the filter selected; without it, any declared read the user may run. One classifier call per turn whose selection holds a read — without the filter, nearly every turn. Needs declared reads. Needs a provider that honours `tool_choice: "required"`: Ollama ignores it, and a Warning says so. See [Semantic tool filtering](#semantic-tool-filtering) |
+| `RequireActionForChangeRequests` | `bool` | `false` | Opt-in. When a classifier says a message asks to carry out one of your confirmation-gated actions and gives every input it needs, the first model call must call one of those actions the filter selected and the user may run (or hand over to a specialist), so the banner comes first; when it asks for a page, `navigate_to`. A request that leaves an input out is not forced. One classifier call per turn, shared with `RequireLookupForRecordQuestions`. Unlike that option, needs `EnableToolFiltering` and an `EmbeddingGenerator`, and `RequireConfirmation` for actions. Needs a provider that honours `tool_choice: "required"`: Ollama ignores it, and a Warning says so. See [Semantic tool filtering](#semantic-tool-filtering) |
+| `CheckAnnouncedActions` | `bool` | `true` | After a turn in which the coordinator called no tool, asks a model whether its reply announces an action or reports one as done; if so, one more request in the same turn, with the same tools, told to call the tool now or to say it was not done. Never a required call, once per turn. The question goes to `ClassifierChatClient`, or to `ChatClient` without one. Path A with the history MentorAgent keeps; no effect with `UseServiceManagedHistory` or a pre-built `Agent`. Read at every turn. BUG-220. See [Token & cost optimization](#token--cost-optimization) |
 | `ToolFilterMinTools` | `int` | `0` | Once one action clears `ToolFilterMinScore`, at least this many best-ranked actions are sent, whatever their score (up to `ToolFilterMaxTools`). `0` = the threshold alone. A trade-off, not a fix: it can hand the model a read action it needed, or a wrong one it picks instead. See [Semantic tool filtering](#semantic-tool-filtering) |
 | `ToolFilterMinScore` | `float` | `0.35` | Minimum cosine similarity (0–1) for a tool to count as relevant. Higher = stricter |
 | `EnableCompaction` | `bool` | `false` | Compact long conversation history before each call — what is sent, never what is stored (BUG-104). Locally kept history only (Path A: the built-in provider, `ChatHistoryProviderFactory` or a provider instance); not installed with `UseServiceManagedHistory` |
@@ -4243,10 +4789,10 @@ asking for its language, and a Warning is logged.
 | `RoutingComplexExemplars` | `IReadOnlyList<string>?` | `null` | `Semantic`: example "complex" turns (null → built-in multilingual set) |
 | `RoutingThreshold` | `float` | `0.35` | `Semantic`: cosine floor to escalate (higher = stricter) |
 | `RoutingClassifierClient` | `IChatClient?` | `null` | `Classifier`/`Cascade`: dedicated judge client (defaults to the cheap `ChatClient`) |
-| `ClassifierChatClient` | `IChatClient?` | `null` | Client for MentorAgent's own one-word decisions — input and output safety checks, the hosted-tool / `RefuseOutOfScope` scope check, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, post-turn fact extraction, and the A2A grounding verdict (does a tool-less reply to a peer state application data? BUG-081). Point it at a small, fast deployment: these calls sit in front of the reply (measured: 707–2091 ms on `gpt-4.1` for two tokens of answer). Defaults to `ChatClient`; metered under its own model id. On Path B (a pre-built `Agent`) it is the only client MentorAgent can call on its own: without it the safety checks are skipped |
+| `ClassifierChatClient` | `IChatClient?` | `null` | Client for MentorAgent's own one-word decisions — input and output safety checks, the hosted-tool / `RefuseOutOfScope` scope check, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, the check of a reply that announced an action (`CheckAnnouncedActions`, on by default, after the reply), post-turn fact extraction, and the A2A grounding verdict (does a tool-less reply to a peer state application data? BUG-081). Point it at a small, fast deployment: these calls sit in front of the reply (measured: 707–2091 ms on `gpt-4.1` for two tokens of answer). Defaults to `ChatClient`; metered under its own model id. On Path B (a pre-built `Agent`) it is the only client MentorAgent can call on its own: without it the safety checks are skipped |
 | `IMentorQueryEmbedding` | *service* | — | The current message's embedding, computed once per turn and shared by routing, tool filtering and memory. Inject it in your `IMentorRagSource` instead of embedding the query again |
 | `IMentorStructured` | *service* | — | `GenerateAsync<T>(...)` — typed/structured generation, see [Structured outputs](#structured-outputs) |
-| `MentorEvaluator` | *service* | — | `RunAsync(cases, options)` — token/quality regression harness, see [Evaluation & regression testing](#evaluation--regression-testing) |
+| `MentorEvaluator` | *service* | — | `RunAsync(cases, options)` — token/quality regression harness; `RunConversationsAsync(conversations, options)` — conversations through the mentor, with tools and streaming, see [Evaluation & regression testing](#evaluation--regression-testing) |
 
 ### Security & Limits
 
@@ -4257,6 +4803,7 @@ asking for its language, and a Warning is logged.
 | `SafetyCheckFailure` | `MentorSafetyCheckFailure` | `Allow` | What a safety check with **no verdict** (timed out, provider error, custom guardrail threw) does: `Allow` processes the message / shows the reply and logs a warning; `Block` refuses the message ("can't check it right now, try again") or withholds the reply. An UNSAFE verdict blocks under both |
 | `RefuseOutOfScope` | `bool` | `false` | Politely refuse a message that plainly has nothing to do with this application, without calling the coordinator. Asks its own question, which defaults to answering: a name the classifier does not recognise may be one of the application's records, and greetings, follow-ups and questions about the assistant are answered (BUG-105). A short reply ("yes", a choice the assistant offered) is judged with the end of the assistant's last reply, in the same call; the safety check still judges the message alone (BUG-223). With `EnableSafetyCheck` on it travels in the same classifier call; alone it adds one small call per turn. Judged against `HostedToolDomainScope`, or the app's name, description and pages with their descriptions. Counted in `GuardrailBlockCount` |
 | `WarmUpAtStartup` | `bool` | `false` | Build one coordinator when the application starts, so the first visitor does not pay for the shared work: embedding the tool catalogue and the routing exemplars, opening the shared MCP sessions, fetching the remote agent cards. Runs once the host has started (after it starts listening); a failed warm-up never fails the boot, an invalid configuration does ([When the options are read and checked](#when-the-options-are-read-and-checked)). A MAUI app runs no hosted service, so there it does nothing |
+| `WarmUpChatModel` | `bool` | `false` | With `WarmUpAtStartup`, one minimal request to the chat model (`ChatClient`, and `StrongChatClient` when set) once the coordinator is built, so the first turn does not pay for the connection, the provider's empty prompt cache or a local model still loading. At most 16 output tokens; it goes straight to the provider's client, so no history, memory, safety check or dashboard turn. **Every start costs one request per client.** A failure is a warning. Without `WarmUpAtStartup` it does nothing and a warning says so; with a pre-built `Agent` (Path B) it calls nothing |
 | `MaxMessageLength` | `int` | `4000` | Max message length in characters (0 = unlimited) |
 | `RateLimitPerUser` | `int` | `0` | Max messages per user per window (0 = disabled). A signed-in user is counted by `ClaimTypes.NameIdentifier`, else `sub`, `oid` or the name; a signed-out visitor according to `AnonymousIdentity`: per session by default, or one global `"anonymous"` counter shared by every visitor with `MentorAnonymousIdentity.Shared`. MCP `tools/call` has its own allowance with the same limit, per `NameIdentifier`, `sub` or `oid`; a caller with none is counted by remote address when `IHttpContextAccessor` is registered, otherwise all such callers share one |
 | `RateLimitWindowSecs` | `int` | `60` | Rate limiting window in seconds |
@@ -4265,7 +4812,7 @@ asking for its language, and a Warning is logged.
 | `HitlMode` | `MentorHitlMode` | `Blocking` | How approval is implemented: `Blocking` (MentorAgent's own flow, one streamed run) or `Native` (AF `ApprovalRequiredAIFunction`, for interop; the same model calls, one more agent run per round of confirmations). Same banner and same client protocol either way — see [Human-in-the-loop tool approval](#human-in-the-loop-tool-approval). A later call of a model response with an id the response or the conversation already holds gets the next free `<id>_n` before the function-invoking client sees it, so two calls of one id no longer break the conversation (BUG-225). Two turns in a row that fail the same way while closing the requests left open log an error that suggests a new conversation (`ResetSessionAsync`) |
 | `IsReadOnlyAction` | `Func<string, bool>?` | `null` | Declares by tool name the actions that only read — same as `[MentorAction(ReadOnly = true)]`, for `[Description]` methods or central declaration. Published to MCP clients as `readOnlyHint`, which some clients take as leave to skip their own confirmation; the actions `RequireLookupForRecordQuestions` may require. A confirmation-gated tool is never read-only |
 | `RequiresApproval` | `Func<string, bool>?` | `null` | Forces approval for a tool **by name**, on top of `[MentorAction(RequiresConfirmation)]`. The way to gate tools you don't own (MCP, skills). Asked again on every call (in `Native` mode too), on every `tools/list` and `tools/call` of the MCP server and on every turn the tool filter matches a tool: keep it a cheap, pure function of the name |
-| `ActionPolicyTimeout` | `TimeSpan` | `00:00:05` | How long each call to an [`IMentorActionPolicy`](#deciding-before-an-action-runs--imentoractionpolicy) may take; then the call it was asked about does not run (`PolicyFailed`, `policy-timeout`), and when MentorAgent decides what to offer the action is left out. Zero or negative = no limit; Stop still cancels the wait |
+| `ActionPolicyTimeout` | `TimeSpan` | `00:00:05` | How long each call to an [`IMentorActionPolicy`](#deciding-before-an-action-runs--imentoractionpolicy), or to the [`IMentorActionGovernor`](#governing-actions-from-outside-the-code--imentoractiongovernor), may take; then the call it was asked about does not run (`PolicyFailed`, `policy-timeout`), and when MentorAgent decides what to offer the action is left out. Zero or negative = no limit; Stop still cancels the wait |
 | `ConfirmationMessage` | `Func<MentorConfirmationContext, string?>?` | `null` | Writes the text of the confirmation banner from the tool, its description, the arguments (in parameter order, cleaned, cut at 200 characters), `Language` and the scope's services. `null`, white space or an exception: the default text |
 | `ConfirmationTimeout` | `TimeSpan` | `00:00:00` | How long a confirmation waits for its answer, from when the banner is shown; then it counts as rejected and the action does not run (`Rejected`, `confirmation-timeout`). Zero or negative = no limit. A few minutes suits a web host — see [Confirmation dialogs](#confirmation-dialogs) |
 | `AutoApprovalRules` | `IList<Func<ToolAutoApprovalRuleContext, ValueTask<bool>>>` | empty | `Native` mode only — see [Approving without asking](#approving-without-asking--autoapprovalrules). Evaluated in order; the first `true` approves the call before any banner appears. Also enables "don't ask again". **Waives the prompt, never `RequiredRoles`** |
@@ -4456,6 +5003,7 @@ same event and take the same reply.
 | Audit of the gate's decisions | Implement `IMentorActionObserver`, register with `AddMentorActionObserver<T>()` — see [Auditing the gate's decisions](#auditing-the-gates-decisions--imentoractionobserver) |
 | Who confirmed an action, from its own code | `MentorActionConfirmation.Current` — see [Confirmation dialogs](#confirmation-dialogs) |
 | Who may use an action, and whether a call may run, in your own code | Implement `IMentorActionPolicy`, register with `AddMentorActionPolicy<T>()` — see [Deciding before an action runs](#deciding-before-an-action-runs--imentoractionpolicy) |
+| Turn actions on and off, set the roles they require, whether they are confirmed and the description the model reads, from outside the code, per session | Ship them with `[MentorAction(Enabled = false)]` and implement `IMentorActionGovernor` (`IsEnabledAsync`, `GetRequiredRolesAsync`, `GetConfirmationAsync`, `GetDescriptionAsync`), registered with `AddMentorActionGovernor<T>()` — see [Governing actions from outside the code](#governing-actions-from-outside-the-code--imentoractiongovernor) |
 | The application's actions as MentorAgent sees them | Resolve `IMentorActionCatalog`, registered by `AddMentorAgent()` — see [Deciding before an action runs](#deciding-before-an-action-runs--imentoractionpolicy) |
 | Custom card rendering | `<ChatWidget><CardTemplate>` , or `OnCardsReady` for full control |
 | Custom onboarding tour | Implement `IMentorTour`, register before `AddMentorAgent()` |
@@ -4463,7 +5011,7 @@ same event and take the same reply.
 | Custom memory store | Implement `IMentorMemoryStore`, register before `AddMentorAgent()` |
 | Custom history provider | Set `options.ChatHistoryProviderFactory`: one provider per coordinator, like the default. `options.ChatHistoryProvider` is one instance shared by every user — see [Persistent conversation history](#persistent-conversation-history) |
 | Custom AI provider | Set `options.ChatClient` or `options.Agent` |
-| Model for MentorAgent's own checks | Set `options.ClassifierChatClient`: the safety checks, the scope check, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, fact extraction and the A2A grounding verdict run on it |
+| Model for MentorAgent's own checks | Set `options.ClassifierChatClient`: the safety checks, the scope check, the request check of `RequireLookupForRecordQuestions` and `RequireActionForChangeRequests`, the check of a reply that announced an action (`CheckAnnouncedActions`), fact extraction and the A2A grounding verdict run on it |
 | Custom agent instructions | Set `Instructions` on `[MentorAgent]` or `[TeamMember]` |
 | Custom RAG source | Implement `IMentorRagSource`, register before `AddMentorAgent()` |
 | The message's embedding, computed once | Inject `IMentorQueryEmbedding` (in your `IMentorRagSource`, for one) instead of embedding the message again |
@@ -4485,11 +5033,12 @@ same event and take the same reply.
 | .NET | 10.0 |
 | Blazor | For the widget: a Blazor Web App (Server or Auto render mode) or Hybrid (MAUI). Any ASP.NET Core app with `Novior.MentorAgent.Server`, no Blazor needed |
 | Novior.MentorAgent.Abstractions | same version (installed with it) |
-| Microsoft.Agents.AI | 1.26.0 |
-| Microsoft.Agents.AI.Workflows | 1.26.0 |
+| Microsoft.Agents.AI | 1.27.0 |
+| Microsoft.Agents.AI.Workflows | 1.27.0 |
 | Microsoft.AspNetCore.Components.Authorization | 10.0.3 |
 | Microsoft.AspNetCore.Components.Web | 10.0.3 |
 | Microsoft.Extensions.AI | 10.11.0 |
+| Microsoft.Extensions.VectorData.Abstractions | 10.10.0 (the vector store abstractions of `MentorVectorStoreRagSource`; Agent Framework brings it too) |
 | A2A | 1.0.0-preview3 (the A2A client) |
 | ModelContextProtocol | 2.3.0 (the MCP client) |
 | System.ClientModel | 1.10.0 |
@@ -4663,6 +5212,86 @@ Blazor Server already needs affinity for its circuits; a Blazor Server host that
 
 MentorAgent has no shared state store of its own: a deployment that cannot keep affinity is not supported today. This
 section says what the code does; it has not been tried on a deployment of two instances.
+
+---
+
+## Serving more than one tenant
+
+One instance of the application can serve more than one company — more than one *tenant*. MentorAgent needs to
+know which tenant each request belongs to, and your application tells it with an `IMentorTenantResolver`:
+
+```csharp
+builder.Services.AddMentorAgent(options => { /* … */ });
+builder.Services.AddMentorTenantResolver<ClaimTenantResolver>();   // one per application
+
+public sealed class ClaimTenantResolver : IMentorTenantResolver
+{
+    public ValueTask<string?> ResolveAsync(MentorTenantRequest request, CancellationToken cancellationToken)
+        => ValueTask.FromResult(request.User?.FindFirst("tenant_id")?.Value);   // null: the request is refused
+}
+
+// In an action, a policy, or a service the governor resolves from MentorActionRequest.Services:
+public sealed class OrderActions(IMentorTenant tenant, OrderStore store)
+{
+    [MentorAction(Description = "Counts open orders", ReadOnly = true)]
+    public Task<int> CountOpenOrders() => store.CountOpenAsync(tenant.Id!);
+}
+```
+
+- **When it is asked.** Once for every unit of work, before anything else is done for it: when a turn starts — in a
+  Blazor circuit, on the hub, on `/mentor/chat`, in a task from another agent (A2A) — and for every `tools/list` and
+  `tools/call` of the MCP server. `MentorTenantRequest` carries the signed-in user (`User`; on the MCP server, the
+  caller `McpCallerPrincipal` resolves, else the request's user), the surface (`Surface`, a `MentorActionSurface`)
+  and the request's scoped services (`Services`), for an `IHttpContextAccessor` or anything else of your own.
+- **What reads it.** `IMentorTenant.Id`, scoped: in a turn, the tenant resolved when the turn started; during a call
+  to the MCP server, that call's own. The MCP server's tool classes are shared by every call, yet two callers at
+  once each read their own. `IMentorTenant.GetIdAsync()` gives the same answer, and in a scope that had no turn yet
+  (a page that only reads the memory, a restore before the first message) it asks the resolver first, under the
+  same rules.
+- **Never without a tenant.** A resolver that throws, or answers `null`, an empty string or white space, refuses the
+  request: the turn is refused before the model is called (the user reads that the organization could not be
+  identified, and an A2A task fails), a `tools/call` is answered with an error, and a `tools/list` lists nothing.
+  Going on as the single tenant would put the request in the data every tenant shares. Only the exception's type is
+  logged, never its message.
+- **A conversation stays with its tenant.** A turn whose tenant is not the one its scope's first turn had (a
+  circuit, a hub connection) is refused, and the user is told to reload the page to start a new conversation.
+- **Memory and the rate limit are the tenant's own.** The key of the user's memories and of `RateLimitPerUser`
+  (`MentorMemoryService.GetUserIdAsync()`) is prefixed with the tenant: `tenant:contoso/<the user's key>`. The same
+  user in two tenants keeps two memories and two allowances, and the shared anonymous bucket
+  (`MentorAnonymousIdentity.Shared`) is one per tenant. The tenant id is escaped in the key, so an id with a `/`
+  cannot pass for another. A custom `IMentorMemoryStore` receives these keys as it always received the user's:
+  nothing changes in its interface. The MCP server's allowance per caller is per tenant too.
+- **A session snapshot is restored for its tenant only.** `SerializeSessionAsync` (and `GET /mentor/session`)
+  writes the tenant into the snapshot. `RestoreSessionAsync` (and `POST /mentor/session`) refuses — with an
+  `ArgumentException`, a 400 on the server — a snapshot of another tenant, one that names no tenant where a resolver
+  is registered (nobody can say whose it is), and one that names a tenant where no resolver is. The conversation in
+  place is not touched.
+- **History.** The history MentorAgent keeps by default is a coordinator's own, so it is already apart.
+  `ChatHistoryProviderFactory` runs in the conversation's scope, after the tenant is resolved: read `IMentorTenant`
+  there to key your storage. A single `ChatHistoryProvider` instance serves every tenant; with a resolver
+  registered, a Warning at start-up says so.
+- **Metrics and the dashboard are the tenant's own.** Every counter and the turn's span carry `mentoragent.tenant`;
+  the dashboard and `GET /mentor/admin/metrics` show the reader's tenant only. See
+  [With more than one tenant](#with-more-than-one-tenant) in the token & cost dashboard.
+- **Retrieval is the tenant's own.** A RAG source is given the turn's tenant in `MentorRagRequest.TenantId` and
+  returns that tenant's documents; MentorAgent filters nothing itself. A source that implements only the
+  `(query, maxResults)` overload is never given the tenant and serves every tenant the same documents: a Warning
+  says so once, at its first search with a tenant.
+- **The logs name the tenant.** Every log line of a turn, MentorAgent's and your own code's in that turn, and of a
+  call to the MCP server is written in a scope with one pair, `mentoragent.tenant`, the key of the metrics and the
+  span. A provider that includes scopes shows it: the console with `IncludeScopes = true`, OpenTelemetry with
+  `IncludeScopes = true` (the attribute `mentoragent.tenant`), Serilog with `Enrich.FromLogContext()`. As text it
+  reads `mentoragent.tenant=contoso`. Without a resolver there is no scope.
+- **Before the first turn.** A reset or a restore that comes before the first turn resolves the tenant first, and
+  builds nothing without one. Reading `IMentorTenant.Id` where nothing was resolved yet throws, instead of reading
+  as the single tenant. The start-up warm-up (`WarmUpAtStartup`) serves nobody: it resolves no tenant and does not
+  ask the governor, so it costs the governor nothing and leaves nothing to the sessions.
+- **Without a resolver** there is one tenant, as before: `IMentorTenant.Id` is `null` and nothing else changes.
+- **Budgets are not MentorAgent's.** A budget that stops a tenant belongs to the service in front of it.
+
+The two texts the user reads come from the localizer, in the 10 languages: `tenant.unresolved` (*"This request
+could not be processed: the organization it belongs to could not be identified."*) and `tenant.changed` (*"This
+conversation belongs to another organization. Reload the page to start a new one."*).
 
 ---
 

@@ -469,4 +469,27 @@ public sealed class ActionPolicyTests
             : ["Allowed/allowed", "ConfirmationRequested/operator", "Confirmed/operator", "Executed/completed"]);
         host.Get<TestOrderService>().Invoked.Contains(nameof(TestOrderService.CountOpenOrders)).Should().Be(!fromAnotherAgent);
     }
+
+    [Fact]
+    [Trait("RuntimeOption", nameof(MentorOptions.ActionPolicyTimeout))]
+    public async Task A_policy_deadline_shortened_while_the_application_runs_applies_from_the_next_turn()
+    {
+        // Story 1275: the deadline is read at every question. A policy that takes 300 ms answers in time under 5 s, and
+        // not under the 50 ms set before the next turn.
+        var observer = new RecordingActionObserver();
+        var policy = new TestActionPolicy
+        {
+            Before = (r, ct) => r.Stage == MentorActionStage.Call ? Task.Delay(TimeSpan.FromMilliseconds(300), ct) : Task.CompletedTask,
+        };
+        await using var host = Create(observer, o => o.ActionPolicyTimeout = TimeSpan.FromSeconds(5), policy);
+        host.Chat!.CallTool("count_open_orders").Say("There are 3.").CallTool("count_open_orders").Say("It could not be checked.");
+
+        (await host.RunTurnAsync("how many open orders?")).Should().BeNull();
+        host.Options.ActionPolicyTimeout = TimeSpan.FromMilliseconds(50);
+        (await host.RunTurnAsync("and now?")).Should().BeNull();
+        await FlushAsync(host);
+
+        observer.Steps("count_open_orders").Should().EndWith("PolicyFailed/policy-timeout");
+        host.Get<TestOrderService>().Invoked.Should().ContainSingle("the first call ran, within the deadline it had");
+    }
 }

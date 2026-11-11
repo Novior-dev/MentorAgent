@@ -195,6 +195,11 @@ internal sealed class FakeChatClient : IChatClient
             ToolMode = options?.ToolMode,
             Temperature = options?.Temperature,
             MaxOutputTokens = options?.MaxOutputTokens,
+            TopP = options?.TopP,
+            TopK = options?.TopK,
+            FrequencyPenalty = options?.FrequencyPenalty,
+            PresencePenalty = options?.PresencePenalty,
+            Seed = options?.Seed,
             AdditionalPropertyKeys = options?.AdditionalProperties?.Keys.ToList() ?? [],
         });
 
@@ -269,6 +274,21 @@ internal sealed class FakeChatClient : IChatClient
 
         /// <summary>The output cap the request asked for.</summary>
         internal int? MaxOutputTokens { get; init; }
+
+        /// <summary>The rest of the sampling the request asked for (story 169).</summary>
+        internal float? TopP { get; init; }
+
+        /// <summary>See <see cref="TopP"/>.</summary>
+        internal int? TopK { get; init; }
+
+        /// <summary>See <see cref="TopP"/>.</summary>
+        internal float? FrequencyPenalty { get; init; }
+
+        /// <summary>See <see cref="TopP"/>.</summary>
+        internal float? PresencePenalty { get; init; }
+
+        /// <summary>See <see cref="TopP"/>.</summary>
+        internal long? Seed { get; init; }
 
         /// <summary>A tool as the model saw it — name, description and schema.</summary>
         internal AIFunction? Tool(string name) => Tools.FirstOrDefault(t => t.Name == name);

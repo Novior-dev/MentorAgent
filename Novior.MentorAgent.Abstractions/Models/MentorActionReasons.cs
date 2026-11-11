@@ -44,6 +44,13 @@ public static class MentorActionReasons
     public const string RateLimited = "rate-limited";
 
     /// <summary>
+    /// <see cref="MentorActionOutcome.Denied"/>: the model called an action of the application that its agent was not
+    /// given in this turn — one that is off, or another agent's. The call reached no gate and nothing ran: this is its
+    /// only decision.
+    /// </summary>
+    public const string NotOffered = "not-offered";
+
+    /// <summary>
     /// <see cref="MentorActionOutcome.ConfirmationRequested"/>, <see cref="MentorActionOutcome.Confirmed"/>,
     /// <see cref="MentorActionOutcome.Rejected"/>: the user was asked, and answered.
     /// </summary>
@@ -67,6 +74,18 @@ public static class MentorActionReasons
 
     /// <summary><see cref="MentorActionOutcome.PolicyFailed"/>: an <c>IMentorActionPolicy</c> did not answer within <c>ActionPolicyTimeout</c>.</summary>
     public const string PolicyTimeout = "policy-timeout";
+
+    /// <summary>
+    /// <see cref="MentorActionOutcome.Denied"/>: the action is off — declared off in the code
+    /// (<c>[MentorAction(Enabled = false)]</c>) and not turned on, or turned off by the <c>IMentorActionGovernor</c>.
+    /// </summary>
+    public const string Disabled = "disabled";
+
+    /// <summary>
+    /// <see cref="MentorActionOutcome.PolicyFailed"/>: the <c>IMentorActionGovernor</c> threw, or did not answer within
+    /// <c>ActionPolicyTimeout</c>. The exception's type, when it threw, is in <see cref="MentorActionDecision.ExceptionType"/>.
+    /// </summary>
+    public const string GovernorFailed = "governor-failed";
 
     /// <summary>
     /// <see cref="MentorActionOutcome.Stopped"/>: Stop, <c>/mentor/cancel</c>, the MCP client cancelled the call, or the

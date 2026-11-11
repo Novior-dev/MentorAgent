@@ -41,15 +41,43 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
     /// <summary>1 once the withheld actions are named, so the startup report and the catalogue write it once.</summary>
     private int _withheldLogged;
 
-    /// <summary>A tool, the roles that may see it (empty: everybody), and the method it was built from.</summary>
-    private sealed record Candidate(McpServerTool Tool, string[] RequiredRoles, MethodInfo Method);
+    /// <summary>
+    /// A tool, the roles that may see it (empty: everybody), the method it was built from, and whether the code ships it
+    /// on (story 1549): one shipped off is a candidate too, which only a governor can turn on for a request.
+    /// </summary>
+    private sealed record Candidate(McpServerTool Tool, string[] RequiredRoles, MethodInfo Method, bool EnabledByDefault)
+    {
+        /// <summary>The roles the code gives the action, whether or not the server publishes it per caller.</summary>
+        internal string[] CodeRoles { get; init; } = RequiredRoles;
 
+        /// <summary>
+        /// Whether the action declares a confirmation, or asks for one by default (story 1547). The
+        /// <see cref="MentorOptions.RequiresApproval"/> predicate is asked per request (<see cref="HeldBack"/>).
+        /// </summary>
+        internal bool CodeConfirms { get; init; }
+    }
+
+    /// <summary>
+    /// <see cref="Governable"/>: every action the governor decides about on this server (stories 1549, 1546, 1547) — the
+    /// candidates, and with a governor the actions withheld for their roles or their confirmation, which its answers can
+    /// publish — by name.
+    /// </summary>
     private sealed record Catalogue(
         IReadOnlyList<Candidate> All,
         IReadOnlyList<McpServerTool> Ungated,
         IReadOnlyDictionary<string, Candidate[]> ByName,
         bool HasRoleGated,
-        IReadOnlyDictionary<string, Withheld> WithheldByName);
+        IReadOnlyDictionary<string, Withheld> WithheldByName,
+        IReadOnlyDictionary<string, Candidate[]> Governable);
+
+    /// <summary>
+    /// An action the governor decides about on this server (stories 1549, 1546, 1547): its tool, the code's roles,
+    /// whether the code ships it on, and whether the code asks for a confirmation — declared, by default, or by the
+    /// <see cref="MentorOptions.RequiresApproval"/> predicate now. Whether it is listed and runs for a caller is the
+    /// governor's answer, by the rule of <see cref="IsPublishedTo(string[], System.Security.Claims.ClaimsPrincipal?)"/>
+    /// and with nobody to confirm: an action that asks is withheld.
+    /// </summary>
+    internal readonly record struct GovernableTool(McpServerTool Tool, string[] CodeRoles, bool EnabledByDefault, bool CodeConfirms);
 
     /// <summary>An action the server never publishes, by its tool name: for the log and the gate's decisions.</summary>
     private sealed record Withheld(string[] RequiredRoles, string? Description);
@@ -69,15 +97,26 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
         Unknown,
     }
 
-    /// <summary>What <see cref="Lookup"/> found.</summary>
-    internal readonly record struct Lookup(McpServerTool? Tool, LookupResult Result, string[] RequiredRoles, string? Description);
+    /// <summary>
+    /// What <see cref="Lookup"/> found. <see cref="EnabledByDefault"/>: whether the code ships the tool found on; the
+    /// handler asks whether it is on now (story 1549). <see cref="RolesFromOutside"/>: the roles are the governor's
+    /// (story 1546). <see cref="ConfirmationFromOutside"/>: the governor's answer about the confirmation published or
+    /// withheld it, otherwise than the code's would; <see cref="CodeConfirms"/>: the code asks for one, which a question to
+    /// the governor carries (story 1547).
+    /// </summary>
+    internal readonly record struct Lookup(McpServerTool? Tool, LookupResult Result, string[] RequiredRoles, string? Description,
+        bool EnabledByDefault = true, bool RolesFromOutside = false, bool ConfirmationFromOutside = false, bool CodeConfirms = false);
+
+    private readonly MentorActionGovernance? _governance;
 
     public MentorAgentMcpToolCollection(
         MentorDiscoveryService discovery,
         IServiceScopeFactory scopeFactory,
         ILogger<MentorAgentMcpToolCollection> logger,
-        IOptions<MentorOptions> options)
+        IOptions<MentorOptions> options,
+        MentorActionGovernance? governance = null)
     {
+        _governance = governance;
         _discovery = discovery;
         _scope     = scopeFactory.CreateScope();
         _logger    = logger;
@@ -108,15 +147,18 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
         => GetTools(_options.McpCallerPrincipal is null ? null : ResolveCaller());
 
     /// <summary>
-    /// The tools <paramref name="caller"/> may see, by the one rule <see cref="IsPublishedTo"/>, less those the host's
-    /// <see cref="MentorOptions.RequiresApproval"/> holds back now (<see cref="HeldBack"/>).
+    /// The tools <paramref name="caller"/> may see, by the one rule <see cref="IsPublishedTo(Candidate, System.Security.Claims.ClaimsPrincipal?)"/>, less those the host's
+    /// <see cref="MentorOptions.RequiresApproval"/> holds back now (<see cref="HeldBack"/>), and less those the code ships
+    /// off unless <paramref name="withThoseOff"/>: with a governor, the handler asks about each (story 1549).
     /// </summary>
-    internal IReadOnlyList<McpServerTool> GetTools(System.Security.Claims.ClaimsPrincipal? caller)
+    internal IReadOnlyList<McpServerTool> GetTools(System.Security.Claims.ClaimsPrincipal? caller, bool withThoseOff = false)
     {
         var catalogue = _catalogue.Value;
-        if (!catalogue.HasRoleGated && _options.RequiresApproval is null) return catalogue.Ungated;
+        if (!withThoseOff && !catalogue.HasRoleGated && _options.RequiresApproval is null) return catalogue.Ungated;
 
-        return [.. catalogue.All.Where(c => !HeldBack(c) && IsPublishedTo(c, caller)).Select(c => c.Tool)];
+        return [.. catalogue.All
+            .Where(c => (withThoseOff || c.EnabledByDefault) && !HeldBack(c) && IsPublishedTo(c, caller))
+            .Select(c => c.Tool)];
     }
 
     /// <summary>
@@ -148,7 +190,8 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
                 return new(null, LookupResult.Withheld, first.RequiredRoles, first.Tool.ProtocolTool.Description);
 
             if (candidates.FirstOrDefault(c => IsPublishedTo(c, caller)) is { } candidate)
-                return new(candidate.Tool, LookupResult.Found, candidate.RequiredRoles, candidate.Tool.ProtocolTool.Description);
+                return new(candidate.Tool, LookupResult.Found, candidate.RequiredRoles, candidate.Tool.ProtocolTool.Description,
+                    candidate.EnabledByDefault);
 
             return new(null,
                 caller?.Identity?.IsAuthenticated == true ? LookupResult.RoleMissing : LookupResult.LoginRequired,
@@ -159,6 +202,33 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
             ? new(null, LookupResult.Withheld, withheld.RequiredRoles, withheld.Description)
             : new(null, LookupResult.Unknown, [], null);
     }
+
+    /// <summary>
+    /// The actions the governor decides about on this server: the first of each name (stories 1549, 1546, 1547), with
+    /// whether the code asks for a confirmation now — the host's <see cref="MentorOptions.RequiresApproval"/> is asked
+    /// for each.
+    /// </summary>
+    internal IReadOnlyList<GovernableTool> GovernableTools()
+        => [.. _catalogue.Value.Governable.Values.Select(copies => Governable(copies[0]))];
+
+    /// <summary>
+    /// The action a <c>tools/call</c> names, for the governor to decide about (stories 1549, 1546, 1547); null when no
+    /// action has the name, or the server could not build it, and <see cref="Find"/> says why.
+    /// </summary>
+    internal GovernableTool? FindGovernable(string? name)
+        => name is not null && _catalogue.Value.Governable.TryGetValue(name, out var copies) ? Governable(copies[0]) : null;
+
+    private GovernableTool Governable(Candidate candidate)
+        => new(candidate.Tool, candidate.CodeRoles, candidate.EnabledByDefault, candidate.CodeConfirms || HeldBack(candidate));
+
+    /// <summary>
+    /// Whether <paramref name="caller"/> may see an action that requires <paramref name="roles"/> — the governor's, or
+    /// the code's — by the rule of the code's roles: none, or the caller holds one (story 1546). Without
+    /// <see cref="MentorOptions.McpCallerPrincipal"/> there is no caller to hold one.
+    /// </summary>
+    internal bool IsPublishedTo(string[] roles, System.Security.Claims.ClaimsPrincipal? caller)
+        => roles.Length == 0
+           || (_options.McpCallerPrincipal is not null && caller?.Identity?.IsAuthenticated == true && roles.Any(caller.IsInRole));
 
     /// <summary>
     /// Whether <paramref name="caller"/> may see <paramref name="candidate"/>: an ungated action always;
@@ -219,6 +289,7 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
             methods.Count);
 
         var candidates = new List<Candidate>(methods.Count);
+        var governable = new List<Candidate>(methods.Count);
         var withheld = new List<string>();
         var withheldByName = new Dictionary<string, Withheld>(StringComparer.Ordinal);
         var perCaller = new List<string>();
@@ -230,10 +301,14 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
             if (WithheldReason(method, out _) is { } reason)
                 withheld.Add(reason);
 
+            // With a governor, an action withheld for its roles or its confirmation is built too: the governor's answers
+            // can publish it (stories 1546, 1547). It is not a candidate, which the code alone publishes.
+            var forTheGovernor = false;
             if (WithheldReason(method, out var roleGatedForCallers, readPredicate: false) is not null)
             {
                 withheldByName.TryAdd(method.ToolName, new Withheld([.. method.RequiredRoles], method.Description));
-                continue;
+                if (_governance is not { Any: true }) continue;
+                forTheGovernor = true;
             }
 
             try
@@ -248,13 +323,19 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
                 // OnToolResult travels with the function, so the hook sees the action's own result, as
                 // it does in a chat turn (BUG-107).
                 // Declared read-only ([MentorAction(ReadOnly = true)], options.IsReadOnlyAction): published with
-                // readOnlyHint, the MCP word for the same declaration. Nothing gated reaches this point.
-                var readOnly = method.ReadOnly || _options.IsReadOnlyAction?.Invoke(method.ToolName) == true;
-                candidates.Add(new Candidate(
+                // readOnlyHint, the MCP word for the same declaration. An action that asks for confirmation, built for the
+                // governor, is never read-only: its confirmation taken away, it still changes data (story 1547).
+                var readOnly = !method.RequiresConfirmation
+                               && (method.ReadOnly || _options.IsReadOnlyAction?.Invoke(method.ToolName) == true);
+                var candidate = new Candidate(
                     McpServerTool.Create(new Mcp.McpToolResultFunction(aiFunc, _options, _logger),
                         readOnly ? new McpServerToolCreateOptions { ReadOnly = true } : null),
                     roleGatedForCallers ? [.. method.RequiredRoles] : [],
-                    method.Method));
+                    method.Method,
+                    method.EnabledByDefault) { CodeRoles = [.. method.RequiredRoles], CodeConfirms = method.RequiresConfirmation };
+                governable.Add(candidate);
+                if (forTheGovernor) continue;
+                candidates.Add(candidate);
 
                 if (roleGatedForCallers)
                     perCaller.Add($"{method.ToolName} (roles: {string.Join(", ", method.RequiredRoles)})");
@@ -289,10 +370,13 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
 
         return new Catalogue(
             candidates,
-            [.. candidates.Where(c => c.RequiredRoles.Length == 0).Select(c => c.Tool)],
+            [.. candidates.Where(c => c.RequiredRoles.Length == 0 && c.EnabledByDefault).Select(c => c.Tool)],
             byName,
             HasRoleGated: perCaller.Count > 0,
-            withheldByName);
+            withheldByName,
+            governable
+                .GroupBy(c => c.Tool.ProtocolTool.Name, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal));
     }
 
     /// <summary>
@@ -383,6 +467,7 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
     {
         if (!Mapped) return MentorMcpExposure.NotServed;
         if (WithheldReason(method, out _, readPredicate: false) is not null) return MentorMcpExposure.Withheld;
+        if (!method.EnabledByDefault) return MentorMcpExposure.Withheld;   // the code ships it off (story 1549)
 
         if (!_catalogue.Value.ByName.TryGetValue(method.ToolName, out var candidates)
             || candidates.FirstOrDefault(c => c.Method == method.Method) is not { } candidate)

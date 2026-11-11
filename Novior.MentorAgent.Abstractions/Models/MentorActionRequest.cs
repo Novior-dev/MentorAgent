@@ -15,7 +15,11 @@ public sealed record MentorActionRequest
     /// <summary>The tool's technical name, as the model or the MCP client calls it (for example <c>cancel_order</c>).</summary>
     public required string ToolName { get; init; }
 
-    /// <summary>The action's description, as the model reads it; <see langword="null"/> when it has none.</summary>
+    /// <summary>
+    /// The action's description, as the model reads it; <see langword="null"/> when it has none. The
+    /// <c>IMentorActionGovernor</c>'s when it gives one, except on a call to the MCP server, which carries the code's; a
+    /// question to the governor itself carries the code's.
+    /// </summary>
     public string? Description { get; init; }
 
     /// <summary>
@@ -58,12 +62,16 @@ public sealed record MentorActionRequest
     /// </summary>
     public string? PageName { get; init; }
 
-    /// <summary>The roles the action requires, any one of which is enough; empty when it requires none.</summary>
+    /// <summary>
+    /// The roles the action requires, any one of which is enough; empty when it requires none. The
+    /// <c>IMentorActionGovernor</c>'s when it gives them; a question to the governor itself carries the code's.
+    /// </summary>
     public IReadOnlyList<string> RequiredRoles { get; init; } = [];
 
     /// <summary>
     /// Whether the action asks for a confirmation of its own: <c>[MentorAction(RequiresConfirmation = true)]</c>, the
-    /// <c>RequiresApproval</c> predicate, or an approval-required MCP server — with <c>RequireConfirmation</c> on.
+    /// <c>RequiresApproval</c> predicate, or an approval-required MCP server — with <c>RequireConfirmation</c> on. The
+    /// <c>IMentorActionGovernor</c>'s answer when it gives one; a question to the governor itself carries the code's.
     /// </summary>
     public bool RequiresConfirmation { get; init; }
 

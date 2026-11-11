@@ -31,6 +31,8 @@ namespace Novior.MentorAgent.Tests.Federation;
 /// predicate. Same gap as BUG-021, reached through the other gate (BUG-035).
 /// </para>
 /// </summary>
+[Trait("Rule", "surface.mcp-withholds-gated")]
+[Trait("Rule", "confirm.predicate-adds")]
 public sealed class McpPredicateGateTests
 {
     private static (MentorAgentMcpToolCollection Collection, MentorHostFixture Host) Build(

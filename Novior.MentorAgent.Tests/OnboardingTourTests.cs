@@ -183,6 +183,7 @@ public sealed class OnboardingTourTests
     }
 
     [Fact]
+    [Trait("Rule", "enabled.off-by-default")]
     public async Task The_tour_is_told_only_the_actions_that_need_no_role()
     {
         // BUG-206: the tour is one for every visitor, and it suggested actions some of them may not run — an action
@@ -198,6 +199,7 @@ public sealed class OnboardingTourTests
         structured.LastPrompt.Should().Contain("Counts open orders").And.Contain("Issues a refund",
             "an action that needs no role, with or without a confirmation, is still one to suggest");
         structured.LastPrompt.Should().NotContain("Cancels an existing order").And.NotContain("Exports the order ledger");
+        structured.LastPrompt.Should().NotContain("Archives an order", "an action shipped off is not one to suggest (story 1549)");
     }
 
     [Fact]

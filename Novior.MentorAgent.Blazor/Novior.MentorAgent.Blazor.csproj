@@ -7,7 +7,7 @@
     <PackageId>Novior.MentorAgent.Blazor</PackageId>
     <Title>Novior.MentorAgent.Blazor</Title>
     <Description>Blazor WebAssembly client for MentorAgent. Install in your Blazor WASM / Blazor Auto client project. Connects to a Novior.MentorAgent.Server hub via SignalR and provides the same ChatWidget experience as Blazor Server.</Description>
-    <PackageTags>blazor;blazor-wasm;blazor-auto;webassembly;wasm;ai;ai-agents;llm;chatbot;chat-widget;assistant;agent;human-in-the-loop;signalr;streaming;voice;rag;memory;skills;mentor;dotnet;csharp</PackageTags>
+    <PackageTags>ai-agents;ai-governance;governance;authorization;roles;approval;human-in-the-loop;tool-calling;aspnetcore;blazor;blazor-wasm;blazor-auto;webassembly;wasm;ai;llm;chatbot;chat-widget;assistant;agent;signalr;streaming;voice;rag;memory;skills;dotnet;csharp</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>IconMA.png</PackageIcon>
     <IsPackable>true</IsPackable>

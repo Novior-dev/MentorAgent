@@ -33,6 +33,7 @@ public sealed class DocumentedSwitchTests
     // ── RequireConfirmation: the global kill switch ─────────────────────────────
 
     [Fact]
+    [Trait("Rule", "confirm.master-switch")]
     public async Task With_confirmations_off_an_approval_required_action_runs_unattended()
     {
         // Documented as on/off for the confirmation dialogs of your actions. A headless job or a trusted
@@ -51,6 +52,7 @@ public sealed class DocumentedSwitchTests
     }
 
     [Fact]
+    [Trait("Rule", "roles.checked-before-confirmation")]
     public async Task Switching_confirmations_off_does_not_switch_the_role_gate_off_with_them()
     {
         // The property this whole file was written for. `RequireConfirmation` is a UX setting;
@@ -93,6 +95,7 @@ public sealed class DocumentedSwitchTests
 
 #pragma warning disable MEAI001 // the approval contents are experimental
     [Theory]
+    [Trait("Rule", "confirm.master-switch")]
     [InlineData(Novior.MentorAgent.Options.MentorHitlMode.Blocking)]
     [InlineData(Novior.MentorAgent.Options.MentorHitlMode.Native)]
     public async Task With_confirmations_off_a_hosted_MCP_server_still_asks(Novior.MentorAgent.Options.MentorHitlMode mode)

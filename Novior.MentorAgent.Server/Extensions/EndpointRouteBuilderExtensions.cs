@@ -267,8 +267,10 @@ public static class EndpointRouteBuilderExtensions
         // action whose class the container cannot resolve, so the card listed skills no task could use.
         // A container without IServiceProviderIsService filters nothing, as before.
         var isService = sp.GetService<IServiceProviderIsService>();
+        // Story 1549: the card follows the code, for every caller. An action the code ships off is not on it, even
+        // when a governor turns it on for a session: the card cannot follow what each session is allowed.
         var runnable = discovery.Discover().Level1Methods
-            .Where(m => isService?.IsService(m.DeclaringType) != false);
+            .Where(m => m.EnabledByDefault && isService?.IsService(m.DeclaringType) != false);
 
         // One skill per id. Two actions can share a tool name (the coordinator warns about it), and the card
         // repeated the id for each. The name is left out when ANY action carrying it is gated — the rule the

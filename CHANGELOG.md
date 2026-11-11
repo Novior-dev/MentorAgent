@@ -28,6 +28,276 @@ names of their time.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-05
+
+### Added
+
+- ACTION-RULES.md lists the rules by which a method becomes an action, how actions are named, and how roles and
+  confirmations add up. Each rule has a name that does not change and at least one test that fails when the rule does;
+  a rule that comes in, changes or is retired is named in the release notes of its version. The rules of 1.3.0:
+  `scan.assemblies-once`, `scan.concrete-classes`, `scan.public-instance-declared`, `scan.marker`,
+  `scan.mentor-action-wins`, `scan.override-keeps-action`, `kind.one-per-class`, `kind.page-is-separate`,
+  `kind.agent-owns-methods`, `kind.skill-methods-level1`, `kind.team-needs-members`, `kind.member-tools-leave-level1`,
+  `kind.member-tools-same-rules`, `name.snake-case`, `name.team-tool`, `name.shared-warned`,
+  `name.called-method-decides`, `confirm.declared-decides`, `confirm.default-for-writes`,
+  `confirm.description-only-not-defaulted`, `confirm.predicate-adds`, `confirm.master-switch`,
+  `confirm.beats-read-only`, `confirm.unconfirmed-writes-warned`, `roles.any-of`, `roles.signed-in`,
+  `roles.checked-before-confirmation`, `roles.offered-when-allowed`, `surface.coordinator-only`,
+  `surface.mcp-withholds-gated` and `surface.card-ungated-only`.
+
+- An action can ship off, and the application can turn its actions on and off from outside its code.
+  `[MentorAction(Enabled = false)]` keeps an action in the catalogue (`MentorActionInfo.EnabledByDefault` is false)
+  and nowhere else: no agent is offered it, no model reads about it, the MCP server does not list it, the A2A card
+  does not show it, and a call to it does not run. An `IMentorActionGovernor`, registered with
+  `AddMentorActionGovernor<T>()`, answers for each action whether it is on, and can turn on one the code ships off:
+  registering one gives whoever implements it the power to widen what the code allows. It is asked once as a session
+  builds its tools, on every `tools/list` of the MCP server and before every call, with the session's id; a session
+  keeps the tools it was built with, and a call to an action turned off meanwhile is refused. There can be one: a
+  second registration throws. A governor that throws, or does not answer within `ActionPolicyTimeout`, stops the
+  action. The A2A card follows the code only, so an action turned on from outside is not on it. New reason codes:
+  `disabled` (`Denied`) and `governor-failed` (`PolicyFailed`). New rules: `enabled.off-by-default`,
+  `enabled.external-decides` and `surface.governor-session`; `surface.mcp-withholds-gated` and
+  `surface.card-ungated-only` now also leave out an action that is off.
+
+- The governor can also give an action its roles: `IMentorActionGovernor.GetRequiredRolesAsync` answers in place of
+  `[MentorAction(RequiredRoles = ...)]`, with `null` for the code's roles and an empty list for none. The answer
+  decides whom the action is offered to, the check at every call, before a confirmation and again after it, and which
+  MCP callers see and call it: an action the MCP server withheld only for its roles is published once the governor
+  requires none. `MentorActionDecision.RolesFromOutside` says when the roles came from the governor. New rule:
+  `roles.external-replace`; `roles.checked-before-confirmation` now checks the governor's roles when it gives them.
+
+- The governor can also decide whether the user confirms an action: `IMentorActionGovernor.GetConfirmationAsync`
+  answers `MentorConfirmationChoice.Code` for the code's confirmation, `Required` to ask even if the code does not,
+  and `None` not to ask even if the code does — declared, by default for writes, or by `RequiresApproval`. A
+  confirmation added counts from the call, one taken away from the next session, and in Native mode no auto-approval
+  rule lets a required one through. A policy's `Confirm` still asks, a hosted MCP server's approval still comes from
+  its provider, and with `RequireConfirmation` off nobody is asked. An action whose confirmation is taken away still
+  counts as one that changes data. The MCP server publishes an action that asks for confirmation once the governor
+  takes it away, and withholds one it requires. `MentorActionDecision.ConfirmationFromOutside` says when the governor
+  changed whether a call is confirmed. New rule: `confirm.external-decides`; `confirm.predicate-adds` and
+  `surface.mcp-withholds-gated` now say what the governor can take away.
+
+- The governor can also rewrite the description the model reads: `IMentorActionGovernor.GetDescriptionAsync` answers
+  in place of the code's, with `null` or a blank text for the code's. It is asked as a session builds its tools and
+  on every `tools/list` of the MCP server, and the answer is what the coordinator, the specialists and the team
+  members read, what tool filtering ranks, and what `tools/list` shows; the action's name and argument schema never
+  change, and the code's `ProactiveHint` still follows the description. What the user sees keeps the code's
+  description: the confirmation banner, the bar of the running action and `MentorActionDecision.DisplayName`. On a
+  call to the MCP server the policies are asked with the code's description. New rule: `describe.external-replace`.
+
+- An `IMentorAgentSource` says what it loaded and what it left out, and when it is asked is a promise. A source is
+  asked whenever a coordinator is built: at least once per session — once per Blazor circuit, MAUI app scope or hub
+  connection, and at every request on `/mentor/chat` and every task over A2A — and `MentorAgentSourceContext.SessionId`
+  names the session, as `MentorActionRequest.SessionId` does. MentorAgent now calls `IMentorAgentSource.LoadAsync`,
+  which returns a `MentorAgentSourceResult`: the agents, and a `MentorAgentRejection` (`Name`, `ReasonCode`, `Detail`,
+  `Tool`) for each definition left out or tool taken away. Its default body returns the agents of `GetAgentsAsync`, so
+  an existing source works unchanged. An `IMentorAgentSourceObserver`, registered with
+  `AddMentorAgentSourceObserver<T>()`, receives a `MentorAgentSourceReport` for each source every time a coordinator
+  is built, also when the source loaded nothing; a source that throws is reported as `source-failed`, with the
+  exception's type and never its message. The reason codes, in `MentorAgentRejectionReasons`: `invalid-definition`,
+  `not-an-agent`, `foreign-tools`, `invalid-configuration`, `source-failed`, `tool-not-found` and
+  `hosted-tool-removed`. **Novior.MentorAgent.Declarative** reports every definition it does not load and every tool
+  it takes away. New rules: `declarative.functions-match` and `declarative.no-hosted-tools`.
+
+- `MentorRuntimeOptions.Changeable` lists the options that can be changed while the application runs, and from when
+  a change applies (`MentorOptionReadAt`). From the next turn of every session: `Language`, `RateLimitPerUser`,
+  `RateLimitWindowSecs`, `ConfirmationMessage`, `ConfirmationTimeout`, `ActionPolicyTimeout`, `EnableActionFeedback`,
+  `EnableGenerativeCards`, `EnableSafetyCheck` and `CheckAnnouncedActions`. From the sessions that begin after the
+  change: `MentorshipLevel`,
+  `ProactiveNextSteps`, `EnableRichResponses`, `RefuseOutOfScope`, `ToolFilterMaxTools` and `MaxSessionMessages`. To
+  change one, assign it on the `IOptions<MentorOptions>` value, replacing a collection rather than changing it in
+  place. Every other option is read before the application starts: set it there. Each option listed has a test that
+  changes it on a running application, and every option declares when it is read, so a new one cannot ship without
+  the decision.
+
+- After a turn in which the coordinator called no tool, MentorAgent asks a model whether its reply announces an action
+  ("I'm registering the note…") or reports one as done when nothing ran (`MentorOptions.CheckAnnouncedActions`, on by
+  default). If it does, the coordinator gets one more request in the same turn, with the same tools, told to call the
+  tool now or to say that it was not done. The question names the tools the model was sent, and the answer names the
+  one that does the action: the second request then says that this tool is there to call now. The instruction is that
+  request's last message, read after the reply it is about, and never stored. A call to an action of the application
+  the agent was not given (one that is off for the session) runs nothing, and the turn is checked as one in which
+  nothing ran. The call is never required and passes the gate as any other, the reply
+  already shown is not held back, and the second reply is not checked again. The question goes to
+  `ClassifierChatClient`, or to `ChatClient` without one: a few hundred tokens after every reply that called no tool,
+  so a small deployment there is worth configuring. Its verdict is logged at Information for every reply it checks,
+  with the time and the tokens it took. On Path A with the history kept by MentorAgent; not with
+  `UseServiceManagedHistory` nor with a pre-built `Agent` (BUG-220).
+
+- A call the model makes to an action of the application that the coordinator was not given in the turn — one that
+  is off, or another agent's — reaches no gate and runs nothing. `IMentorActionObserver` now receives its one
+  decision, `Denied` with the new reason code `not-offered`, and the call's span says the same, in Blocking and in
+  Native mode, with `CheckAnnouncedActions` on or off. A call the coordinator was given keeps the decisions of its
+  gate, and only those.
+
+- One instance of the application can tell which tenant a request belongs to. `IMentorTenantResolver`, registered with
+  `services.AddMentorTenantResolver<T>()` (one per application), names it from the caller, the surface and the
+  request's services; `IMentorTenant.Id` reads it, in an action, a policy or the governor, and
+  `IMentorTenant.GetIdAsync()` resolves it first in a scope that had no turn yet. It is asked when a turn
+  starts — in a Blazor circuit, on the hub, on `/mentor/chat`, in an A2A task — and for every `tools/list` and
+  `tools/call` of the MCP server, where each call reads its own. A request is never served without a tenant: a resolver
+  that throws, or answers `null`, empty or white space, refuses it before the model or the action, and a turn whose
+  tenant is not the one its conversation began with is refused too. Without a resolver there is one tenant, as before,
+  and `IMentorTenant.Id` is `null`.
+
+- With an `IMentorTenantResolver`, two tenants on one instance share no memory, no rate limit and no conversation.
+  `MentorMemoryService.GetUserIdAsync()` — the key of the memory and of `RateLimitPerUser` — is the tenant's own
+  (`tenant:<id>/<the user's key>`), the shared anonymous bucket included, and so is the MCP server's per-caller
+  allowance. A session snapshot names its tenant and is restored for that tenant only: one of another tenant, one that
+  names none where a resolver is registered, and one that names a tenant where none is, are refused before the
+  conversation changes (a 400 on `/mentor/session`). The history MentorAgent keeps is a coordinator's own, as before; a
+  single `ChatHistoryProvider` instance with a resolver registered is reported at start-up, since it serves every tenant
+  — `ChatHistoryProviderFactory` runs in the conversation's scope, where `IMentorTenant` reads the tenant. Without a
+  resolver every key and every snapshot is as before.
+
+- With an `IMentorTenantResolver`, every metric names its tenant: the `mentoragent.tenant` tag is on the four counters
+  (`mentoragent.turns`, `mentoragent.tool_calls`, `mentoragent.errors`, `mentoragent.guardrail_blocks`) and on the
+  `mentor.turn` span, the MCP server's calls included, so the whole instance is read per tenant from OpenTelemetry. The
+  token & cost dashboard and `GET /mentor/admin/metrics` show the figures of the reader's tenant only: tokens, cost,
+  turns, errors, guardrail blocks and top actions. A reader whose tenant the resolver does not name sees none (a 403
+  on the endpoint). `IMentorMetrics.GetSnapshot(string? tenant)` and `IMentorMetricsStore.QueryAsync(string? tenant,
+  CancellationToken)` are new, with defaults that keep existing implementations working. A custom `IMentorMetrics`
+  shows a tenant nothing rather than the instance's figures (a 204 on the endpoint). A store is asked for a tenant only
+  when it implements the new overload. A tenant's figures are kept in RAM since the process started; the store saves
+  and seeds the instance's. Without a resolver the series, the dashboard and the endpoint are as before.
+
+- With an `IMentorTenantResolver`, retrieval and the logs know the tenant. `MentorRagRequest.TenantId` gives a RAG
+  source the turn's tenant; MentorAgent filters nothing, so a source that holds several tenants' documents returns
+  that tenant's. A source that implements only the `(query, maxResults)` overload never sees it, and a Warning says
+  so at its first search with a tenant. Every log line of a turn, the application's own code in the turn included,
+  and of a call to the MCP server is written in a log scope with one pair, `mentoragent.tenant`, the key of the
+  metrics and the span; a provider that includes scopes shows it. Without a resolver nothing changes.
+
+- `MentorOptions.RagNoResultsNotice` (off by default) tells the model when the knowledge-base search of a turn kept no
+  document — none returned, or every one below `RagMinScore`: a question the documents would cover is answered "not
+  found in the documents" rather than from memory, and a message that needs no document, such as a greeting or an
+  action, is answered as usual. The text is MentorAgent's, in the language of the turn, in that request's
+  instructions only. It is not given after a search that failed, nor without a source.
+
+- A knowledge-base search that fails can be monitored. With `EnableObservability` it is counted on
+  `mentoragent.rag_failures`, tagged with the source (`mentoragent.rag.source`, its type's full name) and the
+  exception's type (`mentoragent.error.type`), never its message, and with `mentoragent.tenant` when a resolver is
+  registered; a Stop during the search is not counted. Each search has a `mentor.rag.search` span, with the source,
+  and the status Error when it failed. The Warning names the source: "The search of … failed — RAG context skipped.".
+
+- `IMentorRagSource.OnConversationChangedAsync` tells a source that the session's conversation changed, so one that
+  keeps state for it clears it: `MentorConversationChange.Reason` is `Reset` (New conversation), `Restored` (a saved
+  conversation took its place) or `Replaced` (a restored conversation the service no longer knew was replaced,
+  BUG-110), with the session's id and its tenant. The default does nothing, so an existing source works unchanged. It
+  is called with `UseRag` on, on the instance the session searches with, bounded by `SafetyCheckTimeout`; a source
+  that throws or does not answer in time is logged as a warning, and the conversation changes anyway.
+
+- `MentorVectorStoreRagSource<TRecord>`, a knowledge-base source over any collection of
+  `Microsoft.Extensions.VectorData` (pgvector, Qdrant, Azure AI Search, an in-memory one), registered with
+  `services.AddMentorVectorStoreRag(sp => collection, new MentorVectorStoreRagOptions<TRecord> { Content = … })`.
+  The options say what of a record is the document, its title, its link and its metadata, and which records a request
+  may see (`Filter`, given the `MentorRagRequest` with its tenant and user). Scores are read as similarities whatever
+  the collection's distance function: with `CosineDistance`, the Postgres default, the source uses 1 − distance, so
+  `RagMinScore` keeps the nearest documents. The function comes from `DistanceFunction` or from the record's
+  `[VectorStoreVector]` attribute; when neither names one, or it is a Euclidean, Manhattan or Hamming distance,
+  registering the source fails. The message is embedded once per turn with `MentorOptions.EmbeddingGenerator` and
+  shared with routing, tool filtering and memory, or with a generator of the source's own; without either, the
+  collection embeds the text itself. `DefaultMinScore` is 0.5. With a tenant resolver and no `Filter`, the first
+  search with a tenant is logged as a warning. `Novior.MentorAgent` now references
+  `Microsoft.Extensions.VectorData.Abstractions` 10.10.0, which Agent Framework already brought.
+
+- A provider that ignores `tool_choice: "required"` is reported. `RequireLookupForRecordQuestions` and
+  `RequireActionForChangeRequests` require the first call of the turn with `ChatToolMode.RequireAny`; a provider that
+  answers such a request without any call — Ollama ignores `tool_choice` — makes them do nothing, and the first time
+  it does a warning says so, once per provider client: "The provider answered a request that required a tool call
+  (tool_choice: required) without calling one: …". A call to a tool the request did not offer is still a call, and a
+  streamed reply is looked at as it goes by, nothing held back. The README has a recipe for llama-server and vLLM.
+
+- `CoordinatorSampling` (`MentorSamplingOptions`): the coordinator's sampling — `Temperature`, `TopP`, `TopK`,
+  `MaxOutputTokens`, `FrequencyPenalty`, `PresencePenalty`, `Seed` — on every request of its turns, the forced first
+  call and the follow-ups of the tool loop included. The option unset, and each value left null, is the provider's
+  own; in configuration, `Mentor:CoordinatorSampling:Temperature` and so on. The classifiers call the provider directly
+  and keep their own settings: those that ask for temperature 0 still do, the others keep the provider's default, as
+  before. A negative temperature, a top-p outside (0, 1], or a top-k or output limit below 1 stops the application at
+  startup. Stop sequences are not offered: one that also occurs in a tool call's arguments would cut the call short.
+
+- `WarmUpChatModel`: with `WarmUpAtStartup`, the warm-up also sends the coordinator's model one minimal request, so
+  the first turn does not pay for opening the connection, the provider's empty prompt cache or a local model still
+  loading. Every start costs one request per client — `ChatClient`, and `StrongChatClient` when it is set — with the
+  coordinator's instructions, tools and sampling, no call allowed (`ChatToolMode.None`), one short user message and at
+  most 16 output tokens. It goes straight to the provider client: no history, no memory, no turn on the dashboard;
+  the warm-up's log line gives its time and tokens. A request that fails is a warning, and the application carries
+  on; without `WarmUpAtStartup` the option has no effect, and a startup warning says so.
+
+- `MentorEvaluator.RunConversationsAsync`: whole conversations (`EvalConversation`, `EvalTurn`) through the mentor
+  itself — the orchestrator, streaming, with its tools, filters, roles, RAG, memory and the history from one turn to
+  the next — each in a session of its own. A turn can require tools (`ExpectTools`: "at turn 2 it must call X"),
+  forbid others (`ForbidTools`), and set a token budget, a limit on the time to the first token and an expectation
+  for the judge. Its result adds `ToolsCalled`, read from the tool gate, `TimeToFirstToken`, `TurnDuration`,
+  `Conversation` and `Turn`; its tokens are those of its own session, exact while other sessions talk. **Every
+  confirmation is answered no by default: an evaluation does not write data on its own.**
+  `MentorEvalOptions.ApproveConfirmations` answers yes, and `PrepareSession` sets the conversation's user or page
+  before its first turn. `RunAsync` is unchanged; `SystemInstructions`, `Checks` and `Evaluators` stay its own.
+
+- `EvalTurn.ExpectRefusal`: a conversation turn can expect the mentor to refuse — `EvalRefusal.OutOfScope`
+  (`RefuseOutOfScope`), `EvalRefusal.Guardrail` (the safety check, the host's `InputGuardrail`, or the model refusing
+  to answer) or `EvalRefusal.Any`. That refusal, shown to the user as an error, then passes the turn and the
+  conversation goes on; a turn that was answered, refused the other way or failed, fails, and its notes say which. A
+  safety check that could not run, a message too long, the rate limit and a missing tenant are not refusals: they stay
+  errors. Without the expectation a refusal fails the turn as before. `MentorEvalResult.Refusal` reports the refusal a
+  turn showed, expected or not.
+
+- A `dotnet new` template in the repository, `templates/mentoragent-blazor`: a Blazor Server helpdesk with a
+  MentorAgent assistant and three actions — `list_open_tickets`, `assign_ticket` with a confirmation, `close_ticket`
+  with a confirmation and the `Agent` role — the model from the configuration with its key in the user secrets, and a
+  test sign-in with two users, one without the role. Its test project runs the assistant with a scripted model through
+  `RunConversationsAsync`: a support agent who confirms closes a ticket, without a yes the ticket stays open, and
+  without the role the action is not offered. It is installed from a clone of the repository, not from NuGet:
+  `dotnet new install templates/mentoragent-blazor`, then `dotnet new mentoragent-blazor -n Helpdesk`.
+
+### Changed
+
+- An `IMentorRagSource` that answers with no list (`null`) fails at once, with a message that says a source finding
+  nothing returns an empty list, instead of a `NullReferenceException` later on. The turn goes on without documents,
+  as before.
+
+- **Novior.MentorAgent.Declarative:** a `kind: function` entry that names no action of the session — unknown to the
+  application, or off for the session — is taken away from the agent, with a warning, and the agent loads without it.
+  The Agent Framework used to give the agent a function of that name with nothing behind it: the model could call it,
+  nothing ran, and the agent stopped without a word in the log. An action that is off is therefore described to no
+  model through a definition that names it either.
+
+- Every package is now checked at pack time against the public API of 1.2.0, so 1.3.0 cannot break code built
+  against 1.2.0 by accident. An intended break is listed in this file as Breaking.
+
+- The family moves onto the Microsoft Agent Framework 1.27.0 line (`Microsoft.Agents.AI` and
+  `Microsoft.Agents.AI.Workflows` 1.27.0). **Novior.MentorAgent.Declarative:** `Microsoft.Agents.AI.Declarative` moves
+  to 1.27.0-rc1, on the same line. The two breaking changes of Agent Framework 1.27 are in parts MentorAgent does not
+  use: `AddFoundryResponses` for hosted Foundry applications, and the redirect callbacks of `DefaultHttpRequestHandler`.
+
+- The packages' description and tags say what MentorAgent is: AI agents in a .NET application under your rules —
+  roles, confirmations, cost control. The tags of `Novior.MentorAgent`, `.Server` and `.Blazor` now include
+  `ai-governance`, `governance`, `authorization`, `roles`, `approval` and `human-in-the-loop`; the `mentor` tag, which
+  found only namesakes, is gone from all five packages.
+
+### Fixed
+
+- When a restored conversation the service no longer knew was replaced by a new one (BUG-110), the knowledge-base
+  search kept the recent messages of the conversation that was gone: the first search of the new one was given the
+  message of the turn that had failed. They are now cleared, as on a reset or a restore.
+
+- The turn's vector of the message (`IMentorQueryEmbedding`) was kept on its text alone (BUG-229): a knowledge-base
+  source that embeds the message with a model of its own was handed the vector of `MentorOptions.EmbeddingGenerator`,
+  or routing, tool filtering and memory were handed the source's, whichever asked first in the turn. Each generator
+  now gets the vector it makes, still computed once per turn, compared by reference; at most four generators are
+  remembered, the oldest dropped first, so one built for every call cannot make the cache grow.
+
+### Security
+
+- **Novior.MentorAgent.Server:** BUG-230 (S1): `GET /mentor/chat` ran a turn for any request the browser sent with the
+  sign-in cookie, and with cookie authentication (`SameSite=Lax`) that includes a link clicked on another site: one
+  link ran a turn as the signed-in user, with the link author's question, even with `RequireAuthorization`. Both
+  `GET` and `POST /mentor/chat` now answer `403` before the turn when the browser's Fetch Metadata says another site
+  started the request (`Sec-Fetch-Site` `cross-site` or `same-site`, `Sec-Fetch-Mode` not `cors`), and log a warning
+  `chat.cross-site-refused` without the question. Your own page's calls, clients without Fetch Metadata and `cors`
+  requests work as before. With a `SameSite=None` cookie, or for browsers that send no Fetch Metadata, add a check
+  of your own: the Server README says how.
+
 ## [1.2.0] - 2026-10-27
 
 ### Added
@@ -1545,6 +1815,7 @@ names of their time.
 - **MentorAgent:** `MentorRemoteAgent.RequiredRoles` is not enforced: any user can reach a remote agent.
 
 [Unreleased]: https://www.nuget.org/packages/Novior.MentorAgent
+[1.3.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.3.0
 [1.2.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.2.0
 [1.1.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.1.0
 [1.0.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.0.0

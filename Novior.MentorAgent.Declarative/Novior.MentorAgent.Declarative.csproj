@@ -7,7 +7,7 @@
     <PackageId>Novior.MentorAgent.Declarative</PackageId>
     <Title>Novior.MentorAgent.Declarative</Title>
     <Description>Define MentorAgent Level-2 specialist agents in YAML instead of C#. Wraps the Agent Framework's declarative agent factory and plugs the resulting agents into MentorAgent's handoff graph, reusing the existing tools with their role checks and human-approval gates intact. Optional — install only if you want file-based agent definitions.</Description>
-    <PackageTags>ai;ai-agents;llm;agent;yaml;declarative;configuration;agent-framework;microsoft-agent-framework;mentor;dotnet;csharp</PackageTags>
+    <PackageTags>ai;ai-agents;ai-governance;human-in-the-loop;llm;agent;yaml;declarative;configuration;agent-framework;microsoft-agent-framework;dotnet;csharp</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>IconMA.png</PackageIcon>
     <IsPackable>true</IsPackable>
@@ -26,9 +26,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- On the same 1.26 line as Microsoft.Agents.AI in the core package: a version of another line
+    <!-- On the same 1.27 line as Microsoft.Agents.AI in the core package: a version of another line
          would drag the whole library onto a different Agent Framework version. -->
-    <PackageReference Include="Microsoft.Agents.AI.Declarative" Version="1.26.0-rc1" />
+    <PackageReference Include="Microsoft.Agents.AI.Declarative" Version="1.27.0-rc1" />
   </ItemGroup>
 
   <ItemGroup>

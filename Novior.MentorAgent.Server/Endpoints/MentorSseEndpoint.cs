@@ -52,13 +52,19 @@ public static class MentorSseEndpoint
     };
 
     /// <summary>GET /mentor/chat?message=…&amp;language=… — text-only streaming.</summary>
-    public static Task HandleAsync(HttpContext ctx)
-        => StreamAsync(ctx, ctx.Request.Query["message"].ToString(), null,
+    public static async Task HandleAsync(HttpContext ctx)
+    {
+        if (await RefuseCrossSiteRequestAsync(ctx)) return;
+
+        await StreamAsync(ctx, ctx.Request.Query["message"].ToString(), null,
             MentorTurnLanguage.Parse(ctx.Request.Query["language"].ToString()));
+    }
 
     /// <summary>POST /mentor/chat — streaming with optional image attachments (#13).</summary>
     public static async Task HandlePostAsync(HttpContext ctx)
     {
+        if (await RefuseCrossSiteRequestAsync(ctx)) return;
+
         ChatRequest? body;
         try
         {
@@ -73,6 +79,58 @@ public static class MentorSseEndpoint
 
         await StreamAsync(ctx, body?.Message ?? string.Empty, body?.Attachments, MentorTurnLanguage.Parse(body?.Language));
     }
+
+    /// <summary>
+    /// Refuses, with 403, a chat request that another site started in the user's browser (BUG-230):
+    /// <c>Sec-Fetch-Site</c> is <c>cross-site</c> or <c>same-site</c> and <c>Sec-Fetch-Mode</c> is not
+    /// <c>cors</c> — a link, a form, an image, an iframe. True when the request was refused.
+    ///
+    /// <para>
+    /// With cookie authentication the cookie is <c>SameSite=Lax</c>, so the browser sends it on a
+    /// top-level GET from a link on any site: without this check one link to
+    /// <c>/mentor/chat?message=…</c> ran a paid turn as the signed-in user, with the link author's
+    /// question, and <c>RequireAuthorization</c> did not help. The check comes first, before the body is
+    /// read, the turn, the memory and the per-user limit.
+    /// </para>
+    ///
+    /// <para>
+    /// Everything else passes as before: <c>same-origin</c>; <c>none</c> (an address typed by hand);
+    /// requests without Fetch Metadata (curl, servers, tests, browsers older than the headers); and
+    /// <c>cors</c> requests from another origin, which the host's CORS policy already governs.
+    /// <c>Origin</c> is not checked: a top-level GET does not send it.
+    /// </para>
+    /// </summary>
+    private static async Task<bool> RefuseCrossSiteRequestAsync(HttpContext ctx)
+    {
+        var site = ctx.Request.Headers["Sec-Fetch-Site"].ToString();
+        if (!site.Equals("cross-site", StringComparison.OrdinalIgnoreCase) &&
+            !site.Equals("same-site", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var mode = ctx.Request.Headers["Sec-Fetch-Mode"].ToString();
+        if (mode.Equals("cors", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // Never the question: it is the other site's text, and the log is not the place for it. The mode
+        // is logged only as one of the values the standard defines, so a client cannot write into the log.
+        ctx.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(MentorSseEndpoint).FullName!)
+            .LogWarning(
+                "[MentorAgent:SSE] chat.cross-site-refused: {Method} from Sec-Fetch-Site={Site}, Sec-Fetch-Mode={Mode} — refused before the turn.",
+                ctx.Request.Method, site.ToLowerInvariant(), KnownFetchMode(mode));
+
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        ctx.Response.ContentType = "text/plain; charset=utf-8";
+        await ctx.Response.WriteAsync("Refused: this chat request was started by another site.", ctx.RequestAborted);
+        return true;
+    }
+
+    private static string KnownFetchMode(string mode) => mode.ToLowerInvariant() switch
+    {
+        "" => "(none)",
+        "navigate" or "nested-navigate" or "no-cors" or "same-origin" or "websocket" => mode.ToLowerInvariant(),
+        _ => "(other)",
+    };
 
     private static async Task StreamAsync(
         HttpContext ctx,

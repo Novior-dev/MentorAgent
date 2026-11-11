@@ -4,7 +4,7 @@ namespace Novior.MentorAgent.Abstractions.Interfaces;
 
 /// <summary>
 /// Process-wide sink for operational usage metrics powering the admin token &amp; cost dashboard
-/// (roadmap #9). Recording methods are called by the engine; <see cref="GetSnapshot"/> is read by
+/// (roadmap #9). Recording methods are called by the engine; <see cref="GetSnapshot(string)"/> is read by
 /// the dashboard component and the admin endpoint. This is an operator/admin instrument and must
 /// never be surfaced in the end-user widget.
 /// </summary>
@@ -27,6 +27,20 @@ public interface IMentorMetrics
 
     /// <summary>Builds a point-in-time snapshot (cost included only if pricing is configured).</summary>
     MentorMetricsSnapshot GetSnapshot();
+
+    /// <summary>
+    /// The snapshot of one tenant's use. With an <c>IMentorTenantResolver</c> registered, the dashboard and
+    /// <c>GET /mentor/admin/metrics</c> show the reader's tenant only, never another's; the whole instance is read from
+    /// OpenTelemetry, where every series names its tenant. MentorAgent's own implementation keeps each tenant's figures
+    /// in RAM, since the process started.
+    /// </summary>
+    /// <param name="tenant">The tenant, as the resolver named it; <see langword="null"/> for the whole instance.</param>
+    /// <returns>
+    /// The snapshot; with <paramref name="tenant"/> <see langword="null"/>, the same as <see cref="GetSnapshot()"/>.
+    /// The default answers <see langword="null"/> for a tenant: an implementation that keeps nothing per tenant shows
+    /// no figures, rather than the instance's.
+    /// </returns>
+    MentorMetricsSnapshot? GetSnapshot(string? tenant) => tenant is null ? GetSnapshot() : null;
 
     /// <summary>Resets all counters (e.g. to start a fresh measurement window).</summary>
     void Reset();

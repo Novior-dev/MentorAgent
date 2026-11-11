@@ -442,6 +442,7 @@ public sealed class InProcessHitlTests
     // ── The RequiresApproval predicate ──────────────────────────────────────────
 
     [Fact]
+    [Trait("Rule", "confirm.predicate-adds")]
     public async Task The_predicate_can_gate_a_tool_the_attribute_left_open()
     {
         // The options-level escape hatch, for tools whose attributes a host does not own — an MCP
@@ -503,6 +504,7 @@ public sealed class InProcessHitlTests
     }
 
     [Fact]
+    [Trait("Rule", "confirm.predicate-adds")]
     public async Task A_predicate_returning_false_leaves_the_attribute_gate_in_place()
     {
         // The predicate adds tools to the gated set; it must not be able to switch off a gate the
@@ -607,6 +609,7 @@ public sealed class InProcessHitlTests
     }
 
     [Theory]
+    [Trait("Rule", "roles.checked-before-confirmation")]
     [InlineData(MentorHitlMode.Blocking)]
     [InlineData(MentorHitlMode.Native)]
     public async Task A_user_without_the_role_is_never_asked_to_confirm(MentorHitlMode mode)
@@ -688,6 +691,7 @@ public sealed class InProcessHitlTests
     }
 
     [Fact]
+    [Trait("Rule", "roles.signed-in")]
     public async Task A_role_gated_tool_is_refused_when_no_auth_provider_is_registered()
     {
         // Fails closed, and says why. The dangerous alternative — treating "no auth configured" as

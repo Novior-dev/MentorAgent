@@ -673,8 +673,8 @@ and the package version as the `?v=` (`ChatWidget` adds the commit; a link you w
 version), in `App.razor` (Blazor Server / Web App) or `index.html`:
 
 ```html
-<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.2.0" rel="stylesheet" />
-<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.2.0"></script>
+<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.3.0" rel="stylesheet" />
+<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.3.0"></script>
 ```
 
 The script can safely load a second time on a page where `ChatWidget` also renders: the later tag
@@ -757,7 +757,12 @@ builder.Services.AddSingleton<IMentorMetricsStore, FileMetricsStore>();   // BEF
 of a user turn, and `IMentorOrchestrator.SendMessageAsync(text, attachments)` is what consumes it — so
 a custom input control can replace `ChatInput` without touching the orchestration layer.
 
-Working implementations of all three ship in the `MentorAgentSample` repository.
+Working implementations ship in the samples repository, `Novior.MentorAgent.Samples`: the dashboard
+in the `AdminDashboard` page of `MentorAgentSample`, `MentorAgentNuget`, `MentorAgentBlazor` and
+`MentorAgentNugetWebAssembly`; a `FileMetricsStore` in six hosts (MAUI included), and
+`PrometheusMetricsStore` and `AzureMonitorMetricsStore` in `MentorAgentServer` and
+`MentorAgentNugetApiServer`; and a composer of its own in the React client, `mentoragentreact`,
+which sends the same message and attachments over the SignalR hub.
 
 ---
 

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The shapes the action rules are tested on (ACTION-RULES.md).
+
+    Some of these classes are what an application should not write: an action attribute on a static or
+    a private method, a class that is both a team and an agent. Scanned with Novior.MentorAgent.Tests.App,
+    they would change the catalogue every other suite asserts on, which is why that project keeps its
+    own scan boundary. This one is scanned only by the rule tests.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -7,6 +7,12 @@ namespace Novior.MentorAgent.Core;
 /// handoff graph as the attribute-declared ones — so <c>route_to_specialist</c> can reach them and
 /// they return to the coordinator when done.
 /// <para>
+/// A coordinator is built for every new session, so a source is asked at least once per session: once per
+/// Blazor circuit, MAUI app scope or hub connection, and once per request on <c>/mentor/chat</c> and per task
+/// over A2A, where a request is the session. <see cref="MentorAgentSourceContext.SessionId"/> says which one.
+/// What each call loaded and left out reaches every <see cref="IMentorAgentSourceObserver"/>.
+/// </para>
+/// <para>
 /// This lives in <c>MentorAgent</c> and not in <c>Novior.MentorAgent.Abstractions</c> because
 /// <see cref="AIAgent"/> comes from <c>Microsoft.Agents.AI</c>, which Abstractions must not
 /// reference if it is to stay WebAssembly-safe.
@@ -23,6 +29,16 @@ public interface IMentorAgentSource
     /// return nothing rather than take the assistant down with it.
     /// </summary>
     Task<IReadOnlyList<AIAgent>> GetAgentsAsync(MentorAgentSourceContext context, CancellationToken ct = default);
+
+    /// <summary>
+    /// Builds the agents and says what was left out, and why: the method MentorAgent calls. By default it returns the
+    /// agents of <see cref="GetAgentsAsync"/> and leaves nothing out, so a source that implements only that method
+    /// works as it always did. Implement it to report a definition you could not load, or a tool you took away from an
+    /// agent: the report reaches every <see cref="IMentorAgentSourceObserver"/>, and nothing is left out in silence.
+    /// The same rule as <see cref="GetAgentsAsync"/>: one bad definition is a rejection, not an exception.
+    /// </summary>
+    async Task<MentorAgentSourceResult> LoadAsync(MentorAgentSourceContext context, CancellationToken ct = default)
+        => new(await GetAgentsAsync(context, ct), []);
 }
 
 /// <summary>
@@ -43,4 +59,14 @@ public interface IMentorAgentSource
 /// </param>
 public sealed record MentorAgentSourceContext(
     IChatClient ChatClient,
-    IReadOnlyList<AIFunction> Tools);
+    IReadOnlyList<AIFunction> Tools)
+{
+    /// <summary>
+    /// The session the coordinator is built for: an opaque id, the same as <c>MentorActionRequest.SessionId</c> and
+    /// <c>MentorActionDecision.SessionId</c> — the circuit, the MAUI app's scope, the hub connection, the
+    /// <c>/mentor/chat</c> request, the A2A task. A source that gives each session the agents of one version, say,
+    /// reads it here, as an <c>IMentorActionGovernor</c> reads the request's. The coordinator that
+    /// <c>WarmUpAtStartup</c> builds has a session of its own, which no user continues.
+    /// </summary>
+    public string? SessionId { get; init; }
+}

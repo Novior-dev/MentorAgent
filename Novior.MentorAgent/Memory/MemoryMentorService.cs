@@ -61,6 +61,13 @@ public sealed class MentorMemoryService : IDisposable
     internal Core.MentorTurnOrigin? Origin { get; init; }
 
     /// <summary>
+    /// Set by the registration: this scope's tenant (story 156). With an application's resolver, every key is the
+    /// tenant's own — the shared anonymous bucket too — so two tenants never read each other's memories, and the rate
+    /// limit counts each tenant's users apart.
+    /// </summary>
+    internal Core.MentorTenantContext? Tenant { get; init; }
+
+    /// <summary>
     /// Sets the current user message so <see cref="GetMemoryContextAsync"/> can rank memories
     /// by relevance when <see cref="MentorOptions.MemoryRelevanceFiltering"/> is enabled.
     /// Called by the orchestrator before each message (scoped instance, same as RAG's PrepareAsync).
@@ -69,7 +76,17 @@ public sealed class MentorMemoryService : IDisposable
 
     // ── UserId ────────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// The key memory and the rate limit use for the current user: the user's own, or an anonymous one. With an
+    /// <c>IMentorTenantResolver</c>, prefixed with the tenant (<c>tenant:contoso/sub:…</c>); without one, as before.
+    /// </summary>
     public async Task<string> GetUserIdAsync(CancellationToken ct = default)
+    {
+        var user = await UserKeyAsync(ct);
+        return Tenant is { SingleTenant: false } tenant ? Core.MentorTenantContext.Key(await tenant.GetIdAsync(ct), user) : user;
+    }
+
+    private async Task<string> UserKeyAsync(CancellationToken ct)
     {
         if (_auth is not null)
         {

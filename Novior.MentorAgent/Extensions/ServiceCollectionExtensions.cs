@@ -89,6 +89,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MentorPromptBuilder>();
         services.AddSingleton<MentorRateLimiter>();
         services.AddSingleton<MentorTokenUsage>();   // Wave 1 #1 — token measurement
+        services.AddScoped<MentorSessionTokenUsage>(); // story 171 — the same calls, counted for one session
         services.AddSingleton<MentorMetrics>();       // Wave 3 #9 — dashboard metrics sink
         services.AddSingleton<Novior.MentorAgent.Abstractions.Interfaces.IMentorMetrics>(
             sp => sp.GetRequiredService<MentorMetrics>());
@@ -139,6 +140,8 @@ public static class ServiceCollectionExtensions
             middleware.Session   = sp.GetRequiredService<MentorSessionIdentity>();
             // The application's action policies (stories 311, 153).
             middleware.Policies  = sp.GetRequiredService<MentorActionPolicies>();
+            // The application's governor of its actions (story 1549).
+            middleware.Governance = sp.GetRequiredService<MentorActionGovernance>();
             return middleware;
         });
 
@@ -150,6 +153,7 @@ public static class ServiceCollectionExtensions
         // Stories 311, 153 — every IMentorActionPolicy of the process, asked by one rule on every surface; and the
         // application's actions as MentorAgent sees them.
         services.TryAddSingleton<MentorActionPolicies>();
+        services.TryAddSingleton<MentorActionGovernance>();
         services.TryAddSingleton<IMentorActionCatalog, MentorActionCatalog>();
 
         // Wave 5 #16 — single source of truth for "does this tool need approval, and what does the
@@ -210,6 +214,11 @@ public static class ServiceCollectionExtensions
         // AuthenticationStateProvider — see MentorUserAuthentication (BUG-131).
         services.AddScoped<MentorTransportUser>();
 
+        // Story 155 — the tenant of each scope, and of each MCP call: the application's resolver, or one tenant as before.
+        services.TryAddSingleton<IMentorTenantResolver, MentorSingleTenantResolver>();
+        services.AddScoped<MentorTenantContext>();
+        services.AddScoped<IMentorTenant>(sp => sp.GetRequiredService<MentorTenantContext>());
+
         services.AddScoped<MentorMemoryService>(sp => new MentorMemoryService(
             sp.GetRequiredService<IMentorMemoryStore>(),
             sp.GetRequiredService<IOptions<MentorOptions>>(),
@@ -220,6 +229,7 @@ public static class ServiceCollectionExtensions
             QueryEmbedding  = sp.GetRequiredService<TurnQueryEmbedding>(),
             SessionIdentity = sp.GetRequiredService<MentorSessionIdentity>(),
             Origin          = sp.GetRequiredService<MentorTurnOrigin>(),
+            Tenant          = sp.GetRequiredService<MentorTenantContext>(),
         });
 
         // ── Page Context ──────────────────────────────────────────────────────
@@ -317,6 +327,7 @@ public static class ServiceCollectionExtensions
         //   builder.Services.AddScoped<IMentorRagSource, MyVectorDbRagSource>();
         //   builder.Services.AddMentorAgent(options => { options.UseRag = true; });
         //
+        // A collection of Microsoft.Extensions.VectorData needs no source of its own: AddMentorVectorStoreRag.
         // If no custom source is registered, NullRagSource is used (no-op).
         services.TryAddScoped<IMentorRagSource, NullRagSource>();
 
@@ -330,6 +341,7 @@ public static class ServiceCollectionExtensions
             PageContext = sp.GetRequiredService<IMentorPageContext>(),
             Auth        = MentorUserAuthentication.For(sp),
             TurnLanguage = sp.GetRequiredService<MentorTurnLanguage>(),
+            Telemetry   = sp.GetService<Observability.MentorTelemetry>(),   // story 195: a failed search, counted
         });
 
         // ── Agent Skills ─────────────────────────────────────────────────────
@@ -382,6 +394,21 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers an <see cref="IMentorAgentSourceObserver"/>: every time a coordinator is built, it receives what each
+    /// <see cref="IMentorAgentSource"/> loaded and what it left out, for every session of the process. A singleton,
+    /// resolved from the application's root services; every observer registered is called, in the order of
+    /// registration. Registering the same type twice registers it once.
+    /// </summary>
+    /// <typeparam name="TObserver">The observer.</typeparam>
+    public static IServiceCollection AddMentorAgentSourceObserver<TObserver>(this IServiceCollection services)
+        where TObserver : class, IMentorAgentSourceObserver
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMentorAgentSourceObserver, TObserver>());
+        return services;
+    }
+
+    /// <summary>
     /// Registers an <see cref="IMentorActionPolicy"/>: it decides whether a user may use each of the application's
     /// actions, and whether each call may run, on every surface. A singleton, resolved from the application's root
     /// services; what it needs from the conversation's scope it resolves from <c>MentorActionRequest.Services</c>.
@@ -408,6 +435,95 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(policy);
         services.AddSingleton(policy);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the <see cref="IMentorActionGovernor"/>: it decides from outside the code whether each of the
+    /// application's actions is on, on every surface, for every session. A singleton, resolved from the application's
+    /// root services; what it needs from the conversation's scope it resolves from <c>MentorActionRequest.Services</c>.
+    /// Registering it gives whoever implements it the power to widen what the code allows: an action the code ships
+    /// off runs once the governor turns it on.
+    /// </summary>
+    /// <typeparam name="TGovernor">The governor.</typeparam>
+    /// <exception cref="InvalidOperationException">An <see cref="IMentorActionGovernor"/> is already registered: there can be one.</exception>
+    public static IServiceCollection AddMentorActionGovernor<TGovernor>(this IServiceCollection services)
+        where TGovernor : class, IMentorActionGovernor
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        // Two governors that disagree about widening an action have no answer that is obviously the stricter.
+        if (services.FirstOrDefault(d => d.ServiceType == typeof(IMentorActionGovernor) && !d.IsKeyedService) is { } registered)
+            throw new InvalidOperationException(
+                $"An IMentorActionGovernor is already registered ({registered.ImplementationType?.FullName ?? registered.ServiceType.Name}): " +
+                "there can be one per application.");
+        services.AddSingleton<IMentorActionGovernor, TGovernor>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the <see cref="IMentorTenantResolver"/>: it names the tenant every turn and every call to the MCP server
+    /// belongs to, which <see cref="IMentorTenant"/> then reads. A singleton, resolved from the application's root services;
+    /// what it needs from the request's scope it resolves from <c>MentorTenantRequest.Services</c>. Before or after
+    /// <c>AddMentorAgent</c>: it takes the place of the single tenant that one registers.
+    /// </summary>
+    /// <typeparam name="TResolver">The resolver.</typeparam>
+    /// <exception cref="InvalidOperationException">An <see cref="IMentorTenantResolver"/> is already registered: there can be one.</exception>
+    public static IServiceCollection AddMentorTenantResolver<TResolver>(this IServiceCollection services)
+        where TResolver : class, IMentorTenantResolver
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        // Two resolvers could name two tenants for one request: there is no answer to choose.
+        if (services.FirstOrDefault(d => d.ServiceType == typeof(IMentorTenantResolver) && !d.IsKeyedService
+                                         && d.ImplementationType != typeof(MentorSingleTenantResolver)) is { } registered)
+            throw new InvalidOperationException(
+                $"An IMentorTenantResolver is already registered ({registered.ImplementationType?.FullName ?? registered.ServiceType.Name}): " +
+                "there can be one per application.");
+        services.RemoveAll<IMentorTenantResolver>();
+        services.AddSingleton<IMentorTenantResolver, TResolver>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers a <see cref="MentorVectorStoreRagSource{TRecord}"/> as the <see cref="IMentorRagSource"/>: the knowledge
+    /// base is a collection of <c>Microsoft.Extensions.VectorData</c>. Scoped, so the message is embedded once per turn
+    /// and shared with routing, tool filtering and memory; before or after <c>AddMentorAgent</c>. Turn
+    /// <c>UseRag</c> on as well.
+    /// </summary>
+    /// <param name="services">The services.</param>
+    /// <param name="collection">The collection to search, resolved for each session.</param>
+    /// <param name="options">What of a record is the document and its citation, and what the collection's scores mean.</param>
+    /// <exception cref="InvalidOperationException">
+    /// The distance function is unknown or has no fixed scale, or another <see cref="IMentorRagSource"/> is already
+    /// registered: there can be one.
+    /// </exception>
+    public static IServiceCollection AddMentorVectorStoreRag<TRecord>(
+        this IServiceCollection services,
+        Func<IServiceProvider, Microsoft.Extensions.VectorData.IVectorSearchable<TRecord>> collection,
+        MentorVectorStoreRagOptions<TRecord> options)
+        where TRecord : class
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(collection);
+        ArgumentNullException.ThrowIfNull(options);
+
+        // At registration, so that a collection whose scores would be read backwards stops the application at startup.
+        var scale = MentorVectorStoreRagSource<TRecord>.ScaleOf(options);
+        if (services.FirstOrDefault(d => d.ServiceType == typeof(IMentorRagSource) && !d.IsKeyedService
+                                         && d.ImplementationType != typeof(NullRagSource)) is { } registered)
+            throw new InvalidOperationException(
+                $"An IMentorRagSource is already registered ({registered.ImplementationType?.FullName ?? registered.ServiceType.Name}): " +
+                "there can be one per application.");
+
+        var warnings = new VectorStoreRagWarnings();
+        services.RemoveAll<IMentorRagSource>();
+        services.AddScoped<IMentorRagSource>(sp => new MentorVectorStoreRagSource<TRecord>(
+            collection(sp),
+            options,
+            sp.GetService<ILogger<MentorVectorStoreRagSource<TRecord>>>(),
+            scale,
+            warnings,
+            sp.GetService<IOptions<MentorOptions>>()?.Value.EmbeddingGenerator,
+            sp.GetService<IMentorQueryEmbedding>()));
         return services;
     }
 

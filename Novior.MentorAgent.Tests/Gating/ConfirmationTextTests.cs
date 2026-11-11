@@ -139,4 +139,29 @@ public sealed class ConfirmationTextTests
         Warnings(host).Should().NotContain("dana@example.com", "the exception's message stays out of the log");
         host.Logs.ExceptionText.Should().NotContain("dana@example.com");
     }
+
+    [Fact]
+    [Trait("RuntimeOption", nameof(MentorOptions.ConfirmationMessage))]
+    public async Task A_text_set_while_the_application_runs_is_on_the_banner_of_the_next_turn()
+    {
+        // Story 1275: the text is written at every call, so a change made while the application runs is on the next banner.
+        await using var host = Host();
+        host.Auth.SignIn("dana", "Manager");
+        var banners = new List<string>();
+        var state = host.Get<IMentorStateService>();
+        state.OnConfirmationRequired += req =>
+        {
+            banners.Add(req.Message);
+            state.Cancel(req.ActionId);
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        host.Chat!.CallTool("cancel_order", new { orderId = 1001, reason = "late" }).Say("done");
+        await host.RunTurnAsync("cancel order 1001", deadline.Token);
+        host.Options.ConfirmationMessage = _ => "Cancel it for good?";
+        host.Chat.CallTool("cancel_order", new { orderId = 1001, reason = "late" }).Say("done");
+        await host.RunTurnAsync("cancel order 1001", deadline.Token);
+
+        banners.Should().Equal(Default, "Cancel it for good?");
+    }
 }

@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="MentorAgent-Helpdesk/MentorAgent-Helpdesk.csproj" />
+  <Project Path="MentorAgent-Helpdesk.Tests/MentorAgent-Helpdesk.Tests.csproj" />
+</Solution>

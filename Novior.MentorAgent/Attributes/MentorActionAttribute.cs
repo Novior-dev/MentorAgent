@@ -105,4 +105,12 @@ public sealed class MentorActionAttribute : Attribute
     /// Example: NavigateTo = "/products"
     /// </summary>
     public string? NavigateTo { get; init; }
+
+    /// <summary>
+    /// Whether the action ships on. <c>false</c>: the action is in the catalogue
+    /// (<c>IMentorActionCatalog</c>, with <c>EnabledByDefault</c> false) and nowhere else — not offered to any agent,
+    /// not in the MCP server's <c>tools/list</c>, not on the A2A card — and a call to it does not run, until an
+    /// <c>IMentorActionGovernor</c> turns it on. Without a governor it stays off. Default: true
+    /// </summary>
+    public bool Enabled { get; init; } = true;
 }

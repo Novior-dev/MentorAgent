@@ -62,6 +62,7 @@ public sealed class AgentRoleFilterTests
             new() { ["orderId"] = 7 });
 
     [Theory]
+    [Trait("Rule", "roles.offered-when-allowed")]
     [InlineData(MentorHitlMode.Blocking)]
     [InlineData(MentorHitlMode.Native)]
     public async Task Each_user_is_offered_only_the_specialists_actions_their_roles_allow(MentorHitlMode mode)
@@ -198,6 +199,7 @@ public sealed class AgentRoleFilterTests
         };
 
     [Theory]
+    [Trait("Rule", "roles.offered-when-allowed")]
     [InlineData(MentorHitlMode.Blocking)]
     [InlineData(MentorHitlMode.Native)]
     public async Task Each_team_member_is_offered_and_told_only_the_tools_the_users_roles_allow(MentorHitlMode mode)

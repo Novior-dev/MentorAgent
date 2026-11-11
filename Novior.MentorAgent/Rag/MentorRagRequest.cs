@@ -16,7 +16,7 @@ namespace Novior.MentorAgent.Rag;
 ///
 /// <para>
 /// A class with init-only properties rather than a parameter list, so that what a search can know can
-/// grow — a tenant, for one — without breaking a source that already implements it.
+/// grow — as <see cref="TenantId"/> did — without breaking a source that already implements it.
 /// </para>
 /// </summary>
 public sealed class MentorRagRequest
@@ -52,4 +52,13 @@ public sealed class MentorRagRequest
     /// model is shown. Empty when no page has set any.
     /// </summary>
     public IReadOnlyDictionary<string, object?> PageData { get; init; } = new Dictionary<string, object?>();
+
+    /// <summary>
+    /// The tenant of the turn, as <c>IMentorTenant.Id</c> names it: the one the <c>IMentorTenantResolver</c> resolved when
+    /// the turn began. <see langword="null"/> when the application registers no resolver and serves a single tenant.
+    /// MentorAgent passes it and filters nothing: a source that holds the documents of several tenants returns only this
+    /// one's. A source is usually a singleton, so it reads the tenant here rather than from <c>IMentorTenant</c>, which
+    /// is scoped.
+    /// </summary>
+    public string? TenantId { get; init; }
 }

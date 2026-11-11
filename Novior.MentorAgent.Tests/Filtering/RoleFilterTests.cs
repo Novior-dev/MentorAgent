@@ -46,11 +46,15 @@ public sealed class RoleFilterTests
 
     private static string PromptOf(FakeChatClient.RecordedCall call) => (call.Instructions ?? "") + call.SystemText;
 
-    /// <summary>The prompt's count of the direct actions, with <paramref name="leftOut"/> left out.</summary>
+    /// <summary>
+    /// The prompt's count of the direct actions, with <paramref name="leftOut"/> left out: of those the session is built
+    /// with, which an action shipped off is not (story 1549).
+    /// </summary>
     private static string Count(MentorHostFixture host, params string[] leftOut)
-        => $"**{host.Get<MentorDiscoveryService>().Discover().Level1Methods.Count(m => !leftOut.Contains(m.ToolName))} direct actions**";
+        => $"**{host.Get<MentorDiscoveryService>().Discover().Level1Methods.Count(m => m.EnabledByDefault && !leftOut.Contains(m.ToolName))} direct actions**";
 
     [Theory]
+    [Trait("Rule", "roles.offered-when-allowed")]
     [InlineData(MentorHitlMode.Blocking)]
     [InlineData(MentorHitlMode.Native)]
     public async Task Each_user_is_offered_and_told_only_the_actions_their_roles_allow(MentorHitlMode mode)
@@ -80,6 +84,8 @@ public sealed class RoleFilterTests
     }
 
     [Fact]
+    [Trait("Rule", "roles.signed-in")]
+    [Trait("Rule", "roles.offered-when-allowed")]
     public async Task A_user_who_is_not_signed_in_is_offered_no_action_that_needs_a_role()
     {
         await using var host = MentorHostFixture.Create(o => o.MemoryAutoCapture = false);
@@ -93,6 +99,7 @@ public sealed class RoleFilterTests
     }
 
     [Fact]
+    [Trait("Rule", "roles.offered-when-allowed")]
     public async Task A_user_who_holds_every_role_is_offered_every_action_and_the_prompt_as_built()
     {
         await using var host = MentorHostFixture.Create(o => o.MemoryAutoCapture = false);
@@ -229,6 +236,7 @@ public sealed class RoleFilterTests
     }
 
     [Fact]
+    [Trait("Rule", "roles.offered-when-allowed")]
     public async Task On_path_B_the_agent_is_handed_only_the_actions_the_user_may_run()
     {
         var inner = new FakeChatClient();
@@ -253,6 +261,7 @@ public sealed class RoleFilterTests
     }
 
     [Fact]
+    [Trait("Rule", "roles.offered-when-allowed")]
     public async Task A_call_to_an_action_left_out_is_still_refused_by_the_gate()
     {
         // The model can still name an action it was not offered — one it saw called earlier in the conversation, or

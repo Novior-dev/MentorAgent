@@ -1,0 +1,52 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject TestSignIn Users
+@inject AssistantModel Model
+
+<header class="site-header">
+    <a class="brand" href="">Helpdesk</a>
+
+    <label class="user-picker">
+        Acting as
+        <select value="@Users.Current.Id" @onchange="PickUser">
+            @foreach (var user in TestUser.All)
+            {
+                <option value="@user.Id">@user.Name · @(user.Role ?? "no role")</option>
+            }
+        </select>
+    </label>
+</header>
+
+<main class="site-main">
+    @if (!Model.IsConfigured)
+    {
+        <section class="notice">
+            <h2>The assistant is off</h2>
+            <p>Set the model in the user secrets of the project, then restart the app:</p>
+            <pre>dotnet user-secrets set "Assistant:ApiKey" "&lt;your key&gt;"</pre>
+            <p>Still missing: @string.Join(", ", Model.Missing).</p>
+        </section>
+    }
+
+    @Body
+</main>
+
+@if (Model.IsConfigured)
+{
+    @* The assistant. It brings its own CSS and JS: nothing to add to App.razor. *@
+    <ChatWidget />
+}
+
+@code {
+    protected override void OnInitialized() => Users.AuthenticationStateChanged += OnUserChanged;
+
+    private void PickUser(ChangeEventArgs e)
+    {
+        if (TestUser.All.FirstOrDefault(u => u.Id == e.Value as string) is { } user)
+            Users.SignInAs(user);
+    }
+
+    private void OnUserChanged(Task<AuthenticationState> state) => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Users.AuthenticationStateChanged -= OnUserChanged;
+}

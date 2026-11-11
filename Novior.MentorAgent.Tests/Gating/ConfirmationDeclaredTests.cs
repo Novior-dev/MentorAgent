@@ -19,6 +19,7 @@ namespace Novior.MentorAgent.Tests.Gating;
 /// <c>ShowOrderCard</c> declares false, and <c>MarkOrderReviewed</c> declares nothing.
 /// </para>
 /// </summary>
+[Trait("Rule", "confirm.declared-decides")]
 public sealed class ConfirmationDeclaredTests
 {
     private static MentorActionAttribute Of(string method)

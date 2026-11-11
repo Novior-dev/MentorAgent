@@ -28,7 +28,8 @@ Say which package and version you used, what you found and, if you can, how to r
 
 | Version | Fixes |
 |---|---|
-| 1.2.x | ✅ Every fix |
+| 1.3.x | ✅ Every fix |
+| 1.2.x | ✅ Security fixes, until 5 February 2027 |
 | 1.1.x | ✅ Security fixes, until 27 January 2027 |
 | 1.0.x | ✅ Security fixes, until 21 January 2027 |
 | Release candidates and previews | ❌ |

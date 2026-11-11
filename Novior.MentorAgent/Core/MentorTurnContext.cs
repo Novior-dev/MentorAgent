@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Claims;
+using Novior.MentorAgent.Evaluation;
 using Novior.MentorAgent.Middleware;
 
 namespace Novior.MentorAgent.Core;
@@ -19,11 +20,28 @@ internal sealed class MentorTurnContext
 {
     private readonly ConcurrentDictionary<string, GateCall> _confirmed = new(StringComparer.Ordinal);
 
+    /// <summary>The calls of this turn that reached the gate, by the model's id (story 526).</summary>
+    private readonly ConcurrentDictionary<string, byte> _gated = new(StringComparer.Ordinal);
+
     /// <summary>Where this scope's turns come from. Set by the transport; in-process when none runs.</summary>
     internal MentorActionSurface Surface { get; set; } = MentorActionSurface.InProcess;
 
     /// <summary>The current turn's id, new for every message; <see langword="null"/> before the first one.</summary>
     internal string? TurnId { get; private set; }
+
+    /// <summary>
+    /// Story 171 — told each of the gate's decisions in this scope as it is taken (tool name, outcome, reason code),
+    /// whether or not an <see cref="IMentorActionObserver"/> is registered and whatever <c>EnableActionFeedback</c>
+    /// says: how an evaluated conversation knows the tools its turn called. Set by the evaluator only.
+    /// </summary>
+    internal Action<string, MentorActionOutcome, string>? Decided { get; set; }
+
+    /// <summary>
+    /// Story 1623 — told when the turn is refused instead of answered, with the refusal and the text shown, just before
+    /// that text goes to <c>OnError</c>: how an evaluated conversation tells a refusal from an error. Only the two
+    /// judgements on the message call it, never a safety check that could not run. Set by the evaluator only.
+    /// </summary>
+    internal Action<EvalRefusal, string>? Refused { get; set; }
 
     /// <summary>
     /// Whether the user asked to stop this turn. A cancelled token without it is the session ending — the
@@ -77,6 +95,7 @@ internal sealed class MentorTurnContext
         CanSignIn = false;
         Language = default;
         _confirmed.Clear();
+        _gated.Clear();
     }
 
     /// <summary>
@@ -93,6 +112,19 @@ internal sealed class MentorTurnContext
 
     /// <summary>The reason a cancelled call stopped: the user's Stop, or the end of the session.</summary>
     internal string StopReason => StopRequested ? MentorActionReasons.Stop : MentorActionReasons.SessionEnded;
+
+    /// <summary>
+    /// Records that the call <paramref name="callId"/> reached the gate. Every function the model calls and its agent
+    /// finds reaches it, on both paths; one the agent does not have — not offered in this turn — answers "not found"
+    /// without reaching it (story 526).
+    /// </summary>
+    internal void Gated(string? callId)
+    {
+        if (callId is not null) _gated[callId] = 0;
+    }
+
+    /// <summary>Whether the call <paramref name="callId"/> of this turn reached the gate.</summary>
+    internal bool WasGated(string callId) => _gated.ContainsKey(callId);
 
     /// <summary>Records a call the user confirmed before it reached the gate (Native mode).</summary>
     internal void Confirmed(GateCall call)

@@ -234,6 +234,7 @@ else
 
     private IMentorMetrics? _metricsSvc;
     private IMentorMetricsStore? _store;
+    private IMentorTenant? _tenant;
     private MentorMetricsSnapshot? _snapshot;
     private MentorLocalizer _loc = new(MentorLanguage.English);
     private string _selectedModel = ""; // "" = all models
@@ -242,6 +243,7 @@ else
     {
         _metricsSvc = Services.GetService(typeof(IMentorMetrics)) as IMentorMetrics;
         _store = Services.GetService(typeof(IMentorMetricsStore)) as IMentorMetricsStore;
+        _tenant = Services.GetService(typeof(IMentorTenant)) as IMentorTenant;
         // Explicit parameter wins (WASM), then DI (Blazor Server follows options.Language), then English.
         _loc = Language is { } lang
             ? new MentorLocalizer(lang)
@@ -256,11 +258,23 @@ else
 
     // In-process resolution order: an explicit Snapshot (WASM/headless) wins; otherwise an external
     // IMentorMetricsStore (Prometheus/Azure) serves the aggregate; otherwise the live in-RAM snapshot.
+    // Story 156 — with a tenant resolver, of the reader's tenant only; a reader whose tenant is not named reads nothing.
     private async Task<MentorMetricsSnapshot?> ResolveAsync()
     {
         if (Snapshot is not null) return Snapshot;
-        if (_store is not null && await _store.QueryAsync() is { } external) return external;
-        return _metricsSvc?.GetSnapshot();
+
+        string? tenant;
+        try
+        {
+            tenant = _tenant is null ? null : await _tenant.GetIdAsync();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+
+        if (_store is not null && await _store.QueryAsync(tenant) is { } external) return external;
+        return _metricsSvc?.GetSnapshot(tenant);
     }
 
     private async Task RefreshAsync()

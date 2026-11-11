@@ -232,6 +232,10 @@ internal sealed class MentorHostFixture : IAsyncDisposable
             if (chat is not null) o.ChatClient = chat;
             if (embeddings is not null) o.EmbeddingGenerator = embeddings;
 
+            // Story 526 — on by default in the library, off here: it asks the model after every reply that called no
+            // tool, and would take the answers a test scripted for its turns. The tests of the check turn it on.
+            o.CheckAnnouncedActions = false;
+
             configure?.Invoke(o);
         });
 
@@ -342,11 +346,22 @@ internal sealed class TestAuthStateProvider : AuthenticationStateProvider
 internal sealed class TestLogCollector
 {
     private readonly List<(LogLevel Level, string Category, string Message)> _records = [];
+    private readonly List<(LogLevel Level, string Category, string Message, IReadOnlyList<object> Scopes)> _scoped = [];
     private readonly Lock _gate = new();
 
-    internal void Add(LogLevel level, string category, string message)
+    internal void Add(LogLevel level, string category, string message, IReadOnlyList<object>? scopes = null)
     {
-        lock (_gate) _records.Add((level, category, message));
+        lock (_gate)
+        {
+            _records.Add((level, category, message));
+            _scoped.Add((level, category, message, scopes ?? []));
+        }
+    }
+
+    /// <summary>The same records with the log scopes open when each was written, outermost first (story 157).</summary>
+    internal IReadOnlyList<(LogLevel Level, string Category, string Message, IReadOnlyList<object> Scopes)> ScopedRecords
+    {
+        get { lock (_gate) return _scoped.ToList(); }
     }
 
     /// <summary>Exceptions passed to the logger — the detail a bare message throws away.</summary>
@@ -386,20 +401,27 @@ internal sealed class TestHostEnvironment : IHostEnvironment
         new PhysicalFileProvider(AppContext.BaseDirectory);
 }
 
-internal sealed class TestLoggerProvider(TestLogCollector sink) : ILoggerProvider
+internal sealed class TestLoggerProvider(TestLogCollector sink) : ILoggerProvider, ISupportExternalScope
 {
-    public ILogger CreateLogger(string categoryName) => new TestLogger(categoryName, sink);
+    /// <summary>The factory's scopes, as a real provider that includes them reads them (story 157).</summary>
+    private IExternalScopeProvider? _scopes;
+
+    public void SetScopeProvider(IExternalScopeProvider scopeProvider) => _scopes = scopeProvider;
+
+    public ILogger CreateLogger(string categoryName) => new TestLogger(categoryName, sink, this);
     public void Dispose() { }
 
-    private sealed class TestLogger(string category, TestLogCollector sink) : ILogger
+    private sealed class TestLogger(string category, TestLogCollector sink, TestLoggerProvider provider) : ILogger
     {
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => provider._scopes?.Push(state);
         public bool IsEnabled(LogLevel logLevel) => true;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
                                 Func<TState, Exception?, string> formatter)
         {
-            sink.Add(logLevel, category, formatter(state, exception));
+            List<object> scopes = [];
+            provider._scopes?.ForEachScope((scope, list) => list.Add(scope!), scopes);
+            sink.Add(logLevel, category, formatter(state, exception), scopes);
 
             // MentorAgent logs several failures as "message + exception" and swallows the
             // exception. Without keeping it, a red test says only that something went wrong.

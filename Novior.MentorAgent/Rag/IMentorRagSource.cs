@@ -25,12 +25,16 @@ namespace Novior.MentorAgent.Rag;
 /// builder.Services.AddMentorAgent(options => { options.UseRag = true; });
 /// </code>
 ///
-/// An <c>ITextSearch</c> is not wrapped for you (<c>TextSearchRagSource</c> is a placeholder): call your
-/// search client from your own implementation, as above.
+/// A collection of <c>Microsoft.Extensions.VectorData</c> — pgvector, Qdrant, Azure AI Search and the others — needs no
+/// implementation of its own: register <see cref="MentorVectorStoreRagSource{TRecord}"/> with <c>AddMentorVectorStoreRag</c>.
+/// For any other store, call its search client from your own implementation, as above.
 ///
 /// <b>Who is asking, and from where:</b> implement the <see cref="MentorRagRequest"/> overload as well.
 /// MentorAgent calls that one; its default implementation calls the text-only overload, so a source
-/// written for that keeps working unchanged. A source with cosine scores in [0, 1] declares its own
+/// written for that keeps working unchanged. With an <c>IMentorTenantResolver</c> the request carries the
+/// turn's tenant (<see cref="MentorRagRequest.TenantId"/>), which only that overload sees: a source that
+/// holds several tenants' documents implements it and returns the tenant's own, and one that does not is
+/// logged once as a warning at its first search with a tenant. A source with cosine scores in [0, 1] declares its own
 /// threshold with <see cref="DefaultMinScore"/>:
 /// <code>
 /// public class MyVectorSource : IMentorRagSource
@@ -87,4 +91,19 @@ public interface IMentorRagSource
     /// clear the default. A <c>RagMinScore</c> the host sets, in code or in configuration, wins over it.
     /// </summary>
     float? DefaultMinScore => null;
+
+    /// <summary>
+    /// The session's conversation changed — a new conversation, a restored one in its place, or one the service no longer
+    /// knew replaced (<see cref="MentorConversationChange.Reason"/>) — so a source that keeps state for the conversation
+    /// clears it here. Called with <c>UseRag</c> on, on the instance the session searches with: a scoped source clears
+    /// its own state; a singleton keys it on <see cref="MentorConversationChange.SessionId"/>. The default does nothing.
+    /// </summary>
+    /// <remarks>
+    /// Keep it quick: it is bounded by <c>SafetyCheckTimeout</c>. A source that throws or does not answer in time is
+    /// logged as a warning, and nothing else changes: the conversation has changed already.
+    /// </remarks>
+    /// <param name="change">Why the conversation changed, for which session and tenant.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task OnConversationChangedAsync(MentorConversationChange change, CancellationToken ct = default)
+        => Task.CompletedTask;
 }

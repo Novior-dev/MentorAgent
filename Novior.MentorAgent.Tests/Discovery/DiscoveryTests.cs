@@ -45,6 +45,7 @@ public sealed class DiscoveryTests
     // ── What becomes a tool ─────────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Rule", "scan.marker")]
     public void A_method_with_MentorAction_becomes_a_tool_named_by_the_rule()
     {
         // CancelOrderAsync → cancel_order: PascalCase, Async stripped, snake_cased. The attribute
@@ -53,6 +54,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "scan.marker")]
     public void A_method_with_only_a_Description_attribute_also_becomes_a_tool()
     {
         // The documented "no extra dependencies" path: plain [Description] from
@@ -65,6 +67,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "scan.marker")]
     public void A_method_with_neither_attribute_is_not_a_tool()
     {
         // The fixture's NotATool exists for this. Exposing an undecorated public method would make
@@ -116,6 +119,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "roles.checked-before-confirmation")]
     public void The_two_gates_are_independent_of_each_other()
     {
         // Confirmation and roles are separate controls and are easy to conflate — the fixture
@@ -179,6 +183,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "scan.override-keeps-action")]
     public void Only_MentorAction_is_inherited_by_overrides()
     {
         // An action declared on a base class stays an action when overridden — otherwise a service
@@ -245,6 +250,7 @@ public sealed class DiscoveryTests
     // ── Levels 2 and 3 ──────────────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Rule", "kind.agent-owns-methods")]
     public void A_MentorAgent_class_becomes_a_level_2_agent_with_its_own_tools()
     {
         var agent = Discover().Level2Agents.Single();
@@ -254,6 +260,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "kind.agent-owns-methods")]
     public void An_agents_methods_are_not_also_registered_as_level_1_tools()
     {
         // A specialist's tools belong to the specialist. Promoting them to the coordinator would
@@ -267,6 +274,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "kind.team-needs-members")]
     public void A_team_with_members_is_discovered_with_all_of_them()
     {
         var team = Discover().Level3Teams.Single();
@@ -276,6 +284,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "kind.team-needs-members")]
     public void A_team_with_no_members_is_dropped_at_discovery_rather_than_half_built()
     {
         // Discovery itself skips it and warns (the warning is asserted in the constraint suite).
@@ -288,6 +297,7 @@ public sealed class DiscoveryTests
     // ── Skills ──────────────────────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Rule", "kind.skill-methods-level1")]
     public void A_skill_with_methods_registers_them_as_level_1_tools()
     {
         // The documented dual role: the skill supplies the "how", its methods the "do".
@@ -295,6 +305,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "kind.skill-methods-level1")]
     public void A_skills_methods_are_registered_exactly_once()
     {
         // The early return in the skill branch exists to stop the generic L1 block scanning the
@@ -307,6 +318,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "kind.skill-methods-level1")]
     public void A_knowledge_only_skill_contributes_no_tools_and_no_error()
     {
         // The documented second form: a [MentorSkill] class with no methods at all is valid — it
@@ -319,6 +331,7 @@ public sealed class DiscoveryTests
     // ── Robustness ──────────────────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Rule", "scan.assemblies-once")]
     public void Scanning_the_same_assembly_twice_does_not_double_the_catalogue()
     {
         // BUG-011. Two entries resolving to the same assembly registered every tool, agent and
@@ -339,6 +352,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "scan.assemblies-once")]
     public void A_duplicated_assembly_is_reported_rather_than_silently_swallowed()
     {
         // Deduplicating quietly would hide the more interesting case: the developer meant to name
@@ -360,6 +374,7 @@ public sealed class DiscoveryTests
     }
 
     [Fact]
+    [Trait("Rule", "scan.assemblies-once")]
     public async Task A_duplicated_assembly_still_produces_a_working_coordinator()
     {
         // The damage BUG-011 actually did, asserted where it was felt rather than in the

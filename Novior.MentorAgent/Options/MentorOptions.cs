@@ -16,9 +16,11 @@ public sealed class MentorOptions
     // ── App Identity ──────────────────────────────────────────────────────────
 
     /// <summary>Host application name. Injected into the system prompt.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public required string AppName { get; set; }
 
     /// <summary>Application domain description. More detail = more contextual AI.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string AppDescription { get; set; } = string.Empty;
 
     // ── Language & Mentorship ─────────────────────────────────────────────────
@@ -55,9 +57,12 @@ public sealed class MentorOptions
     /// A2A and MCP requests carry none, and are in this language.
     /// </para>
     /// </remarks>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
     public MentorLanguage Language { get; set; } = MentorLanguage.English;
 
     /// <summary>Proactivity and mentorship level. Default: Standard.</summary>
+    /// <remarks>Read again for every new session: a change made while the application runs applies to the sessions that begin after it (<see cref="MentorRuntimeOptions"/>).</remarks>
+    [MentorOptionReadAt(MentorOptionReadAt.Session)]
     public MentorshipLevel MentorshipLevel { get; set; } = MentorshipLevel.Standard;
 
     /// <summary>
@@ -65,7 +70,9 @@ public sealed class MentorOptions
     /// Told to offer only what the request's tools, pages, skills and specialists can do, the model still offered
     /// steps the application does not have, 3 in 15 measured turns (BUG-074); off, the level asks for no closing
     /// offers. The other levels ignore it.
+    /// <para>Read again for every new session: a change made while the application runs applies to the sessions that begin after it (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Session)]
     public bool ProactiveNextSteps { get; set; }
 
     // ── AI Provider ──────────────────────────────────────────────────────────────
@@ -102,6 +109,7 @@ public sealed class MentorOptions
     ///     .GetChatClient("llama3.2").AsIChatClient();
     /// </code>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IChatClient? ChatClient { get; set; }
 
     /// <summary>
@@ -120,7 +128,32 @@ public sealed class MentorOptions
     /// Two calls with one id in a response of your agent's model are not made unique (BUG-225): your agent runs the
     /// calls before MentorAgent's clients see them.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public AIAgent? Agent { get; set; }
+
+    /// <summary>
+    /// The sampling of the coordinator's model — temperature, top-p and the rest — for every request of its turns,
+    /// the forced first call and the follow-ups of the tool loop included. <see langword="null"/> (the default), and
+    /// any value left <see langword="null"/> in it, is the provider's own. Useful with a local model whose default
+    /// suits chat, not tool calls:
+    /// <code>
+    /// options.CoordinatorSampling = new MentorSamplingOptions { Temperature = 0.2f, TopP = 0.9f };
+    /// // or in configuration: "Mentor": { "CoordinatorSampling": { "Temperature": 0.2 } }
+    /// </code>
+    /// <para>
+    /// The coordinator's only, on <see cref="ChatClient"/>: the classifiers MentorAgent asks (safety, scope, routing,
+    /// a forced call, an announced action) call <see cref="ClassifierChatClient"/> or the provider directly and keep
+    /// their own settings — those that ask for temperature 0 still do, the others keep the provider's default. An
+    /// <see cref="Agent"/> you build is configured by you; specialists and teams keep their own declarations, and the
+    /// compaction summary its own request. A reasoning model may refuse a temperature: leave it unset there.
+    /// </para>
+    /// <para>
+    /// A negative temperature, a top-p outside (0, 1], or a top-k or output limit below 1 stops the application at
+    /// startup. The upper limits, and the range of the penalties, differ by provider and are left to it.
+    /// </para>
+    /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
+    public MentorSamplingOptions? CoordinatorSampling { get; set; }
 
     /// <summary>
     /// Optional embedding model, configured like <see cref="ChatClient"/>. When set, it enables
@@ -135,6 +168,7 @@ public sealed class MentorOptions
     ///     .GetEmbeddingClient("text-embedding-3-small").AsIEmbeddingGenerator();
     /// </code>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IEmbeddingGenerator<string, Embedding<float>>? EmbeddingGenerator { get; set; }
 
     // ── Discovery ─────────────────────────────────────────────────────────────
@@ -143,23 +177,29 @@ public sealed class MentorOptions
     /// Assemblies to scan for [Description], [MentorAction], [MentorAgent], [MentorTeam], [MentorSkill], [TeamMember].
     /// Usually: <c>options.ScanAssemblies = [typeof(Program).Assembly];</c>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public required Assembly[] ScanAssemblies { get; set; }
 
     // ── UI ────────────────────────────────────────────────────────────────────
 
     /// <summary>Widget visual theme. Default: Default.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public MentorTheme Theme { get; set; } = MentorTheme.Default;
 
     /// <summary>Widget position. Default: BottomRight.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public ChatPosition Position { get; set; } = ChatPosition.BottomRight;
 
     /// <summary>Widget primary color (hex, e.g.: "#2563EB"). If null, uses the theme color.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string? PrimaryColor { get; set; }
 
     /// <summary>Bot name displayed in the widget header. Default: "Mentor AI"</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string BotName { get; set; } = "Mentor AI";
 
     /// <summary>Welcome message when the chat is empty. If null, uses the default.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string? WelcomeMessage { get; set; }
 
     /// <summary>
@@ -169,6 +209,7 @@ public sealed class MentorOptions
     /// <c>aiGenerated</c> on the hub, <c>/mentor/chat</c> and A2A): the two are separate tools for article 50 of the
     /// EU AI Act, and whether and how it applies is the application's to decide.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool ShowAiDisclosure { get; set; } = true;
 
     /// <summary>
@@ -176,15 +217,18 @@ public sealed class MentorOptions
     /// <see cref="Language"/> ("You are talking to an AI assistant: its replies are generated automatically." in
     /// English).
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string? AiDisclosureMessage { get; set; }
 
     /// <summary>
     /// Input box placeholder text. If null, uses the localized default in <see cref="Language"/>
     /// ("Write a message..." in English).
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string? InputPlaceholder { get; set; }
 
     /// <summary>Bot avatar image URL. If null, uses the built-in SVG avatar.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string? AvatarUrl { get; set; }
 
     // ── Contextual memory ───────────────────────────────────────────────────
@@ -226,6 +270,7 @@ public sealed class MentorOptions
     ///
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool UseMemoryContext { get; set; } = false;
 
     /// <summary>
@@ -245,6 +290,7 @@ public sealed class MentorOptions
     /// signed-in principal with none of them is keyed as an anonymous one.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public MentorAnonymousIdentity AnonymousIdentity { get; set; } = MentorAnonymousIdentity.PerSession;
 
     /// <summary>
@@ -252,6 +298,7 @@ public sealed class MentorOptions
     /// Increase for more historical context, reduce to limit tokens.
     /// Default: 10
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int MemoryContextCount { get; set; } = 10;
 
     /// <summary>
@@ -265,6 +312,7 @@ public sealed class MentorOptions
     /// <c>pref</c>) are always kept, so the AI can still greet by name and honour preferences.
     /// Default: false (last-N, preserving existing behavior).
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool MemoryRelevanceFiltering { get; set; }
 
     /// <summary>
@@ -286,6 +334,7 @@ public sealed class MentorOptions
     /// <see langword="false"/> to opt out and go back to the tool-based writing (cheaper, but the
     /// model saves facts less reliably). Default: <see langword="true"/>.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool MemoryAutoCapture { get; set; } = true;
 
     /// <summary>
@@ -295,7 +344,9 @@ public sealed class MentorOptions
     /// renders Markdown safely (text is HTML-encoded before any tag is emitted); this flag only
     /// controls the prompt nudge. Set to <see langword="false"/> for terse plain-text replies.
     /// Default: <see langword="true"/>.
+    /// <para>Read again for every new session: a change made while the application runs applies to the sessions that begin after it (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Session)]
     public bool EnableRichResponses { get; set; } = true;
 
     /// <summary>
@@ -312,7 +363,9 @@ public sealed class MentorOptions
     /// Set to <see langword="false"/> to fall back to text: the cards are still returned to the
     /// model, so the assistant keeps answering, it just describes the data instead of showing it.
     /// </para>
+    /// <para>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
     public bool EnableGenerativeCards { get; set; } = true;
 
     // ── Wave 5 · #13 Multimodal image input ───────────────────────────────────
@@ -323,15 +376,19 @@ public sealed class MentorOptions
     /// multimodal <c>ChatMessage</c> (text + image content). Requires a <b>vision-capable</b>
     /// <see cref="ChatClient"/> (e.g. gpt-4o / gpt-4.1). Default: <see langword="false"/>.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableImageInput { get; set; } = false;
 
     /// <summary>Maximum size, in bytes, of a single inline image attachment (larger is rejected). Default: 4 MB.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int MaxImageBytes { get; set; } = 4 * 1024 * 1024;
 
     /// <summary>Maximum number of images per message. Default: 4.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int MaxImagesPerMessage { get; set; } = 4;
 
     /// <summary>Allowed image MIME types (allow-list, per AF Agent Safety). Default: png, jpeg, gif, webp.</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IReadOnlyList<string> AllowedImageTypes { get; set; } =
         ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
@@ -353,6 +410,7 @@ public sealed class MentorOptions
     /// call. MentorAgent logs the enabled set at startup so a misconfiguration is visible.
     /// Default: <see cref="MentorHostedTools.None"/>.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public MentorHostedTools HostedTools { get; set; } = MentorHostedTools.None;
 
     /// <summary>
@@ -361,12 +419,14 @@ public sealed class MentorOptions
     /// file search is enabled: without at least one id the tool is skipped and a warning is logged,
     /// because an unbounded file search is both useless and a data-exposure risk.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IReadOnlyList<string>? FileSearchVectorStoreIds { get; set; }
 
     /// <summary>
     /// Optional bound on how many matches <see cref="MentorHostedTools.FileSearch"/> returns. Lower =
     /// fewer tokens injected into the answer. <see langword="null"/> (default) lets the provider decide.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int? FileSearchMaxResults { get; set; }
 
     /// <summary>
@@ -382,6 +442,7 @@ public sealed class MentorOptions
     /// (OpenAI proper), and is logged at startup together with the header reminder.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string? HostedImageModel { get; set; }
 
     /// <summary>
@@ -390,6 +451,7 @@ public sealed class MentorOptions
     /// provider default you did not choose. An unparsable value is ignored with a warning.
     /// <see langword="null"/> (default) lets the provider decide.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string? HostedImageSize { get; set; }
 
     /// <summary>
@@ -403,6 +465,7 @@ public sealed class MentorOptions
     /// through <see cref="MentorHostedMcpServer.RequireApproval"/>.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IReadOnlyList<MentorHostedMcpServer>? HostedMcpServers { get; set; }
 
     /// <summary>
@@ -422,6 +485,7 @@ public sealed class MentorOptions
     /// capabilities because a model was not configured.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool FilterHostedTools { get; set; } = true;
 
     /// <summary>
@@ -445,6 +509,7 @@ public sealed class MentorOptions
     /// flakiness. Every score is logged at Debug, so tune from data rather than intuition.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public float? HostedToolFilterMinScore { get; set; }
 
     /// <summary>
@@ -472,6 +537,7 @@ public sealed class MentorOptions
     /// — and the same request crossed the threshold on a one-word rewording.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool HostedToolDomainCheck { get; set; }
 
     /// <summary>
@@ -488,6 +554,7 @@ public sealed class MentorOptions
     /// paragraph.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string? HostedToolDomainScope { get; set; }
 
     /// <summary>
@@ -495,6 +562,7 @@ public sealed class MentorOptions
     /// Use it to reuse an existing intent classifier, apply per-user policy, or make the check free.
     /// Same shape as <see cref="InputGuardrail"/>.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<string, CancellationToken, Task<bool>>? HostedToolDomainClassifier { get; set; }
 
     /// <summary>
@@ -507,12 +575,14 @@ public sealed class MentorOptions
     /// while a counter is the only thing that puts a ceiling on a session's spend.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int MaxHostedToolCallsPerSession { get; set; }
 
     /// <summary>
     /// Show the hosted-tools badge in the widget header (which provider tools are active), mirroring
     /// <see cref="ShowMcpStatus"/>. Useful in development; leave off in production. Default: false.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool ShowHostedToolsStatus { get; set; }
 
     /// <summary>
@@ -525,6 +595,7 @@ public sealed class MentorOptions
     /// RAG (they also need <see cref="ShowRagSources"/>). Default: true.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool ShowHostedToolActivity { get; set; } = true;
 
     /// <summary>
@@ -552,6 +623,7 @@ public sealed class MentorOptions
     /// the ids it generated, and a result sent under another id would answer none of them.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool UseServiceManagedHistory { get; set; }
 
     /// <summary>
@@ -582,6 +654,7 @@ public sealed class MentorOptions
     /// startup warning says so.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public MentorSessionContextPlacement SessionContextPlacement { get; set; } = MentorSessionContextPlacement.Instructions;
 
     // ── Wave 5 · #16 Human-in-the-loop tool approval ──────────────────────────
@@ -599,6 +672,7 @@ public sealed class MentorOptions
     /// flip without touching any client. Only meaningful with <see cref="RequireConfirmation"/> on.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public MentorHitlMode HitlMode { get; set; } = MentorHitlMode.Blocking;
 
     /// <summary>
@@ -633,6 +707,7 @@ public sealed class MentorOptions
     ///
     /// Default: empty — every gated tool prompts, exactly as before.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IList<Func<Microsoft.Agents.AI.ToolAutoApprovalRuleContext, ValueTask<bool>>> AutoApprovalRules
     { get; set; } = [];
 
@@ -651,6 +726,7 @@ public sealed class MentorOptions
     ///
     /// Default: null (the Agent Framework's own default cap applies)
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int? MaxAutoApprovalIterations { get; set; }
 
     /// <summary>
@@ -678,6 +754,7 @@ public sealed class MentorOptions
     /// declared is never asked about. Keep it a cheap, pure function of the tool name: read a file or
     /// a database once, outside it. <see langword="null"/> (default) = only the declared confirmations apply.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<string, bool>? RequiresApproval { get; set; }
 
     /// <summary>
@@ -695,6 +772,7 @@ public sealed class MentorOptions
     /// A tool that needs confirmation is never read-only, whatever this returns. Must be a pure function
     /// of the name. <see langword="null"/> (default) = only the attribute declares.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<string, bool>? IsReadOnlyAction { get; set; }
 
     /// <summary>
@@ -715,7 +793,9 @@ public sealed class MentorOptions
     /// last two: a banner never fails to appear because of it. The text reaches the widget and the SignalR
     /// clients as it is; for an MCP tool the server's name can still follow it. <see langword="null"/>
     /// (default) = the action's description followed by its arguments.
+    /// <para>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
     public Func<MentorConfirmationContext, string?>? ConfirmationMessage { get; set; }
 
     /// <summary>
@@ -732,7 +812,9 @@ public sealed class MentorOptions
     /// <c>options.ConfirmationTimeout = TimeSpan.FromMinutes(5)</c>; a host that binds its own section to these options
     /// writes <c>"00:05:00"</c>.
     /// </para>
+    /// <para>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
     public TimeSpan ConfirmationTimeout { get; set; } = TimeSpan.Zero;
 
     /// <summary>
@@ -743,7 +825,9 @@ public sealed class MentorOptions
     /// Default: 5 seconds. MentorAgent does not read it from configuration: set it in code, for example
     /// <c>options.ActionPolicyTimeout = TimeSpan.FromSeconds(10)</c>; a host that binds its own section to these
     /// options writes <c>"00:00:10"</c>.
+    /// <para>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
     public TimeSpan ActionPolicyTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
     // ── Wave 3 · #7 Middleware suite ──────────────────────────────────────────
@@ -755,6 +839,7 @@ public sealed class MentorOptions
     /// prompt-injection check. Leave <see langword="null"/> to use the built-in check (gated by
     /// <see cref="EnableSafetyCheck"/>).
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<string, CancellationToken, Task<bool>>? InputGuardrail { get; set; }
 
     /// <summary>
@@ -764,6 +849,7 @@ public sealed class MentorOptions
     /// revealed all at once after moderation (no live streaming) so unmoderated text is never shown.
     /// Leave <see langword="null"/> (default) to keep live streaming with no output moderation.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<string, CancellationToken, Task<bool>>? OutputGuardrail { get; set; }
 
     /// <summary>
@@ -778,6 +864,7 @@ public sealed class MentorOptions
     /// either the reply is shown unchecked and a warning is logged when the coordinator is built. Adds
     /// one lightweight model call per reply. Default: <see langword="false"/>.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableOutputSafetyCheck { get; set; }
 
     /// <summary>
@@ -788,6 +875,7 @@ public sealed class MentorOptions
     /// that throws there withholds the result: the caller gets an <c>isError</c> result.
     /// <see langword="null"/> = no transformation.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<string, object?, object?>? OnToolResult { get; set; }
 
     /// <summary>
@@ -803,6 +891,7 @@ public sealed class MentorOptions
     /// exception's type, and the whole exception at Debug.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<Exception, string?>? OnException { get; set; }
 
     /// <summary>
@@ -824,6 +913,7 @@ public sealed class MentorOptions
     /// are wrapped only in MentorAgent's token metering.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<ChatClientBuilder, ChatClientBuilder>? ConfigureChatClientPipeline { get; set; }
 
     // ── Wave 3 · #8 Observability (OpenTelemetry) ─────────────────────────────
@@ -838,12 +928,14 @@ public sealed class MentorOptions
     /// them with <c>UseOpenTelemetry()</c> before handing them over. The host app wires the exporter
     /// (App Insights, Aspire, OTLP) and adds the sources/meters. Default: <see langword="false"/>.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableObservability { get; set; }
 
     /// <summary>
     /// Include sensitive data (prompt and completion content) in telemetry. <b>Development only</b> —
     /// leave <see langword="false"/> in production to avoid logging user/model content. Default: false.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool ObservabilityIncludeSensitiveData { get; set; }
 
     // The default is not a namespace: hosts write .AddSource("MentorAgent").AddMeter("MentorAgent"), so it
@@ -852,6 +944,7 @@ public sealed class MentorOptions
     /// Name of the <c>ActivitySource</c>/<c>Meter</c> MentorAgent emits under. The host must add this
     /// name via <c>.AddSource(name).AddMeter(name)</c> on its OpenTelemetry setup. Default: "MentorAgent".
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string ObservabilitySourceName { get; set; } = "MentorAgent";
 
     // ── Wave 3 · #9 Token & cost dashboard ────────────────────────────────────
@@ -861,6 +954,7 @@ public sealed class MentorOptions
     /// <see langword="null"/> (default) or a model is missing, tokens are shown without cost.
     /// MentorAgent ships no built-in price table — you supply current prices.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IReadOnlyDictionary<string, ModelPrice>? ModelPricing { get; set; }
 
     /// <summary>
@@ -869,6 +963,7 @@ public sealed class MentorOptions
     /// the page that hosts the component yourself, for example with <c>[Authorize(Roles = "Admin")]</c>.
     /// Default: "Admin".
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string DashboardRole { get; set; } = "Admin";
 
     /// <summary>
@@ -876,12 +971,14 @@ public sealed class MentorOptions
     /// <c>IMentorMetricsStore</c> (it also flushes once on graceful shutdown). Only active when a custom
     /// store is registered. Default: 30 seconds.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public TimeSpan MetricsPersistenceInterval { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// How far back the dashboard keeps per-model time-series buckets (roadmap #9 temporal charts).
     /// Older hourly buckets are pruned. Default: 7 days.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public TimeSpan MetricsRetention { get; set; } = TimeSpan.FromDays(7);
 
     // ── Wave 4 · #11 Model routing ────────────────────────────────────────────
@@ -895,6 +992,7 @@ public sealed class MentorOptions
     /// <see cref="EmbeddingGenerator"/>; <see cref="MentorRoutingStrategy.Classifier"/> and
     /// <see cref="MentorRoutingStrategy.Cascade"/> need nothing more.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IChatClient? StrongChatClient { get; set; }
 
     /// <summary>
@@ -904,6 +1002,7 @@ public sealed class MentorOptions
     /// <see cref="MentorRoutingStrategy.Semantic"/>, <see cref="MentorRoutingStrategy.Classifier"/>
     /// or <see cref="MentorRoutingStrategy.Cascade"/> for a built-in professional router.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public MentorRoutingStrategy RoutingStrategy { get; set; } = MentorRoutingStrategy.Custom;
 
     /// <summary>
@@ -913,6 +1012,7 @@ public sealed class MentorOptions
     /// <see cref="UseStrongModelAsync"/>, which is async and sees the whole conversation; avoid naive
     /// keyword/length rules here.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<string, bool>? UseStrongModel { get; set; }
 
     /// <summary>
@@ -921,6 +1021,7 @@ public sealed class MentorOptions
     /// Takes precedence over <see cref="UseStrongModel"/> when both are set — lets you call your own
     /// classifier/embedding logic. The decision applies to the whole turn.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<bool>>? UseStrongModelAsync { get; set; }
 
     /// <summary>
@@ -929,6 +1030,7 @@ public sealed class MentorOptions
     /// the nearest exemplar reaches <see cref="RoutingThreshold"/>. <see langword="null"/> uses a
     /// built-in multilingual default set (analysis, comparison, long-form, coding, multi-step reasoning).
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IReadOnlyList<string>? RoutingComplexExemplars { get; set; }
 
     /// <summary>
@@ -936,6 +1038,7 @@ public sealed class MentorOptions
     /// escalated to the strong model when the best exemplar score is at least this value. Higher =
     /// stricter (fewer escalations). Default: 0.35 (same scale as tool filtering).
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public float RoutingThreshold { get; set; } = 0.35f;
 
     /// <summary>
@@ -943,6 +1046,7 @@ public sealed class MentorOptions
     /// optional dedicated client for the routing judgment. Defaults to the cheap
     /// <see cref="ChatClient"/> so the routing decision itself stays inexpensive.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IChatClient? RoutingClassifierClient { get; set; }
 
     /// <summary>
@@ -968,6 +1072,7 @@ public sealed class MentorOptions
     /// under its own model id.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IChatClient? ClassifierChatClient { get; set; }
 
     /// <summary>
@@ -1018,7 +1123,9 @@ public sealed class MentorOptions
     /// refusal is localized and the turn ends there — no tools, no coordinator call, nothing billed for
     /// the answer — and it is counted in <c>GuardrailBlockCount</c>.
     /// </para>
+    /// <para>Read again for every new session: a change made while the application runs applies to the sessions that begin after it (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Session)]
     public bool RefuseOutOfScope { get; set; }
 
     /// <summary>
@@ -1041,7 +1148,34 @@ public sealed class MentorOptions
     /// worker): a MAUI app runs no hosted service, so there the option does nothing.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool WarmUpAtStartup { get; set; }
+
+    /// <summary>
+    /// With <see cref="WarmUpAtStartup"/>, also sends the coordinator's model one minimal request once the coordinator is
+    /// built, so the first turn is not slower than the next: it no longer pays for opening the connection, for the
+    /// provider's empty prompt cache, or — with a local model (Ollama, llama-server, vLLM) — for the model still being
+    /// loaded. Default: <see langword="false"/>.
+    ///
+    /// <para>
+    /// <b>Every start costs one request per client</b>: <see cref="ChatClient"/>, and <see cref="StrongChatClient"/> as
+    /// well when it is set. The request carries the coordinator's instructions and tools as they are built — the prefix
+    /// the turns of a user with every role send, which a provider's prompt cache can reuse; for a user without some
+    /// roles the count of the actions and the tools differ, and only what comes before them is shared — and its
+    /// <see cref="CoordinatorSampling"/>, with no call allowed
+    /// (<c>ChatToolMode.None</c>), one short user message, and at most 16 output tokens on either client. It goes
+    /// straight to the provider client: no history, no memory, no safety check, no turn on the dashboard; the warm-up's
+    /// log line gives its time and tokens.
+    /// </para>
+    ///
+    /// <para>
+    /// A request that fails is logged as a warning and the application carries on, as without the option. Without
+    /// <see cref="WarmUpAtStartup"/> it has no effect, and a startup warning says so; on Path B (<see cref="Agent"/>) the
+    /// agent is yours and is not called; a MAUI app runs no warm-up at all.
+    /// </para>
+    /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
+    public bool WarmUpChatModel { get; set; }
 
     // ── Behavior ─────────────────────────────────────────────────────────────
 
@@ -1055,7 +1189,9 @@ public sealed class MentorOptions
     /// <see cref="ChatHistoryProvider"/> / <see cref="ChatHistoryProviderFactory"/> you supply, nor
     /// with <see cref="UseServiceManagedHistory"/>.
     /// </para>
+    /// <para>Read again for every new session: a change made while the application runs applies to the sessions that begin after it (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Session)]
     public int MaxSessionMessages { get; set; } = 50;
 
     /// <summary>
@@ -1078,6 +1214,7 @@ public sealed class MentorOptions
     /// </code>
     /// </example>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IChatReducer? ChatReducer { get; set; }
 
     // ── Token & Cost optimization (Wave 1) ───────────────────────────────────
@@ -1098,18 +1235,21 @@ public sealed class MentorOptions
     /// Uses the experimental Agent Framework compaction API.
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableCompaction { get; set; } = false;
 
     /// <summary>
     /// Token budget that triggers compaction (and the truncation backstop).
     /// Only used when <see cref="EnableCompaction"/> is true. Default: 4000
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int CompactionTokenThreshold { get; set; } = 4000;
 
     /// <summary>
     /// Maximum number of recent user turns kept by the sliding-window step of compaction.
     /// Only used when <see cref="EnableCompaction"/> is true. Default: 8
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int CompactionMaxTurns { get; set; } = 8;
 
     /// <summary>
@@ -1131,12 +1271,15 @@ public sealed class MentorOptions
     /// always kept. Verify the effect with the token counter.
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableToolFiltering { get; set; } = false;
 
     /// <summary>
     /// Maximum number of matched business tools to keep when <see cref="EnableToolFiltering"/>
     /// is active. Core tools are always kept on top of this. Default: 12
+    /// <para>Read again for every new session: a change made while the application runs applies to the sessions that begin after it (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Session)]
     public int ToolFilterMaxTools { get; set; } = 12;
 
     /// <summary>
@@ -1158,6 +1301,7 @@ public sealed class MentorOptions
     /// <c>[MentorAction(RequiresConfirmation = true)]</c> on actions that change data.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int ToolFilterMinTools { get; set; } = 0;
 
     /// <summary>
@@ -1190,7 +1334,14 @@ public sealed class MentorOptions
     /// unreadable leaves the turn as it would be without this.
     /// Default: false
     /// </para>
+    ///
+    /// <para>
+    /// The call is required with <c>ChatToolMode.RequireAny</c>, which a provider receives as
+    /// <c>tool_choice: "required"</c>. A provider that ignores it — Ollama does — answers in text as if the option were
+    /// off; the first time it does, a warning says so, once per provider client.
+    /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool RequireLookupForRecordQuestions { get; set; } = false;
 
     /// <summary>
@@ -1241,8 +1392,37 @@ public sealed class MentorOptions
     /// would be without this.
     /// Default: false
     /// </para>
+    ///
+    /// <para>
+    /// As for <see cref="RequireLookupForRecordQuestions"/>, the call is required with <c>tool_choice: "required"</c>:
+    /// a provider that ignores it (Ollama) answers in text, and the first time it does a warning says so, once per
+    /// provider client.
+    /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool RequireActionForChangeRequests { get; set; } = false;
+
+    /// <summary>
+    /// After a turn in which the coordinator called no tool, asks a model whether its reply announces an action ("I'm
+    /// registering the note…") or reports one as done, when nothing ran; if it does, the coordinator gets one more request
+    /// in the same turn, with the same tools, told to call the tool now or to say that it was not done (BUG-220).
+    /// <para>
+    /// The question goes to <see cref="ClassifierChatClient"/>, or to <see cref="ChatClient"/> without one: a few hundred
+    /// tokens after every reply that called no tool, so a small deployment there is worth configuring. The second request
+    /// comes only after a reply the model judged so, and only once per turn. It never requires a call: an action that asks
+    /// no one first must not run on a judgement that may be wrong, and the call it makes passes the gate as any other.
+    /// The reply the user is reading is not held back; the second request goes on in the same turn.
+    /// </para>
+    /// <para>
+    /// On Path A with the history kept by MentorAgent: not with <see cref="UseServiceManagedHistory"/>, nor with a
+    /// pre-built <see cref="Agent"/>. A question that fails or runs out of <see cref="SafetyCheckTimeout"/> leaves the turn
+    /// as it is.
+    /// </para>
+    /// <para>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</para>
+    /// Default: <see langword="true"/>.
+    /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
+    public bool CheckAnnouncedActions { get; set; } = true;
 
     /// <summary>
     /// Minimum cosine similarity (0–1) a tool must reach to count as a match in <b>semantic</b> tool
@@ -1250,12 +1430,16 @@ public sealed class MentorOptions
     /// is a ranking, not a calibrated relevance: this line decides which actions match, not whether a
     /// message needs one (BUG-106). Default: 0.35
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public float ToolFilterMinScore { get; set; } = 0.35f;
 
     /// <summary>Shows proactive suggestion chips. Default: true</summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableSuggestions { get; set; } = true;
 
     /// <summary>Visual feedback during tool call execution. Default: true</summary>
+    /// <remarks>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</remarks>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
     public bool EnableActionFeedback { get; set; } = true;
 
     /// <summary>
@@ -1269,6 +1453,7 @@ public sealed class MentorOptions
     /// <c>RequiredRoles</c> keeps refusing a caller without the role.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool RequireConfirmation { get; set; } = true;
 
     /// <summary>
@@ -1291,6 +1476,7 @@ public sealed class MentorOptions
     /// <c>RequiresConfirmation = true</c>.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool RequireConfirmationForWrites { get; set; } = true;
 
     // ── Storage ──────────────────────────────────────────────────────────────────
@@ -1311,6 +1497,7 @@ public sealed class MentorOptions
     ///
     /// Ref: https://learn.microsoft.com/en-us/agent-framework/agents/conversations/storage
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public ChatHistoryProvider? ChatHistoryProvider { get; set; }
 
     /// <summary>
@@ -1351,6 +1538,7 @@ public sealed class MentorOptions
     /// make an application's safety depend on which line was written last.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<IServiceProvider, ChatHistoryProvider>? ChatHistoryProviderFactory { get; set; }
 
     // ── Voice ─────────────────────────────────────────────────────────────────
@@ -1360,6 +1548,7 @@ public sealed class MentorOptions
     /// Supported on Chrome/Edge. Firefox partial. Requires HTTPS in production.
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableVoiceInput { get; set; } = false;
 
     /// <summary>
@@ -1367,6 +1556,7 @@ public sealed class MentorOptions
     /// Native browser Speech Synthesis API. Supported on all modern browsers.
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableVoiceOutput { get; set; } = false;
 
     /// <summary>
@@ -1378,6 +1568,7 @@ public sealed class MentorOptions
     /// text. Turn it off only if your answers are reliably one line long.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool VoiceStreaming { get; set; } = true;
 
     /// <summary>
@@ -1388,6 +1579,7 @@ public sealed class MentorOptions
     /// its own playback, and a microphone left open during synthesis transcribes the assistant.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool VoiceBargeIn { get; set; } = true;
 
     /// <summary>
@@ -1397,12 +1589,14 @@ public sealed class MentorOptions
     /// do without being asked. Requires <see cref="EnableVoiceInput"/> and
     /// <see cref="EnableVoiceOutput"/>.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool VoiceHandsFree { get; set; } = false;
 
     /// <summary>
     /// Speech rate passed to <c>SpeechSynthesisUtterance.rate</c>. 1.0 is the browser default and
     /// the useful range is roughly 0.5–2.0. Default: 1.0.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public double VoiceRate { get; set; } = 1.0;
 
     /// <summary>
@@ -1421,6 +1615,7 @@ public sealed class MentorOptions
     /// <c>AddMentorAgent()</c> to write the tour by hand.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableOnboardingTour { get; set; } = false;
 
     // ── Security ──────────────────────────────────────────────────────────────
@@ -1436,7 +1631,9 @@ public sealed class MentorOptions
     /// coordinator is built. A custom <see cref="InputGuardrail"/> replaces it and needs no client.
     /// ⚠️ Adds one extra API call per message (~200-500ms).
     /// Default: false
+    /// <para>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
     public bool EnableSafetyCheck { get; set; } = false;
 
     /// <summary>
@@ -1462,6 +1659,7 @@ public sealed class MentorOptions
     /// options writes <c>"00:01:30"</c>, and <c>"00:00:00"</c> for no limit.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public TimeSpan SafetyCheckTimeout { get; set; } = TimeSpan.FromSeconds(15);
 
     /// <summary>
@@ -1477,6 +1675,7 @@ public sealed class MentorOptions
     /// a failure.
     /// </para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public MentorSafetyCheckFailure SafetyCheckFailure { get; set; } = MentorSafetyCheckFailure.Allow;
 
     /// <summary>
@@ -1484,6 +1683,7 @@ public sealed class MentorOptions
     /// 0 = unlimited.
     /// Default: 4000
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int MaxMessageLength { get; set; } = 4000;
 
     // ── Rate Limiting ─────────────────────────────────────────────────────────
@@ -1511,13 +1711,17 @@ public sealed class MentorOptions
     /// proxy, apply forwarded headers); otherwise every such caller shares one allowance — never one per
     /// MCP session, which costs nothing to open — and one busy client can use it up for the others.
     /// A refused call is answered with an <c>isError</c> result.
+    /// <para>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
     public int RateLimitPerUser { get; set; } = 0;
 
     /// <summary>
     /// Duration in seconds of the rate limiting window. Default: 60.
     /// E.g.: 60 → the window resets every minute.
+    /// <para>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</para>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Turn)]
     public int RateLimitWindowSecs { get; set; } = 60;
 
     // ── MCP Client (consume external MCP servers) ────────────────────────────
@@ -1534,6 +1738,7 @@ public sealed class MentorOptions
     /// ];
     /// </code>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public MentorMcpServer[]? McpServers { get; set; }
 
     // ── MCP Server (expose MentorAgent as MCP server) ───────────────────────
@@ -1581,6 +1786,7 @@ public sealed class MentorOptions
     ///     (options, http) =&gt; options.McpCallerPrincipal = () =&gt; http.HttpContext?.User);
     /// </code>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<System.Security.Claims.ClaimsPrincipal?>? McpCallerPrincipal { get; set; }
 
     /// <summary>
@@ -1590,18 +1796,21 @@ public sealed class MentorOptions
     /// includes it) and <c>app.MapMentorAgentMcp()</c> in Program.cs to map the endpoint.
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool McpServerEnabled { get; set; }
 
     /// <summary>
     /// Endpoint path for the MCP server, used by <c>app.MapMentorAgentMcp()</c> when no path is passed
     /// to it. Default: "/mcp"
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string McpServerPath { get; set; } = "/mcp";
 
     /// <summary>
     /// Show MCP connection status in the widget header.
     /// Useful during development. Default: false (hidden in production).
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool ShowMcpStatus { get; set; }
 
     // ── A2A Consumer (connect to remote A2A agents) ──────────────────────────
@@ -1622,6 +1831,7 @@ public sealed class MentorOptions
     /// ];
     /// </code>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public MentorRemoteAgent[]? RemoteAgents { get; set; }
 
     /// <summary>
@@ -1629,6 +1839,7 @@ public sealed class MentorOptions
     /// Displays a badge listing all configured remote agents.
     /// Useful during development. Default: false.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool ShowA2AStatus { get; set; }
 
     // ── A2A Server (expose MentorAgent as A2A agent) ────────────────────────
@@ -1641,6 +1852,7 @@ public sealed class MentorOptions
     /// Exposes: <c>/.well-known/agent-card.json</c> (Agent Card) + the A2A HTTP endpoint.
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool A2AServerEnabled { get; set; }
 
     /// <summary>
@@ -1648,6 +1860,7 @@ public sealed class MentorOptions
     /// it. The agent card stays at <c>/.well-known/agent-card.json</c>. When other agents call this one,
     /// set <see cref="A2AServerUrl"/> to the full public URL <b>including</b> this path. Default: "/a2a"
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string A2AServerPath { get; set; } = "/a2a";
 
     /// <summary>
@@ -1664,12 +1877,14 @@ public sealed class MentorOptions
     /// options.A2AServerUrl = "http://localhost:5001/a2a";
     /// </code>
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string? A2AServerUrl { get; set; }
 
     /// <summary>
     /// Optional override for the auto-generated Agent Card metadata.
     /// If null, the card is built from AppName, AppDescription, and discovered tools.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public AgentCardInfo? AgentCard { get; set; }
 
     // ── RAG (Retrieval-Augmented Generation) ─────────────────────────────────
@@ -1678,15 +1893,17 @@ public sealed class MentorOptions
     /// Enables RAG — before each coordinator call the knowledge base is searched
     /// and relevant documents are injected into the system prompt.
     ///
-    /// Requires an <see cref="IMentorRagSource"/> registered in DI. An <c>ITextSearch</c> is not wrapped for
-    /// you (<c>TextSearchRagSource</c> is a placeholder): call it from your own <see cref="IMentorRagSource"/>.
+    /// Requires an <see cref="IMentorRagSource"/> registered in DI: your own, or for a collection of
+    /// <c>Microsoft.Extensions.VectorData</c> the <c>MentorVectorStoreRagSource</c> that <c>AddMentorVectorStoreRag</c> registers.
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool UseRag { get; set; }
 
     /// <summary>
     /// Maximum number of documents to retrieve per query. Default: 5
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public int RagResultCount { get; set; } = 5;
 
     /// <summary>
@@ -1695,6 +1912,7 @@ public sealed class MentorOptions
     /// Default: "Use the following documents to answer:\n{documents}", in English whatever
     /// <see cref="Language"/> is.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string RagSystemPromptTemplate { get; set; } =
         "Use the following documents to answer:\n{documents}";
 
@@ -1703,7 +1921,21 @@ public sealed class MentorOptions
     /// Requires sources to include a <c>SourceUrl</c> or <c>Title</c>.
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool ShowRagSources { get; set; }
+
+    /// <summary>
+    /// Tells the model when the knowledge-base search of a turn kept no document: asked about something the documents
+    /// would cover, it says that it did not find it there instead of answering from memory as if a document said it, and
+    /// a message that needs no document — a greeting, an action, a question its tools answer — is answered as usual.
+    /// The text is MentorAgent's, in the language of the turn, in that request's instructions only, never stored.
+    ///
+    /// Given only after a search that ran to the end with a real <see cref="IMentorRagSource"/> and kept nothing: none
+    /// returned, or every one below <see cref="RagMinScore"/>. A search that failed, or no source, gives nothing.
+    /// Needs <see cref="UseRag"/>. Default: false
+    /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
+    public bool RagNoResultsNotice { get; set; }
 
     /// <summary>
     /// Minimum relevance score a document must reach to be included in the RAG context.
@@ -1724,6 +1956,7 @@ public sealed class MentorOptions
     /// Set to <c>0</c> to disable filtering (return all results from <c>SearchAsync</c>).
     /// Default: 2
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public float RagMinScore
     {
         get => _ragMinScore;
@@ -1771,6 +2004,7 @@ public sealed class MentorOptions
     ///
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool EnableSkills { get; set; } = false;
 
     /// <summary>
@@ -1779,6 +2013,7 @@ public sealed class MentorOptions
     /// Can be absolute or relative to the application content root.
     /// Default: "Skills"
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public string SkillsFolder { get; set; } = "Skills";
 
     /// <summary>
@@ -1822,6 +2057,7 @@ public sealed class MentorOptions
     ///
     /// Default: empty — nothing here runs and skills behave exactly as before.
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public IList<Microsoft.Agents.AI.AgentSkillsSource> SkillSources { get; set; } = [];
 
     /// <summary>
@@ -1844,6 +2080,7 @@ public sealed class MentorOptions
     ///
     /// Default: null (every skill from every source is kept)
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public Func<Microsoft.Agents.AI.AgentSkill, bool>? SkillFilter { get; set; }
 
     /// <summary>
@@ -1865,6 +2102,7 @@ public sealed class MentorOptions
     ///
     /// Default: null (no cache: the sources are read once per session)
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public TimeSpan? SkillsRefreshInterval { get; set; }
 
     // ── Validazione ───────────────────────────────────────────────────────────
@@ -1874,6 +2112,7 @@ public sealed class MentorOptions
     /// Useful for debugging. Do NOT enable in production.
     /// Default: false
     /// </summary>
+    [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public bool IncludeWorkflowExceptionDetails { get; set; } = false;
 
     internal void Validate()
@@ -1915,5 +2154,7 @@ public sealed class MentorOptions
             throw new InvalidOperationException(
                 "[MentorAgent] ScanAssemblies cannot be empty. " +
                 "Use: options.ScanAssemblies = [typeof(Program).Assembly];");
+
+        CoordinatorSampling?.Validate(nameof(CoordinatorSampling));
     }
 }

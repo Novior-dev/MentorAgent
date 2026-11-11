@@ -363,6 +363,7 @@ public sealed class DeclarativeSourceTests : IDisposable
     }
 
     [Theory]
+    [Trait("Rule", "declarative.no-hosted-tools")]
     [InlineData("webSearch", "web_search")]
     [InlineData("codeInterpreter", "code_interpreter")]
     [InlineData("fileSearch", "file_search")]
@@ -371,20 +372,135 @@ public sealed class DeclarativeSourceTests : IDisposable
         // Found by the rc.11 README audit: only `kind: function` resolves against the host's list. The
         // other kinds are built by the Agent Framework from the file alone, as provider-hosted tools —
         // outside the gate and outside MentorOptions.HostedTools. They are removed, with a warning,
-        // and the agent keeps the host's functions.
-        var collector = new TestLogCollector();
-        var factory = LoggerFactory.Create(b => b.AddProvider(new TestLoggerProvider(collector)));
+        // and the agent keeps the host's functions. Story 1274: and the tool removed is reported.
         var hostTools = new List<AIFunction> { AIFunctionFactory.Create(() => "ok", name: "count_open_orders") };
         var options = new MentorDeclarativeOptions();
         options.Definitions.Add(Definition("shipping") +
             $"\ntools:\n  - kind: function\n    name: count_open_orders\n  - kind: {kind}\n    name: extra\n");
 
-        var agents = await new DeclarativeAgentSource(options, factory)
-            .GetAgentsAsync(new MentorAgentSourceContext(new FakeChatClient(), hostTools), CancellationToken.None);
+        var (result, collector) = await LoadAsync(options, hostTools);
 
-        var agent = agents.Should().ContainSingle("the agent still loads with the application's own tools").Subject;
+        var agent = result.Agents.Should().ContainSingle("the agent still loads with the application's own tools").Subject;
         var tools = ((ChatOptions)agent.GetService(typeof(ChatOptions))!).Tools!;
         tools.Select(t => t.Name).Should().Equal(["count_open_orders"], $"'{toolName}' was defined by the file, not by the host");
         collector.HasWarning($"removed {toolName}").Should().BeTrue(collector.WarningText);
+        var rejection = result.Rejected.Should().ContainSingle().Subject;
+        rejection.Name.Should().Be("inline[0]");
+        rejection.Tool.Should().Be(toolName);
+        rejection.ReasonCode.Should().Be(MentorAgentRejectionReasons.HostedToolRemoved);
+    }
+
+    // ── What is left out, and said (story 1274) ─────────────────────────────────
+
+    private static async Task<(MentorAgentSourceResult Result, TestLogCollector Logs)> LoadAsync(
+        MentorDeclarativeOptions options, IReadOnlyList<AIFunction>? tools = null, IConfiguration? configuration = null)
+    {
+        var collector = new TestLogCollector();
+        var factory = LoggerFactory.Create(b => b.AddProvider(new TestLoggerProvider(collector)));
+        var result = await new DeclarativeAgentSource(options, factory, configuration)
+            .LoadAsync(new MentorAgentSourceContext(new FakeChatClient(), tools ?? []), CancellationToken.None);
+        return (result, collector);
+    }
+
+    [Fact]
+    [Trait("Rule", "declarative.functions-match")]
+    public async Task A_function_no_action_of_the_session_has_is_taken_away_and_reported()
+    {
+        // Story 1274, from the bridge's probe: for a name that matches none of the tools it is given, the Agent
+        // Framework's factory creates a function with no code behind it. The model could call it and nothing ran: the
+        // agent stopped, and the coordinator read NOT DELEGATED with no log to say why. It is taken away now, and the
+        // agent loads with the functions that match.
+        var hostTools = new List<AIFunction> { AIFunctionFactory.Create(() => "ok", name: "count_open_orders") };
+        var options = new MentorDeclarativeOptions();
+        options.Definitions.Add(Definition("shipping") +
+            "\ntools:\n  - kind: function\n    name: count_open_orders\n  - kind: function\n    name: count_open_ordrs\n");
+
+        var (result, logs) = await LoadAsync(options, hostTools);
+
+        var agent = result.Agents.Should().ContainSingle(logs.ExceptionText).Subject;
+        ((ChatOptions)agent.GetService(typeof(ChatOptions))!).Tools!.Select(t => t.Name).Should().Equal(
+            ["count_open_orders"], "a typo leaves the agent without the function, not with one that does nothing");
+        var rejection = result.Rejected.Should().ContainSingle().Subject;
+        rejection.Name.Should().Be("inline[0]");
+        rejection.Tool.Should().Be("count_open_ordrs");
+        rejection.ReasonCode.Should().Be(MentorAgentRejectionReasons.ToolNotFound);
+        rejection.Detail.Should().Contain("off for this session");
+        logs.HasWarning("removed count_open_ordrs").Should().BeTrue(logs.WarningText);
+    }
+
+    [Fact]
+    public async Task A_definition_that_does_not_load_is_reported_with_the_factory_s_reason_and_the_rest_load()
+    {
+        // Story 1274, criterion 3: a text with an error went to the log alone — "could not be loaded — skipped" —
+        // where whoever governs the agents does not look. It is in the result, with the factory's message.
+        var options = new MentorDeclarativeOptions();
+        options.Definitions.Add(Definition("shipping"));
+        options.Definitions.Add(Definition("returns") + "\ntools:\n  - count_open_orders\n");
+
+        var (result, logs) = await LoadAsync(options);
+
+        result.Agents.Select(a => a.Name).Should().Equal(["shipping"], logs.ExceptionText);
+        var rejection = result.Rejected.Should().ContainSingle().Subject;
+        rejection.Name.Should().Be("inline[1]");
+        rejection.ReasonCode.Should().Be(MentorAgentRejectionReasons.InvalidDefinition);
+        rejection.Detail.Should().Contain("function", "the factory's message says which kinds of tool it accepts");
+        rejection.Tool.Should().BeNull("the whole definition was left out");
+    }
+
+    [Fact]
+    public async Task A_workflow_in_place_of_an_agent_is_reported_as_an_invalid_definition()
+    {
+        // The Agent Framework's factory (1.27) refuses a definition of another kind rather than answering null — a null
+        // stays guarded, as not-an-agent — so a workflow in a file meant for an agent arrives with the factory's reason.
+        var options = new MentorDeclarativeOptions();
+        options.Definitions.Add("kind: Workflow\nid: w\ntrigger:\n  kind: OnConversationStart\n  id: t\n  actions: []\n");
+
+        var (result, _) = await LoadAsync(options);
+
+        result.Agents.Should().BeEmpty();
+        var rejection = result.Rejected.Should().ContainSingle().Subject;
+        rejection.ReasonCode.Should().Be(MentorAgentRejectionReasons.InvalidDefinition);
+        rejection.Detail.Should().Contain("Unsupported root element");
+    }
+
+    /// <summary>A configuration whose named section reads as a blank key: what an unrelated provider once gave.</summary>
+    private sealed class BlankSectionConfiguration(IConfigurationRoot root) : IConfiguration
+    {
+        public string? this[string key] { get => root[key]; set => root[key] = value; }
+
+        public IConfigurationSection GetSection(string key) => new ConfigurationSection(root, " ");
+
+        public IEnumerable<IConfigurationSection> GetChildren() => root.GetChildren();
+
+        public Microsoft.Extensions.Primitives.IChangeToken GetReloadToken() => root.GetReloadToken();
+    }
+
+    [Fact]
+    public async Task A_configuration_power_fx_refuses_leaves_every_definition_out_and_says_so()
+    {
+        // Power Fx refuses a blank name, and the whole factory with it, before any definition is read. Under a named
+        // section only a configuration of its own gives such a key; this one does, so the report can be seen.
+        var options = new MentorDeclarativeOptions { ConfigurationSection = "AgentSettings" };
+        options.Definitions.Add(Definition("shipping"));
+        options.Definitions.Add(Definition("returns"));
+
+        var (result, logs) = await LoadAsync(options,
+            configuration: new BlankSectionConfiguration(new ConfigurationBuilder().Build()));
+
+        result.Agents.Should().BeEmpty();
+        result.Rejected.Select(r => (r.Name, r.ReasonCode)).Should().Equal(
+            ("inline[0]", MentorAgentRejectionReasons.InvalidConfiguration),
+            ("inline[1]", MentorAgentRejectionReasons.InvalidConfiguration));
+        result.Rejected[0].Detail.Should().Contain("AgentSettings");
+        logs.Records.Should().Contain(r => r.Level == LogLevel.Error && r.Message.Contains("rejected the configuration"));
+    }
+
+    [Fact]
+    public async Task Without_definitions_nothing_is_loaded_or_left_out()
+    {
+        var (result, _) = await LoadAsync(new MentorDeclarativeOptions());
+
+        result.Agents.Should().BeEmpty();
+        result.Rejected.Should().BeEmpty();
     }
 }

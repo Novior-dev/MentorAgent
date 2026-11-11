@@ -162,6 +162,8 @@ internal sealed class ServerAppFactory : IAsyncDisposable
                     o.AppName = "TestServerApp";
                     o.ScanAssemblies = [typeof(TestOrderService).Assembly];
                     o.ChatClient = chat;
+                    // Story 526 — off here, as in MentorHostFixture: the check would take the answers a test scripted.
+                    o.CheckAnnouncedActions = false;
                     configure?.Invoke(o);
                 });
 

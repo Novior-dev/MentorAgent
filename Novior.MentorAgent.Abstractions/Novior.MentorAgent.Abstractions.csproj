@@ -7,7 +7,7 @@
     <PackageId>Novior.MentorAgent.Abstractions</PackageId>
     <Title>Novior.MentorAgent.Abstractions</Title>
     <Description>Shared interfaces, models, enums and UI components for the MentorAgent family. Automatically included as a transitive dependency — you do not need to install this package directly.</Description>
-    <PackageTags>blazor;blazor-wasm;blazor-server;wasm;ai;chatbot;chat-widget;components;razor;interfaces;abstractions;mentor;dotnet;csharp</PackageTags>
+    <PackageTags>blazor;blazor-wasm;blazor-server;wasm;ai;chatbot;chat-widget;components;razor;interfaces;abstractions;dotnet;csharp</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>IconMA.png</PackageIcon>
     <IsPackable>true</IsPackable>

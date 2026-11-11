@@ -25,12 +25,18 @@
          markup, and the components carry real logic: the bubble's Markdown renderer is the
          XSS boundary, and the badges encode three-valued state in CSS classes. -->
     <PackageReference Include="bunit" Version="2.9.0" />
+    <!-- The real Chat Completions client over a recording HTTP handler, no network: what a request carries on the
+         wire — its tools, its tool_choice, where ChatOptions.Instructions lands among the messages — is the
+         provider client's mapping, which no fake IChatClient can show (story 526). Same version as
+         Microsoft.Extensions.AI in the library. Test-project only. -->
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
     <ProjectReference Include="..\Novior.MentorAgent.Declarative\Novior.MentorAgent.Declarative.csproj" />
     <ProjectReference Include="..\Novior.MentorAgent.Tests.App\Novior.MentorAgent.Tests.App.csproj" />
+    <ProjectReference Include="..\Novior.MentorAgent.Tests.Rules\Novior.MentorAgent.Tests.Rules.csproj" />
     <ProjectReference Include="..\Novior.MentorAgent.Server\Novior.MentorAgent.Server.csproj" />
     <ProjectReference Include="..\Novior.MentorAgent.Blazor\Novior.MentorAgent.Blazor.csproj" />
   </ItemGroup>

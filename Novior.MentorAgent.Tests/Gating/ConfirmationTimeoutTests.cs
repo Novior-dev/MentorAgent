@@ -235,4 +235,33 @@ public sealed class ConfirmationTimeoutTests
             ["Allowed/allowed", "ConfirmationRequested/policy", "Rejected/confirmation-timeout"], "mode {0}", mode);
         host.Get<TestOrderService>().Invoked.Should().BeEmpty();
     }
+
+    [Fact]
+    [Trait("RuntimeOption", nameof(MentorOptions.ConfirmationTimeout))]
+    public async Task A_deadline_set_while_the_application_runs_applies_from_the_next_turn()
+    {
+        // Story 1275: the wait reads the deadline when it starts. The first banner has none and is declined; the second,
+        // after the change, ends unanswered at the new deadline.
+        var observer = new RecordingActionObserver();
+        await using var host = Create(observer, o => o.HitlMode = MentorHitlMode.Blocking);
+        var state = host.Get<IMentorStateService>();
+        var decline = true;
+        state.OnConfirmationRequired += req =>
+        {
+            if (decline) state.Cancel(req.ActionId);
+        };
+        host.Chat!.Respond((_, _) => ToolCall(host, "call-1", "issue_refund", new() { ["orderId"] = 1001 })).Say("Declined.")
+            .Respond((_, _) => ToolCall(host, "call-2", "issue_refund", new() { ["orderId"] = 1001 })).Say("Not confirmed in time.");
+
+        using (var first = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            (await host.RunTurnAsync("refund order 1001", first.Token)).Should().BeNull();
+        host.Options.ConfirmationTimeout = TimeSpan.FromMilliseconds(100);
+        decline = false;
+        using (var second = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+            (await host.RunTurnAsync("refund order 1001", second.Token)).Should().BeNull("the new deadline ends the wait");
+        await FlushAsync(host);
+
+        observer.Steps("issue_refund").Should().EndWith("Rejected/confirmation-timeout");
+        host.Get<TestOrderService>().Invoked.Should().BeEmpty();
+    }
 }

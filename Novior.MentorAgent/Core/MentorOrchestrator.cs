@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using Novior.MentorAgent.Evaluation;
 using Novior.MentorAgent.Memory;
 using Novior.MentorAgent.Middleware;
 using Novior.MentorAgent.Providers;
@@ -111,6 +112,18 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
     /// <summary>Path A: the client that leaves those actions out of the coordinator's requests, when one needs a role.</summary>
     private RoleFilterChatClient? _roleFilter;
+
+    // Story 526 (BUG-220) — the second pass of a turn whose reply announced or reported an action that did not run, and
+    // whether anything ran in this turn: a tool, a delegation, a hosted tool, an approval asked.
+    private AnnouncedActionChatClient? _announcedCheck;
+    private bool _warmUp;
+
+    /// <summary>Story 155 — the warm-up of an application that names a tenant for every request: no request, no tenant.</summary>
+    private bool WarmUpWithoutTenant => _warmUp && _sp.GetService<MentorTenantContext>() is { SingleTenant: false };
+    private bool _actedThisTurn;
+
+    /// <summary>The calls of this turn to an action of the application whose result has not come yet, by the model's id.</summary>
+    private readonly Dictionary<string, string> _actionCallsOpen = new(StringComparer.Ordinal);
 
     /// <summary>
     /// The assistants a message may address, for the request classifier — read with the coordinator; null when
@@ -315,6 +328,26 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // take several seconds on the first call (MCP server connections, skills discovery).
         _stateService.NotifyBusyChanged(true);
 
+        // Story 155 — the turn's tenant, before anything is built, counted or asked for it: the session's tools are
+        // offered as the governor answers for this tenant. A turn without a tenant is refused, never served as the single
+        // tenant.
+        if (await TenantRefusalAsync(cts.Token) is { } tenantRefusal)
+        {
+            if (tenantRefusal.Length > 0) _stateService.NotifyError(L.Get(tenantRefusal));
+            _stateService.NotifyBusyChanged(false);
+            _currentCts = null;
+            return;
+        }
+
+        // Story 156 — and for what serves every tenant at once: the dashboard's figures, the metrics' tag. Entered here, in
+        // the turn's own flow; set in an awaited method, the value would end with that method.
+        if (_sp.GetService<MentorTenantContext>() is { SingleTenant: false } turnTenant)
+            MentorTenantContext.Enter(turnTenant.Id);
+
+        // Story 157 — and on every log line of the turn, the application's own included: a scope of the turn's flow, closed
+        // when the turn ends. None for a single tenant.
+        using var tenantLogScope = Observability.MentorTenantLogScope.Begin(_logger, MentorTenantContext.Ambient);
+
         // Initialization failure must surface to the user — EnsureInitializedAsync is called
         // outside the try/catch/finally block below so exceptions are not silently swallowed
         // by the fire-and-forget caller (ChatWidget).
@@ -405,8 +438,11 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             if (refusal is not null)
             {
                 _metrics.RecordGuardrailBlock();
-                _telemetry?.GuardrailBlocks.Add(1);
-                _stateService.NotifyError(L.Get(refusal));
+                _telemetry?.GuardrailBlocks.Add(1, Observability.MentorTelemetry.Tags());
+                var shown = L.Get(refusal);
+                // Story 1623 — a judgement on the message is a refusal; a check that could not run is an error.
+                if (check.Outcome == SafetyCheckOutcome.Unsafe) Turn?.Refused?.Invoke(EvalRefusal.Guardrail, shown);
+                _stateService.NotifyError(shown);
                 _stateService.NotifyBusyChanged(false);
                 _currentCts = null;
                 return;
@@ -436,16 +472,19 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         {
             _logger.LogInformation("[MentorAgent] Out of scope — refused without calling the model.");
             _metrics.RecordGuardrailBlock();
-            _telemetry?.GuardrailBlocks.Add(1);
-            _stateService.NotifyError(L.Get("guardrail.outofscope"));
+            _telemetry?.GuardrailBlocks.Add(1, Observability.MentorTelemetry.Tags());
+            var shown = L.Get("guardrail.outofscope");
+            Turn?.Refused?.Invoke(EvalRefusal.OutOfScope, shown);
+            _stateService.NotifyError(shown);
             _stateService.NotifyBusyChanged(false);
             _currentCts = null;
             return;
         }
 
         _metrics.RecordTurn();
-        _telemetry?.Turns.Add(1);
+        _telemetry?.Turns.Add(1, Observability.MentorTelemetry.Tags());
         using var turnActivity = _telemetry?.StartActivity("mentor.turn");   // Wave 3 #8
+        if (MentorTenantContext.Ambient is { } spanTenant) turnActivity?.SetTag(Observability.MentorTelemetry.TenantTag, spanTenant);
 
         // The turn is over for the user when the answer is complete; the fact extraction below is
         // bookkeeping that costs a second model call (544–767 ms measured live). Releasing the busy
@@ -500,7 +539,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         catch (Exception ex)
         {
             _metrics.RecordError();
-            _telemetry?.Errors.Add(1);
+            _telemetry?.Errors.Add(1, Observability.MentorTelemetry.Tags());
             var restoreLost = await RecoverStaleRestoreAsync(ex, turnSession);
             _stateService.NotifyError(restoreLost
                 ? L.Get("session.restore.lost")
@@ -539,6 +578,10 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
     private async Task RunApprovalRoundsAsync(ChatMessage userTurn, AgentSession session, CancellationToken ct)
     {
+        _actedThisTurn = false;
+        _actionCallsOpen.Clear();
+        _announcedCheck?.BeginTurn();
+
         // Before the filter is told the turn begins: what it ranks and requires is what this user may run (BUG-200,
         // BUG-201). And before the requests left open are taken: a Stop while the user is read must not lose them.
         await LeaveOutWhatTheUserMayNotRunAsync(ct);
@@ -565,6 +608,10 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             _logger.LogDebug(
                 "[MentorAgent] Native HITL: {Count} approval request(s) left open by the previous turn answered as not run.",
                 left.Count);
+
+            // Story 526 — they reached the gate in the turn that asked for them: the results this turn reads for them
+            // are not those of calls not offered.
+            foreach (var r in left) Turn?.Gated(r.Request.ToolCall.CallId);
         }
 
         // The function-invoking client puts those answers AFTER the new message, so this turn's first request
@@ -592,6 +639,45 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             throw;
         }
 
+        await AnswerApprovalRoundsAsync(pending, session, hosted, ct);
+
+        // Story 526 (BUG-220) — a reply that announced or reported an action in a turn where nothing ran: one more
+        // request in the same turn, told to call the tool now or to say that it was not done. Once: its own reply is not
+        // checked again.
+        if (await AnnouncedActionAsync(userTurn, ct) is not { } instruction) return;
+
+        _announcedCheck!.Arm(instruction);
+        try
+        {
+            pending = await StreamTurnAsync([], session, hosted, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // The user has the reply of the first request: a second request that fails is not the turn's failure, and a
+            // run that throws is not stored.
+            _logger.LogWarning(
+                "[MentorAgent] The second request after an announced action failed ({Type}); the turn ends on its first reply.",
+                ex.GetType().Name);
+            return;
+        }
+        finally
+        {
+            _announcedCheck.Disarm();
+        }
+
+        _logger.LogInformation("[MentorAgent] Announced-action check: the second request {Outcome}.",
+            _actedThisTurn ? "called a tool" : "answered without calling one");
+        await AnswerApprovalRoundsAsync(pending, session, hosted, ct);
+    }
+
+    /// <summary>
+    /// Native HITL: asks the user about each approval request a run produced, sends the answers, and goes on with the
+    /// requests the next run produces, up to <see cref="MaxApprovalRounds"/>. Nothing to do when there are none, as in
+    /// Blocking mode.
+    /// </summary>
+    private async Task AnswerApprovalRoundsAsync(
+        List<ToolApprovalRequestContent> pending, AgentSession session, HostedToolActivityReporter hosted, CancellationToken ct)
+    {
         var round = 0;
         while (pending.Count > 0 && round++ < MaxApprovalRounds)
         {
@@ -770,21 +856,31 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             {
                 // Hosted tools (#15) run on the provider, so their activity only ever shows up here —
                 // the function-calling middleware never sees them.
-                if (hosted.Handle(c)) { GroundingActivityInLastTurn++; continue; }
+                if (hosted.Handle(c)) { GroundingActivityInLastTurn++; _actedThisTurn = true; continue; }
 
                 switch (c)
                 {
                     case FunctionCallContent call:
                         if (!NonGroundingTools.Contains(call.Name)) GroundingActivityInLastTurn++;
+                        // Story 526 — an action of the application counts once its call reached the gate: one the agent
+                        // was not given answers "not found", runs nothing, and leaves the reply to be checked.
+                        if (call.CallId is { } openId && IsApplicationAction(call.Name)) _actionCallsOpen[openId] = call.Name;
+                        else _actedThisTurn = true;
                         wroteText = false;   // a sentence before acting is not the answer
                         break;
                     case FunctionResultContent result:
                         _logger.LogDebug("[MentorAgent] Tool result: {CallId}", result.CallId);
+                        if (result.CallId is { } resultId && _actionCallsOpen.Remove(resultId, out var actionName))
+                        {
+                            if (Turn?.WasGated(resultId) != false) _actedThisTurn = true;
+                            else await NotOfferedAsync(actionName, resultId, ct);
+                        }
                         wroteText = false;
                         reply.Clear();
                         break;
                     case ToolApprovalRequestContent approval:
                         GroundingActivityInLastTurn++;
+                        _actedThisTurn = true;
                         pending.Add(approval);
                         break;
                     case ErrorContent error:
@@ -823,7 +919,11 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         if (providerError is not null && !wroteText && pending.Count == 0)
         {
             if (string.Equals(providerError.ErrorCode, "Refusal", StringComparison.OrdinalIgnoreCase))
-                _stateService.NotifyError(L.Get("guardrail.blocked"));
+            {
+                var shown = L.Get("guardrail.blocked");
+                Turn?.Refused?.Invoke(EvalRefusal.Guardrail, shown);
+                _stateService.NotifyError(shown);
+            }
             else
                 throw new ProviderStreamException(providerError);
         }
@@ -883,6 +983,10 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             AgentName = _coordinator?.Name,
         };
 
+        // Story 526 — in Native mode the call reaches the gate here: the agent was given it, whatever is decided now.
+        // A call refused, rejected or stopped before the banner never reaches the middleware, and is no call not offered.
+        Turn?.Gated(call.CallId);
+
         // Role gate first, exactly as in the blocking flow. The framework stops before the call reaches
         // the middleware that checks roles, so without this a user who lacks the role is shown the
         // banner, approves, and is refused only afterwards — asked to approve something they can never
@@ -890,9 +994,18 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // than a choice the user never made. The invocation-time check remains the enforcing one.
         if (local)
         {
-            var roles = await _uiMiddleware.CheckRolesAsync(toolName, ct, call.Method);
+            // Stories 1549, 1546 — an action that is off shows no banner, and the roles checked before it are the
+            // governor's when it gives them, as in the gate, which asks again at the call.
+            if (await _uiMiddleware.CheckEnabledAsync(call, arguments, ct) is { } off)
+                return RefusedByTheGovernor(off);
+            var governed = await _uiMiddleware.GovernedRolesAsync(call, arguments, ct);
+            if (governed.Refusal is { } governorFailed)
+                return RefusedByTheGovernor(governorFailed);
+
+            var roles = await _uiMiddleware.CheckRolesAsync(toolName, ct, call.Method, governed.Roles);
             call.Roles = roles.Roles;
-            call.User  = roles.User;
+            call.RolesFromOutside = governed.FromOutside;
+            call.User  = roles.User ?? call.User;
             if (!roles.Allowed)
             {
                 // The same Warning as in Blocking mode: this was a Debug line only (story 180).
@@ -900,6 +1013,21 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 EndBeforeTheGate(call, MentorActionOutcome.Denied, roles.Reason, started);
                 return request.CreateResponse(false, roles.Error!);
             }
+
+            // Story 1547 — the governor is asked about the confirmation here too, as in the gate. The banner is the
+            // marker's, which the session's answer set: a confirmation taken away counts from the next session.
+            var confirmation = await _uiMiddleware.GovernedConfirmationAsync(call, arguments, ct);
+            if (confirmation.Refusal is { } governorFailedOnConfirmation)
+                return RefusedByTheGovernor(governorFailedOnConfirmation);
+            _uiMiddleware.Confirms(call, confirmation.Choice);
+        }
+
+        // A call the governor refused before the banner: its last decision, and what the model reads.
+        AIContent RefusedByTheGovernor(Middleware.OffCall refusal)
+        {
+            EndBeforeTheGate(call, refusal.Outcome, refusal.Reason, started, exceptionType: refusal.ExceptionType);
+            if (refusal.Outcome == MentorActionOutcome.Stopped) throw new OperationCanceledException(ct);
+            return request.CreateResponse(false, refusal.Text);
         }
 
         // Stories 311, 153 — the application's policies, after the roles and before the banner, as in the gate: a call
@@ -1147,6 +1275,56 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     /// its default.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Story 155 — resolves this turn's tenant in the scope's <see cref="MentorTenantContext"/>. Null when the turn goes
+    /// on; otherwise the key of the text the user reads, or an empty one after a Stop, which has said everything already.
+    /// </summary>
+    private async Task<string?> TenantRefusalAsync(CancellationToken ct)
+    {
+        if (_sp.GetService<MentorTenantContext>() is not { } tenant) return null;
+
+        try
+        {
+            var user = tenant.SingleTenant ? null : await _uiMiddleware.ReadUserAsync(ct);
+            var (outcome, failure) = await tenant.ResolveTurnAsync(
+                user, Turn?.Surface ?? MentorActionSurface.InProcess, _sp, ct);
+            switch (outcome)
+            {
+                case MentorTenantOutcome.Failed:
+                    _logger.LogWarning(
+                        "[MentorAgent] The tenant resolver named no tenant ({Failure}) — the turn is refused, never served as the single tenant.",
+                        failure);
+                    return "tenant.unresolved";
+                case MentorTenantOutcome.Changed:
+                    _logger.LogWarning(
+                        "[MentorAgent] This turn's tenant is not the one its session began with — the turn is refused: a conversation stays with its tenant.");
+                    return "tenant.changed";
+                default:
+                    return null;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Story 155 — the scope's tenant, for a build that no turn started (a reset, a restore): resolved when it is not yet,
+    /// and an exception when the resolver names none, so that nothing is built as the single tenant. Not for the warm-up
+    /// of <see cref="MentorOptions.WarmUpAtStartup"/>: its scope serves nobody, and nobody is there to name a tenant for.
+    /// </summary>
+    private async Task EnsureTenantAsync(CancellationToken ct)
+    {
+        if (_warmUp || _sp.GetService<MentorTenantContext>() is not { SingleTenant: false, IsResolved: false } tenant) return;
+
+        var (outcome, failure) = await tenant.ResolveTurnAsync(
+            await _uiMiddleware.ReadUserAsync(ct), Turn?.Surface ?? MentorActionSurface.InProcess, _sp, ct);
+        if (outcome != MentorTenantOutcome.Resolved)
+            throw new InvalidOperationException(
+                $"The tenant resolver named no tenant ({failure}): nothing is built for a request without one.");
+    }
+
     private string FriendlyError(Exception ex)
     {
         if (_options.OnException?.Invoke(ex) is { } custom && !string.IsNullOrWhiteSpace(custom))
@@ -1171,7 +1349,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         await _sessionManager.ResetAsync(_coordinator!, ct);
         _toolFilter?.ForgetPreviousTurn();
         _lastReply = null;
-        _ragContextProvider.ForgetConversation();
+        await ConversationChangedAsync(Rag.MentorConversationChangeReason.Reset, ct);
 
         // One line per reset, on every transport (widget, hub, host code): without it "the assistant
         // forgot what I told it" cannot be told apart from a user who pressed New conversation. No ids
@@ -1208,10 +1386,12 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             return false;
         }
 
-        // A new conversation, like a reset: nothing from the failed message travels into it.
+        // A new conversation, like a reset: nothing from the failed message travels into it — nor the RAG search's recent
+        // messages, which it used to keep (story 196), and the source is told.
         _toolFilter?.ForgetPreviousTurn();
         _lastReply = null;
         _unansweredApprovals = null;
+        await ConversationChangedAsync(Rag.MentorConversationChangeReason.Replaced, CancellationToken.None);
 
         _logger.LogWarning(
             "[MentorAgent] The restored conversation is no longer known to the service (HTTP {Status}) — a new " +
@@ -1288,21 +1468,60 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // another scope, nothing answered it, and every later turn failed ("ToolApprovalRequestContent found …
         // that have no matching ToolApprovalResponseContent"). The requests and their answers travel with the
         // snapshot; readers that predate the property ignore it.
-        if (snapshot is { } saved && _unansweredApprovals is { } open
-            && ReferenceEquals(open.Session, await _sessionManager.GetOrCreateSessionAsync(_coordinator, ct)))
-        {
-            var envelope = System.Text.Json.Nodes.JsonNode.Parse(saved.GetRawText())!.AsObject();
+        if (snapshot is not { } saved) return null;
+        var left = _unansweredApprovals is { } open
+                   && ReferenceEquals(open.Session, await _sessionManager.GetOrCreateSessionAsync(_coordinator, ct))
+            ? open.Requests
+            : null;
+
+        // Story 156 — the tenant the conversation belongs to travels with it: it is restored for that tenant only.
+        var tenant = await ScopeTenantAsync(ct);
+        if (left is null && tenant is null) return saved;
+
+        var envelope = System.Text.Json.Nodes.JsonNode.Parse(saved.GetRawText())!.AsObject();
+        if (left is not null)
             envelope[OpenApprovalsProperty] = new System.Text.Json.Nodes.JsonArray(
-                [.. open.Requests.Select(r => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+                [.. left.Select(r => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
                 {
                     ["request"] = JsonSerializer.SerializeToNode(r.Request, ContentTypeInfo),
                     ["result"]  = r.Result,
                 })]);
-            return JsonSerializer.SerializeToElement(envelope);
-        }
-
-        return snapshot;
+        if (tenant is not null) envelope[TenantProperty] = tenant;
+        return JsonSerializer.SerializeToElement(envelope);
     }
+
+    /// <summary>The snapshot property that names the tenant the conversation belongs to (story 156).</summary>
+    private const string TenantProperty = "tenant";
+
+    /// <summary>This scope's tenant with an application's resolver; null with a single tenant.</summary>
+    private async ValueTask<string?> ScopeTenantAsync(CancellationToken ct)
+        => _sp.GetService<MentorTenantContext>() is { SingleTenant: false } tenant ? await tenant.GetIdAsync(ct) : null;
+
+    /// <summary>
+    /// Story 196 — the session's conversation changed: the RAG search forgets its recent messages and the source is told,
+    /// with the session and its tenant. The tenant of the turn when there is one (the replacement of BUG-110 happens in a
+    /// turn), else the scope's; a scope whose tenant cannot be named tells the source none.
+    /// </summary>
+    private async Task ConversationChangedAsync(Rag.MentorConversationChangeReason reason, CancellationToken ct)
+    {
+        string? tenant;
+        try
+        {
+            tenant = MentorTenantContext.Ambient ?? await ScopeTenantAsync(ct);
+        }
+        catch (InvalidOperationException)
+        {
+            tenant = null;
+        }
+        await _ragContextProvider.ForgetConversationAsync(reason, _uiMiddleware.Session?.Id, tenant, ct);
+    }
+
+    /// <summary>The tenant a snapshot names; null when it names none.</summary>
+    private static string? TenantIn(JsonElement snapshot)
+        => snapshot.ValueKind == JsonValueKind.Object
+           && snapshot.TryGetProperty(TenantProperty, out var tenant) && tenant.ValueKind == JsonValueKind.String
+            ? tenant.GetString()
+            : null;
 
     /// <summary>The snapshot property that carries the approval requests left open, with their answers (BUG-187).</summary>
     private const string OpenApprovalsProperty = "openApprovals";
@@ -1346,11 +1565,17 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // reconnecting host does, before any message has built one.
         await EnsureInitializedAsync(ct);
 
+        // Story 156 — a conversation is restored only for the tenant it belongs to: a snapshot of another tenant, one that
+        // names none where a resolver names one for every request, or one that names a tenant where there is a single
+        // one, is refused before anything changes.
+        if (!string.Equals(TenantIn(snapshot), await ScopeTenantAsync(ct), StringComparison.Ordinal))
+            throw new ArgumentException("The snapshot belongs to another tenant: it is not restored.", nameof(snapshot));
+
         var left = OpenApprovalsIn(snapshot);
         await _sessionManager.RestoreSessionAsync(_coordinator!, snapshot, ct);
         _toolFilter?.ForgetPreviousTurn();
         _lastReply = null;
-        _ragContextProvider.ForgetConversation();
+        await ConversationChangedAsync(Rag.MentorConversationChangeReason.Restored, ct);
 
         // BUG-187: the restored conversation's open requests are answered on its first turn, as they would have
         // been in the scope that saved it. Whatever was open in the conversation it replaces is not.
@@ -1383,8 +1608,15 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     /// </summary>
     internal async Task WarmUpAsync(CancellationToken ct = default)
     {
+        _warmUp = true;   // story 155: a build that serves nobody has no tenant to resolve
         await EnsureInitializedAsync(ct);
 
+        await WarmUpEmbeddingsAsync(ct);
+        await WarmUpChatModelsAsync(ct);
+    }
+
+    private async Task WarmUpEmbeddingsAsync(CancellationToken ct)
+    {
         // The catalogue embeddings are computed lazily, on the first filtered request — which is
         // exactly the first visitor. Doing them here is most of what warming up buys.
         if (_options.EmbeddingGenerator is not { } embeddings) return;
@@ -1403,8 +1635,58 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             await cache.GetOrAddAsync(texts, embeddings, ct);
     }
 
+    /// <summary>The output cap of a warm-up request, for either client: 16, the least the Responses API accepts.</summary>
+    internal const int WarmUpMaxOutputTokens = 16;
+
+    /// <summary>The user message of a warm-up request: short and fixed, so it costs the static prompt and little else.</summary>
+    internal const string WarmUpMessage = "Hi.";
+
+    /// <summary>
+    /// Story 173 — <see cref="MentorOptions.WarmUpChatModel"/>: one minimal request to the coordinator's model, and to
+    /// the strong one when routing has it, so the first turn does not pay for the connection, the provider's empty prompt
+    /// cache or a local model still loading. Straight to the provider client: no history, no memory, no turn.
+    /// </summary>
+    private async Task WarmUpChatModelsAsync(CancellationToken ct)
+    {
+        if (!_options.WarmUpChatModel) return;
+        if (_options.ChatClient is not { } chat || _warmChatOptions is not { } built)
+        {
+            _logger.LogDebug("[MentorAgent] WarmUpChatModel: the coordinator is the host's Agent (Path B) — not warmed.");
+            return;
+        }
+
+        await WarmUpChatModelAsync(chat, nameof(MentorOptions.ChatClient), built, ct);
+        if (_options.StrongChatClient is { } strong && !ReferenceEquals(strong, chat))
+            await WarmUpChatModelAsync(strong, nameof(MentorOptions.StrongChatClient), built, ct);
+    }
+
+    private async Task WarmUpChatModelAsync(IChatClient client, string name, ChatOptions built, CancellationToken ct)
+    {
+        // The coordinator's own options — instructions, tools, sampling — as built: the prompt's prefix of the turns of a
+        // user with every role (the role filter rewrites the count of the actions for the others). No call, a capped reply.
+        var options = built.Clone();
+        options.ToolMode = ChatToolMode.None;
+        options.MaxOutputTokens = WarmUpMaxOutputTokens;
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, WarmUpMessage)], options, ct);
+            _logger.LogInformation(
+                "[MentorAgent] {Client} warmed up in {Elapsed:0} ms ({Input} input tokens, {Output} output).",
+                name, started.Elapsed.TotalMilliseconds, response.Usage?.InputTokenCount, response.Usage?.OutputTokenCount);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "[MentorAgent] Warming up {Client} failed — the first turn will pay for it instead.", name);
+        }
+    }
+
     /// <summary>The tool list of the last coordinator build — read only by the warm-up.</summary>
     private List<AITool>? _warmTools;
+
+    /// <summary>The coordinator's options of the last Path A build — read only by the chat model's warm-up (story 173).</summary>
+    private ChatOptions? _warmChatOptions;
 
     private async Task EnsureInitializedAsync(CancellationToken ct)
     {
@@ -1413,6 +1695,10 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         try
         {
             if (_coordinator is not null) return;
+            // Story 155 — nothing is built for a scope whose tenant nobody named: the governor is asked about the session's
+            // tools below. A turn resolved it before it got here; a warm-up, a reset or a restore before the first turn
+            // resolves it now, and builds nothing when the resolver names none.
+            await EnsureTenantAsync(ct);
             // Claimed here rather than beside BuildCoordinatorAsync: the skills, the MCP tools and
             // the external agents are all built above it and all announce themselves. Measured on
             // the packaged rc.5 — the second circuit still reprinted seven Information lines
@@ -1449,7 +1735,10 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                         "to it — a delegated request is answered here, never passed on to another peer.",
                         string.Join(", ", withheld.Select(r => r.Name)));
             }
-            _discoveryResult = _discovery.Discover();
+            // Stories 1549, 1546 — the session is built with the actions that are on, by the code or by the application's
+            // governor, with the roles the governor gives them: an action that is off is in nothing this session offers
+            // or describes to a model.
+            _discoveryResult = await AsThisSessionSeesItAsync(_discovery.Discover(), ct);
             // #23 — resolved here rather than inside BuildAllTools because building an agent is
             // asynchronous (a definition may be read from disk) and BuildAllTools is not.
             _externalAgents = await ResolveExternalAgentsAsync(_discoveryResult, ct);
@@ -1512,6 +1801,122 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         }
     }
 
+    // -- The actions as this session sees them (stories 1549, 1546) ---------------
+
+    /// <summary>
+    /// <paramref name="discovery"/> as this session sees it: only the actions that are on — what the code says
+    /// (<c>[MentorAction(Enabled = false)]</c> ships one off), or the application's <see cref="IMentorActionGovernor"/> —
+    /// each with the roles and the description the governor gives it in place of the code's (stories 1546, 1548). The
+    /// governor is asked once for each action of
+    /// the coordinator, the specialists and the team members, with the session's id. Everything the session builds reads
+    /// the copy — the tools, the instructions, the scope, tool filtering and its fallback, an agent source's tools — and
+    /// the gate offers by the roles (<see cref="Middleware.MentorAgentUIMiddleware.SessionRoles"/>), so an action that is
+    /// off is offered nowhere and described nowhere, and one is offered to the users the governor's roles allow. Kept for
+    /// the session: the gate asks again at every call. The discovery itself is shared by the process, and is returned as
+    /// it is when there is nothing to change.
+    /// </summary>
+    private async Task<DiscoveryResult> AsThisSessionSeesItAsync(DiscoveryResult discovery, CancellationToken ct)
+    {
+        // Story 155 — the warm-up of an application with a tenant resolver serves nobody: there is nobody to ask the
+        // governor for, and asked without a tenant it would fail for every action at every start. That build follows the
+        // code, and its scope ends with it.
+        var governance = _uiMiddleware.Governance is { Any: true } registered && !WarmUpWithoutTenant ? registered : null;
+        if (governance is null
+            && discovery.Level1Methods.All(m => m.EnabledByDefault)
+            && discovery.Level2Agents.All(a => a.Methods.All(m => m.EnabledByDefault))
+            && discovery.Level3Teams.All(t => t.Members.All(m => m.Tools.All(x => x.EnabledByDefault))))
+            return discovery;
+
+        // Read once, as a turn reads it for the policies; nobody is read without a governor.
+        var user = governance is null ? null : await _uiMiddleware.ReadUserAsync(ct);
+        var off = new List<string>();
+        var roles = new Dictionary<MethodInfo, string[]>();
+        var confirmations = new Dictionary<MethodInfo, MentorConfirmationChoice>();
+
+        async Task<List<MethodDiscoveryInfo>> OnAsync(List<MethodDiscoveryInfo> methods, MentorAgentKind kind, string? agentName)
+        {
+            var on = new List<MethodDiscoveryInfo>(methods.Count);
+            foreach (var method in methods)
+            {
+                if (governance is null)
+                {
+                    if (method.EnabledByDefault) on.Add(method);
+                    else off.Add(method.ToolName);
+                    continue;
+                }
+
+                var request = _uiMiddleware.OfferRequest(method, kind, agentName, user);
+                if (!(await governance.IsEnabledAsync(request, method.EnabledByDefault, ct)).Enabled)
+                {
+                    off.Add(method.ToolName);
+                    continue;
+                }
+
+                // Story 1546 — a governor that fails on the roles leaves the action out, as one that fails on whether it is on.
+                var governed = await governance.RequiredRolesAsync(request, ct);
+                if (governed.Failed)
+                {
+                    off.Add(method.ToolName);
+                    continue;
+                }
+
+                // Story 1547 — and one that fails on the confirmation, after the roles, with the roles the session gives.
+                var withRoles = governed.Roles is { } governedRoles ? request with { RequiredRoles = governedRoles } : request;
+                var confirmation = await governance.ConfirmationAsync(withRoles, ct);
+                if (confirmation.Failed)
+                {
+                    off.Add(method.ToolName);
+                    continue;
+                }
+                if (confirmation.Choice != MentorConfirmationChoice.Code) confirmations[method.Method] = confirmation.Choice;
+
+                // Story 1548 — and one that fails on the description the model reads, asked last.
+                var described = await governance.DescriptionAsync(withRoles, ct);
+                if (described.Failed)
+                {
+                    off.Add(method.ToolName);
+                    continue;
+                }
+
+                var offered = method;
+                if (governed.Roles is { } given)
+                {
+                    roles[method.Method] = given;
+                    offered = offered with { RequiredRoles = given };
+                }
+                // What the model reads: the code's ProactiveHint still follows it (ToolDescription). What the user sees —
+                // the banner, the bar of the running action, the decisions — reads the process's discovery: the code's.
+                if (described.Description is { } text) offered = offered with { Description = text };
+                on.Add(offered);
+            }
+            return on;
+        }
+
+        var result = new DiscoveryResult();
+        result.Level1Methods.AddRange(await OnAsync(discovery.Level1Methods, MentorAgentKind.Coordinator,
+            _options.ChatClient is not null ? "main_coordinator" : _options.Agent?.Name));
+        foreach (var agent in discovery.Level2Agents)
+            result.Level2Agents.Add(agent with { Methods = await OnAsync(agent.Methods, MentorAgentKind.Specialist, agent.Attribute.Name) });
+        foreach (var team in discovery.Level3Teams)
+        {
+            var members = new List<TeamMemberInfo>(team.Members.Count);
+            foreach (var member in team.Members)
+                members.Add(member with { Tools = await OnAsync(member.Tools, MentorAgentKind.TeamMember, member.Attribute.Role) });
+            result.Level3Teams.Add(team with { Members = members });
+        }
+        result.Pages.AddRange(discovery.Pages);
+        if (governance is not null)
+        {
+            _uiMiddleware.SessionRoles = roles;
+            _confirmations.SessionConfirmations = confirmations;
+        }
+
+        if (off.Count > 0)
+            _logger.LogDebug("[MentorAgent] {Count} action(s) off for this session, offered nowhere: {Names}.",
+                off.Count, string.Join(", ", off));
+        return result;
+    }
+
     // -- External agent sources (#23) ------------------------------------------
 
     /// <summary>
@@ -1544,30 +1949,80 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             .ToList();
 
         // The metered client: an agent a source builds makes billed calls like any other (BUG-077). Offered only the
-        // tools this turn's user may run, as the coordinator is (BUG-205).
+        // tools this turn's user may run, as the coordinator is (BUG-205). Story 1274 — with the session's id, the one
+        // the governor is asked with: on /mentor/chat and over A2A the coordinator is built again at every request.
         var context = new MentorAgentSourceContext(
             Middleware.AgentRoleFilterChatClient.For(GetSpecialistChatClient() ?? _options.ChatClient, gated, _uiMiddleware),
-            gated);
+            gated)
+        {
+            SessionId = _uiMiddleware.Session?.Id,
+        };
         var agents = new List<AIAgent>();
 
         foreach (var source in sources)
         {
+            var name = source.GetType().FullName ?? source.GetType().Name;
+            MentorAgentSourceResult result;
             try
             {
-                agents.AddRange(await source.GetAgentsAsync(context, ct));
+                result = await source.LoadAsync(context, ct);
+                agents.AddRange(result.Agents);
             }
             catch (Exception ex)
             {
                 // One bad definition file must not stop the assistant from starting.
                 _logger.LogError(ex, "[MentorAgent] Agent source {Source} failed — skipped.",
                     source.GetType().Name);
+                // Story 1274 — the type only: the source is the host's code, and its message can carry anything.
+                result = new([], [new(name, MentorAgentRejectionReasons.SourceFailed, ex.GetType().Name)]);
             }
+
+            ReportAgentSource(name, context.SessionId, result);
         }
 
         if (agents.Count > 0)
             BuildLog.LogInformation("[MentorAgent] {N} external agent(s) added from {S} source(s), " +
                                    "each with {T} gated tool(s).", agents.Count, sources.Count, gated.Count);
         return agents;
+    }
+
+    /// <summary>
+    /// Story 1274 — what <paramref name="source"/> loaded and left out, to every <see cref="IMentorAgentSourceObserver"/>,
+    /// also when it loaded nothing: an observer sees "no agent", not silence. One Warning line names what was left out,
+    /// with the codes. An observer that throws is logged with the exception's type and stops nothing.
+    /// </summary>
+    private void ReportAgentSource(string source, string? sessionId, MentorAgentSourceResult result)
+    {
+        var rejected = result.Rejected ?? [];
+        if (rejected.Count > 0)
+            _logger.LogWarning("[MentorAgent] Agent source {Source} left out: {Rejected}.", source,
+                string.Join(", ", rejected.Select(r => r.Tool is { } tool
+                    ? $"{tool} of {r.Name} ({r.ReasonCode})"
+                    : $"{r.Name} ({r.ReasonCode})")));
+
+        var observers = _sp.GetServices<IMentorAgentSourceObserver>().ToList();
+        if (observers.Count == 0) return;
+
+        var report = new MentorAgentSourceReport
+        {
+            Source    = source,
+            SessionId = sessionId,
+            Loaded    = [.. (result.Agents ?? []).Select(a => a.Name ?? a.Id)],
+            Rejected  = rejected,
+            Timestamp = DateTimeOffset.UtcNow,
+        };
+        foreach (var observer in observers)
+        {
+            try
+            {
+                observer.OnAgentsLoaded(report);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("[MentorAgent] Agent source observer {Observer} threw ({Type}) — the agents were not affected.",
+                    observer.GetType().FullName ?? observer.GetType().Name, ex.GetType().Name);
+            }
+        }
     }
 
     // -- Build Coordinator -----------------------------------------------------
@@ -1811,10 +2266,17 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 pipeline,
                 _sp.GetRequiredService<MentorTokenUsage>(),
                 _metrics,
-                loggerFactory.CreateLogger<TokenUsageChatClient>());
+                loggerFactory.CreateLogger<TokenUsageChatClient>(),
+                _sp.GetService<MentorSessionTokenUsage>());   // story 171 — the session's own count too
 
+            // Story 167 — the host's provider client: a required call it answers without one is said once for it.
             pipeline = new UIActionsMiddleware(
-                pipeline, _pageContext, _stateService, uiActionsLogger);
+                pipeline, _pageContext, _stateService, uiActionsLogger, _options.ChatClient);
+
+            // Story 526 — inside the tool filter, so the tools it keeps for the turn are those the model was sent, which
+            // the classifier may name; its instruction is a message of its own, at the end of the request. Always in the
+            // pipeline: CheckAnnouncedActions is read at every turn, and outside a second pass it changes nothing.
+            pipeline = _announcedCheck = new AnnouncedActionChatClient(pipeline, _logger);
 
             // Wave 1 #4 — dynamic tool filtering (opt-in). Outermost so it never sees the
             // UI-action tools added by UIActionsMiddleware; only L1 + MCP tools are candidates.
@@ -2044,15 +2506,21 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                     language => _promptBuilder.BuildCoordinatorInstructions(discovery, language, externalAgents, offerRemoteAgents),
                     "main_coordinator", _logger);
 
+            var coordinatorOptions = new ChatOptions
+            {
+                Instructions = instructions,
+                Tools        = tools,
+                ToolMode     = ChatToolMode.Auto,
+            };
+            // Story 169 — the coordinator's own sampling. The classifiers call the provider directly, never through
+            // this agent, so they keep theirs.
+            _options.CoordinatorSampling?.ApplyTo(coordinatorOptions);
+            _warmChatOptions = coordinatorOptions;   // story 173: the warm-up request sends the same prefix
+
             baseCoordinator = pipeline.AsAIAgent(new ChatClientAgentOptions
             {
                 Name = "main_coordinator",
-                ChatOptions = new ChatOptions
-                {
-                    Instructions = instructions,
-                    Tools        = tools,
-                    ToolMode     = ChatToolMode.Auto,
-                },
+                ChatOptions = coordinatorOptions,
                 AIContextProviders  = BuildContextProviders(),
                 ChatHistoryProvider = chatHistoryProvider,
             });
@@ -2513,7 +2981,8 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             raw,
             _sp.GetRequiredService<MentorTokenUsage>(),
             _metrics,
-            _sp.GetRequiredService<ILoggerFactory>().CreateLogger<TokenUsageChatClient>());
+            _sp.GetRequiredService<ILoggerFactory>().CreateLogger<TokenUsageChatClient>(),
+            _sp.GetService<MentorSessionTokenUsage>());
     }
 
     /// <summary>
@@ -2538,7 +3007,8 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             UniqueCallIds(raw),
             _sp.GetRequiredService<MentorTokenUsage>(),
             _metrics,
-            _sp.GetRequiredService<ILoggerFactory>().CreateLogger<TokenUsageChatClient>());
+            _sp.GetRequiredService<ILoggerFactory>().CreateLogger<TokenUsageChatClient>(),
+            _sp.GetService<MentorSessionTokenUsage>());
     }
 
     /// <summary>Metered wrapper around the main client for the agents under the coordinator.</summary>
@@ -3199,6 +3669,110 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             return null;
         }
     }
+
+    /// <summary>
+    /// Story 526 (BUG-220) — after a turn in which nothing ran, asks the classifier model whether its reply announces an
+    /// action or reports one as done (<see cref="AnnouncedActionCheck"/>). The instruction of the second request when it
+    /// does; null when it does not, when the turn is not one to ask about, and when the question cannot be answered — no
+    /// model, a timeout (<see cref="MentorOptions.SafetyCheckTimeout"/>), a failure, an unreadable answer — so the turn
+    /// stays as it is. Stop still cancels it.
+    /// <para>
+    /// A turn to ask about: <see cref="MentorOptions.CheckAnnouncedActions"/> on, Path A with the history kept here, no
+    /// tool, delegation, hosted tool or approval in the turn, a reply with text, and an action of the application the
+    /// model could have called. Nothing in the reply's words decides it: a model does.
+    /// </para>
+    /// </summary>
+    private async Task<string?> AnnouncedActionAsync(ChatMessage userTurn, CancellationToken ct)
+    {
+        if (!_options.CheckAnnouncedActions || _announcedCheck is null || _options.Agent is not null
+            || _options.UseServiceManagedHistory || _actedThisTurn || string.IsNullOrWhiteSpace(_lastReply)
+            || !OffersApplicationActions())
+            return null;
+
+        var client = GetChatClientForAux();
+        if (client is null) return null;
+
+        var started = DateTimeOffset.UtcNow;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (_options.SafetyCheckTimeout > TimeSpan.Zero) cts.CancelAfter(_options.SafetyCheckTimeout);
+        try
+        {
+            // The tools the model was sent in this turn: the classifier names the one that does the action, if one does.
+            var offered = _announcedCheck!.Offered;
+            var response = await client.GetResponseAsync(
+                [new ChatMessage(ChatRole.System, AnnouncedActionCheck.Question),
+                 new ChatMessage(ChatRole.User, AnnouncedActionCheck.Input(userTurn.Text, _lastReply, offered))],
+                new ChatOptions { MaxOutputTokens = 32, Temperature = 0f }, cts.Token);
+            var verdict = AnnouncedActionCheck.Read(response.Text);
+            var again = verdict is AnnouncedAction.Announced or AnnouncedAction.Claimed;
+            var tool = again ? AnnouncedActionCheck.Tool(response.Text, offered) : null;
+
+            // The cost of the check, every time (story 526's condition), and its verdict, NONE included: a reply that still
+            // reports an invented "done" is either a NONE of the classifier or a second request that invented it again,
+            // and only this line tells them apart.
+            _logger.LogInformation(
+                "[MentorAgent] Announced-action check: {Verdict}{Tool} in {Ms} ms, {Tokens} token(s){Then}.",
+                verdict?.ToString().ToUpperInvariant() ?? "unreadable",
+                tool is null ? string.Empty : " " + tool,
+                (long)(DateTimeOffset.UtcNow - started).TotalMilliseconds,
+                response.Usage?.TotalTokenCount ?? 0,
+                again ? " — one more request, to call the tool or to say that it was not done" : string.Empty);
+
+            if (!again) return null;
+
+            // Story 526 — with the tool named, the model is told it is there to call: told only "call it, or say that it
+            // cannot be done", beside the notice of an action left out and its sign-in sentence, it said it could not.
+            var texts = MentorPromptTexts.For(Lang);
+            return AnnouncedActionChatClient.Heading
+                   + (tool is null ? texts.AnnouncedActionNotRun : texts.AnnouncedActionCall.Replace("{tool}", tool));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogDebug("[MentorAgent] Announced-action check timed out after {Timeout} — the turn stays as it is.",
+                _options.SafetyCheckTimeout);
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "[MentorAgent] Announced-action check failed — the turn stays as it is.");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="toolName"/> names an action of the application (a level-1 method) — of the application's
+    /// discovery, not this session's copy: an action that is off for the session is one, and its call is not offered.
+    /// </summary>
+    private bool IsApplicationAction(string toolName) => _discovery.Discover().Named(toolName).Any();
+
+    /// <summary>
+    /// Story 526 — the model called <paramref name="toolName"/>, an action of the application its agent was not given in
+    /// this turn: the agent answered "not found", nothing ran, and the turn does not count as one that acted. Story 1600 —
+    /// no gate saw the call, so its one decision is given here, Denied with <see cref="MentorActionReasons.NotOffered"/>:
+    /// an audit of the actions sees the call the model made, and why nothing ran.
+    /// </summary>
+    private async ValueTask NotOfferedAsync(string toolName, string callId, CancellationToken ct)
+    {
+        _logger.LogInformation(
+            "[MentorAgent] The model called '{Tool}', which is not among the tools of this turn: nothing ran.", toolName);
+
+        // No method: the call bound to no function, and the text shown is looked up by the name.
+        var call = new Middleware.GateCall
+        {
+            ToolName  = toolName,
+            CallId    = callId,
+            AgentKind = MentorAgentKind.Coordinator,
+            AgentName = _coordinator?.Name,
+            User      = await _uiMiddleware.ReadUserForDecisionsAsync(ct),
+        };
+        EndBeforeTheGate(call, MentorActionOutcome.Denied, MentorActionReasons.NotOffered, DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>Whether the coordinator has an action of the application to call: its own, an agent's, a team's or an MCP server's.</summary>
+    private bool OffersApplicationActions()
+        => _discoveryResult is { } d
+           && (d.Level1Methods.Count > 0 || d.Level2Agents.Count > 0 || d.Level3Teams.Count > 0
+               || _externalAgents.Count > 0 || _options.McpServers is { Length: > 0 });
 
     private HostedToolDomainGate? BuildDomainGate(DiscoveryResult discovery, ILoggerFactory loggerFactory)
     {

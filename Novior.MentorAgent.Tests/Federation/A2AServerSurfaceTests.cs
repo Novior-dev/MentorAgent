@@ -607,6 +607,7 @@ public sealed class A2AServerSurfaceTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.card-ungated-only")]
     public async Task The_card_publishes_the_ungated_actions_as_skills()
     {
         // Until rc.5 the card carried a name, a description and an empty skills array: a peer could
@@ -641,6 +642,7 @@ public sealed class A2AServerSurfaceTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.card-ungated-only")]
     public async Task The_predicate_gate_withholds_a_skill_too()
     {
         // The other gate. BUG-035 was exactly this hole on the MCP surface.
@@ -702,6 +704,7 @@ public sealed class A2AServerSurfaceTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.card-ungated-only")]
     public async Task A_class_missing_from_DI_puts_no_skill_on_the_card()
     {
         var ids = await SkillIdsWithTwinsAsync();
@@ -712,6 +715,7 @@ public sealed class A2AServerSurfaceTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.card-ungated-only")]
     public async Task A_tool_name_two_classes_share_is_one_skill()
     {
         var ids = await SkillIdsWithTwinsAsync();
@@ -720,6 +724,7 @@ public sealed class A2AServerSurfaceTests
     }
 
     [Fact]
+    [Trait("Rule", "surface.card-ungated-only")]
     public async Task A_tool_name_with_one_gated_action_is_left_off_the_card()
     {
         // Which of the two a turn runs is not the card's to promise, and one of them asks a human first.

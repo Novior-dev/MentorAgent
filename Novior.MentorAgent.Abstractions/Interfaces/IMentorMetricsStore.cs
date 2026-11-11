@@ -24,9 +24,9 @@ namespace Novior.MentorAgent.Abstractions.Interfaces;
 /// the methods it needs (the others keep their no-op defaults):
 /// <list type="bullet">
 /// <item><b>Local store</b> (file/DB): implements <see cref="LoadForSeedAsync"/> (restore totals at
-/// startup) and <see cref="SaveAsync"/> (persist periodically + on shutdown). <see cref="QueryAsync"/>
+/// startup) and <see cref="SaveAsync"/> (persist periodically + on shutdown). <see cref="QueryAsync(CancellationToken)"/>
 /// returns <see langword="null"/> so the dashboard serves the live in-RAM snapshot.</item>
-/// <item><b>External source</b> (Prometheus/Azure Monitor): implements <see cref="QueryAsync"/> to
+/// <item><b>External source</b> (Prometheus/Azure Monitor): implements <see cref="QueryAsync(CancellationToken)"/> to
 /// query the backend the #8 export already writes to. <see cref="SaveAsync"/> is a no-op (OpenTelemetry
 /// already exports) and there is nothing to seed.</item>
 /// </list>
@@ -36,7 +36,7 @@ public interface IMentorMetricsStore
     /// <summary>
     /// Called once at startup so a durable store can restore the previous totals into the in-RAM
     /// counters. Return <see langword="null"/> to start fresh (external sources return
-    /// <see langword="null"/> — they serve live via <see cref="QueryAsync"/> instead).
+    /// <see langword="null"/> — they serve live via <see cref="QueryAsync(CancellationToken)"/> instead).
     /// </summary>
     Task<MentorMetricsSnapshot?> LoadForSeedAsync(CancellationToken ct = default)
         => Task.FromResult<MentorMetricsSnapshot?>(null);
@@ -55,4 +55,15 @@ public interface IMentorMetricsStore
     /// </summary>
     Task<MentorMetricsSnapshot?> QueryAsync(CancellationToken ct = default)
         => Task.FromResult<MentorMetricsSnapshot?>(null);
+
+    /// <summary>
+    /// Called on every dashboard/endpoint read with the reader's tenant, when an <c>IMentorTenantResolver</c>
+    /// is registered. An external source that can filter on the <c>mentoragent.tenant</c> tag returns that tenant's
+    /// aggregate. The default asks <see cref="QueryAsync(CancellationToken)"/> for the whole instance only: for a tenant
+    /// it returns <see langword="null"/>, and the caller serves the tenant's in-RAM snapshot.
+    /// </summary>
+    /// <param name="tenant">The tenant, as the resolver named it; <see langword="null"/> for the whole instance.</param>
+    /// <param name="ct">Cancels the query.</param>
+    Task<MentorMetricsSnapshot?> QueryAsync(string? tenant, CancellationToken ct = default)
+        => tenant is null ? QueryAsync(ct) : Task.FromResult<MentorMetricsSnapshot?>(null);
 }

@@ -32,6 +32,7 @@ namespace Novior.MentorAgent.Tests.Gating;
 /// <c>review_shared_ticket</c> at level 1, one open and read-only, one for a Manager and confirmed.
 /// </para>
 /// </summary>
+[Trait("Rule", "name.called-method-decides")]
 public sealed class CalledMethodGateTests
 {
     private const string CoordinatorPage = "/coordinator-shipments";

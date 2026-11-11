@@ -151,7 +151,8 @@ public sealed class PromptLanguageTests
         nameof(MentorPromptTexts.CoordinatorGrounding), nameof(MentorPromptTexts.PlainTerms),
         nameof(MentorPromptTexts.OutOfScope), nameof(MentorPromptTexts.ProactiveNoNextSteps), nameof(MentorPromptTexts.Grounding),
         nameof(MentorPromptTexts.ActionsNotAvailable), nameof(MentorPromptTexts.SignInMayHelp),
-        nameof(MentorPromptTexts.NotAvailableFollowUp),
+        nameof(MentorPromptTexts.NotAvailableFollowUp), nameof(MentorPromptTexts.AnnouncedActionNotRun),
+        nameof(MentorPromptTexts.AnnouncedActionCall), nameof(MentorPromptTexts.RagNothingFound),
     ];
 
     // ── English, byte for byte ──────────────────────────────────────────────────

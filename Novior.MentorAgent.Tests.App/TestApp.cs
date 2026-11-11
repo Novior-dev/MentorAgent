@@ -96,6 +96,15 @@ public sealed class TestOrderService
         };
     }
 
+    // Shipped off (story 1549): in the catalogue, offered nowhere and never run until a governor turns it on.
+    // Ungated otherwise, so a governor that turns it on lets it run without a banner. Tool name: archive_order.
+    [MentorAction(Description = "Archives an order", RequiresConfirmation = false, Enabled = false)]
+    public string ArchiveOrder(int orderId)
+    {
+        Invoked.Add($"{nameof(ArchiveOrder)}({orderId})");
+        return $"Order {orderId} archived.";
+    }
+
     [MentorAction(Description = "Always fails, for exception mapping", RequiresConfirmation = false)]
     public Task FailingActionAsync()
     {
@@ -159,6 +168,14 @@ public sealed class TestShippingAgent
         Invoked.Add(nameof(CancelShipment));
         return $"cancelled: {orderId}";
     }
+
+    // Shipped off (story 1549): a specialist's action that only a governor can turn on.
+    [MentorAction(Description = "Reroutes a shipment to another address", RequiresConfirmation = false, Enabled = false)]
+    public string RerouteShipment(int orderId)
+    {
+        Invoked.Add(nameof(RerouteShipment));
+        return $"rerouted: {orderId}";
+    }
 }
 
 // ── Level 3 ──────────────────────────────────────────────────────────────────────
@@ -198,6 +215,10 @@ public sealed class TestAnalysisTools : TestAnalysisToolsBase
 
     [MentorAction(Description = "Approves a budget line", RequiresConfirmation = true, RequiredRoles = ["Manager"])]
     public string ApproveBudgetLine(int lineId) => $"approved: {lineId}";
+
+    // Shipped off (story 1549): a team member's tool that only a governor can turn on.
+    [MentorAction(Description = "Forecasts the next quarter's revenue", ReadOnly = true, Enabled = false)]
+    public decimal ForecastNextQuarter() => 1400m;
 
     [Description("A static helper: not a tool")]
     public static string StaticHelper() => "static";

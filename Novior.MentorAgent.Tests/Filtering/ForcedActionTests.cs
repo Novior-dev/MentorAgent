@@ -1,11 +1,13 @@
 using FluentAssertions;
 using Novior.MentorAgent.Abstractions.Interfaces;
+using Novior.MentorAgent.Abstractions.Models;
 using Novior.MentorAgent.Core;
 using Novior.MentorAgent.Options;
 using Novior.MentorAgent.Tests.App;
 using Novior.MentorAgent.Tests.Fakes;
 using Novior.MentorAgent.Tests.Harness;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Novior.MentorAgent.Tests.Filtering;
@@ -46,7 +48,7 @@ public sealed class ForcedActionTests
         "submit_expense_report: Submits a new expense report",
     ];
 
-    private static MentorHostFixture Host(Action<MentorOptions>? configure = null)
+    private static MentorHostFixture Host(Action<MentorOptions>? configure = null, IMentorActionGovernor? governor = null)
         => MentorHostFixture.Create(o =>
         {
             o.EnableToolFiltering = true;
@@ -54,6 +56,9 @@ public sealed class ForcedActionTests
             o.MemoryAutoCapture = false;
             o.RequireActionForChangeRequests = true;
             configure?.Invoke(o);
+        }, s =>
+        {
+            if (governor is not null) s.AddSingleton(governor);
         }, withEmbeddings: true);
 
     /// <summary>Only <paramref name="tool"/> clears 0.35 for the queries; every other action is unrelated.</summary>
@@ -194,6 +199,26 @@ public sealed class ForcedActionTests
         host.Logs.HasWarning("only page requests are covered").Should().BeTrue();
         ClassifierCalls(host).Single().SystemText.Should().NotContain("Answer ACTION", "no action is on offer");
         CoordinatorCalls(host)[0].ToolMode.Should().NotBe(ChatToolMode.RequireAny);
+    }
+
+    [Fact]
+    [Trait("Rule", "confirm.external-decides")]
+    public async Task An_action_whose_confirmation_the_governor_takes_away_is_never_required()
+    {
+        // Story 1547 — no banner would come, as with confirmations off: a forced call on a misread request would just run.
+        var governor = new TestActionGovernor
+        {
+            Confirmation = r => r.ToolName == "issue_refund" ? MentorConfirmationChoice.None : MentorConfirmationChoice.Code,
+        };
+        await using var host = Host(governor: governor);
+        SeedMatch(host, "issue_refund: Issues a refund", Refund);
+        host.Chat!.Say("ACTION").Say("ok");
+
+        await host.RunTurnAsync(Refund);
+
+        ClassifierCalls(host).Single().SystemText.Should().NotContain("Answer ACTION", "the one action selected would not ask");
+        CoordinatorCalls(host)[0].ToolMode.Should().NotBe(ChatToolMode.RequireAny);
+        CoordinatorCalls(host)[0].ToolNames.Should().Contain("issue_refund", "it is offered, only not required");
     }
 
     [Fact]

@@ -61,7 +61,8 @@ public sealed class ContractNameTests
         await host.RunTurnAsync("How many open orders?");
 
         instruments.Should().Contain(
-            ["mentoragent.turns", "mentoragent.tool_calls", "mentoragent.errors", "mentoragent.guardrail_blocks"]);
+            ["mentoragent.turns", "mentoragent.tool_calls", "mentoragent.errors", "mentoragent.guardrail_blocks",
+             "mentoragent.rag_failures"]);
         tags.Should().Contain("mentoragent.tool");
     }
 

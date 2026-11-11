@@ -28,6 +28,8 @@ public sealed class NamingTests
     // ── ToSnakeCase ─────────────────────────────────────────────────────────────
 
     [Theory]
+    [Trait("Rule", "name.snake-case")]
+    [Trait("Rule", "name.team-tool")]
     [InlineData("CreateOrder", "create_order")]
     [InlineData("CreateOrderAsync", "create_order")]
     [InlineData("Business Analysis Team", "business_analysis_team")]
@@ -51,6 +53,7 @@ public sealed class NamingTests
     }
 
     [Fact]
+    [Trait("Rule", "name.snake-case")]
     public void Only_a_trailing_Async_is_stripped()
     {
         // "AsyncReport" starts with it and must keep it; "ProcessAsyncData" contains it mid-name.
@@ -60,6 +63,7 @@ public sealed class NamingTests
     }
 
     [Fact]
+    [Trait("Rule", "name.snake-case")]
     public void The_Async_check_is_case_sensitive_as_documented()
     {
         // A method literally named "Processasync" is not the async convention.
@@ -78,6 +82,7 @@ public sealed class NamingTests
     }
 
     [Fact]
+    [Trait("Rule", "name.snake-case")]
     public void Consecutive_capitals_each_get_their_own_underscore()
     {
         // Acronyms are where snake_case converters usually disagree. Pinning the actual behaviour
@@ -88,6 +93,7 @@ public sealed class NamingTests
     }
 
     [Fact]
+    [Trait("Rule", "name.snake-case")]
     public void An_underscore_already_present_does_not_gain_another()
     {
         // The `name[i - 1] != '_'` guard. Without it "Order_Details" becomes "order__details",
@@ -97,6 +103,7 @@ public sealed class NamingTests
     }
 
     [Fact]
+    [Trait("Rule", "name.snake-case")]
     public void A_leading_capital_never_produces_a_leading_underscore()
     {
         // The `i > 0` guard. A leading underscore would make every tool name invalid against the
@@ -106,12 +113,14 @@ public sealed class NamingTests
     }
 
     [Fact]
+    [Trait("Rule", "name.snake-case")]
     public void Spaces_and_dashes_normalise_the_same_way()
     {
         MentorUtils.ToSnakeCase("Refund Policy").Should().Be(MentorUtils.ToSnakeCase("Refund-Policy"));
     }
 
     [Fact]
+    [Trait("Rule", "name.snake-case")]
     public void Digits_are_preserved_and_do_not_introduce_breaks()
     {
         MentorUtils.ToSnakeCase("ExportQ4Report").Should().Be("export_q4_report");

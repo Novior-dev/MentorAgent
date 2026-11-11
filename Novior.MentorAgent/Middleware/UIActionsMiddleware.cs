@@ -33,16 +33,24 @@ internal sealed class UIActionsMiddleware : DelegatingChatClient
     private readonly IMentorStateService _stateService;
     private readonly ILogger<UIActionsMiddleware> _logger;
 
+    /// <summary>The host's provider client, which every session's pipeline shares: the warning is said once for it.</summary>
+    private readonly object _provider;
+
+    /// <summary>The providers already reported for answering a required call without one, for the process.</summary>
+    private static readonly ConditionalWeakTable<object, object> s_ignoredTheRequiredCall = new();
+
     public UIActionsMiddleware(
         IChatClient innerClient,
         IMentorPageContext pageContext,
         IMentorStateService stateService,
-        ILogger<UIActionsMiddleware> logger)
+        ILogger<UIActionsMiddleware> logger,
+        object? provider = null)
         : base(innerClient)
     {
         _pageContext = pageContext;
         _stateService = stateService;
         _logger = logger;
+        _provider = provider ?? this;
     }
 
     // -- GetResponseAsync — internal UI action function-calling loop -------------
@@ -55,7 +63,12 @@ internal sealed class UIActionsMiddleware : DelegatingChatClient
         options = TakeForcedCallMarker(options, out var forcedCall);
         var snapshot = forcedCall ? EmptyActions : _pageContext.UIActions;
         if (snapshot.Count == 0)
-            return await base.GetResponseAsync(messages, options, cancellationToken);
+        {
+            var direct = await base.GetResponseAsync(messages, options, cancellationToken);
+            if (forcedCall && !direct.Messages.SelectMany(m => m.Contents).Any(c => c is ToolCallContent))
+                SayTheRequiredCallWasIgnored();
+            return direct;
+        }
 
         var workingMessages = new List<ChatMessage>(messages);
         var mergedOptions = MergeUIActionTools(options, snapshot);
@@ -103,9 +116,16 @@ internal sealed class UIActionsMiddleware : DelegatingChatClient
         var snapshot = forcedCall ? EmptyActions : _pageContext.UIActions;
         if (snapshot.Count == 0)
         {
-            // True pass-through streaming when no UI actions are registered
+            // True pass-through streaming when no UI actions are registered. A required call is looked for in
+            // the updates as they go by, nothing held back; a stream that fails or is left early says nothing.
+            var called = false;
             await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken))
+            {
+                if (forcedCall && !called && update.Contents.Any(c => c is ToolCallContent)) called = true;
                 yield return update;
+            }
+
+            if (forcedCall && !called) SayTheRequiredCallWasIgnored();
             yield break;
         }
 
@@ -341,6 +361,21 @@ internal sealed class UIActionsMiddleware : DelegatingChatClient
     /// removed here, its only reader, so it never reaches a provider client that sends every additional property in
     /// the request body.
     /// </summary>
+    /// <summary>
+    /// A request that required a call (<c>tool_choice: required</c>) came back with none: a provider that honours the
+    /// requirement cannot answer so — a call to a tool it was not offered is still a call — so this one ignores it, and
+    /// the two options that force a call do nothing with it (Ollama does). Said once per provider client in the process,
+    /// since every session's pipeline shares it.
+    /// </summary>
+    private void SayTheRequiredCallWasIgnored()
+    {
+        if (!s_ignoredTheRequiredCall.TryAdd(_provider, _provider)) return;
+        _logger.LogWarning(
+            "[MentorAgent] The provider answered a request that required a tool call (tool_choice: required) without " +
+            "calling one: RequireLookupForRecordQuestions and RequireActionForChangeRequests have no effect with it. " +
+            "Ollama ignores tool_choice; see the README for llama-server and vLLM.");
+    }
+
     private static ChatOptions? TakeForcedCallMarker(ChatOptions? options, out bool forcedCall)
     {
         forcedCall = options?.AdditionalProperties?.ContainsKey(ToolFilterChatClient.ForcedCallKey) == true;

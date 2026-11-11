@@ -128,6 +128,27 @@ internal sealed class MentorPromptTexts
     /// </summary>
     public required string NotAvailableFollowUp { get; init; }
 
+    /// <summary>
+    /// The second pass of a turn whose reply announced or reported an action, and no tool ran (story 526, BUG-220): call
+    /// the tool now, or say that it was not done. Never a required call: the model may find that none of its tools does it.
+    /// </summary>
+    public required string AnnouncedActionNotRun { get; init; }
+
+    /// <summary>
+    /// The second pass when the classifier named the tool that does the action reported, and the model was sent it (story
+    /// 526): that tool is there to call, now. <c>{tool}</c> is its name. Without it, beside the notice of an action left out
+    /// and its sign-in sentence, the model of the live A/B said it could not, and that signing in might help.
+    /// </summary>
+    public required string AnnouncedActionCall { get; init; }
+
+    /// <summary>
+    /// The knowledge-base search of the turn kept no document (story 194, <c>RagNoResultsNotice</c>): a question the
+    /// documents would cover is not answered from memory as if a document said it. The search runs on every message, so
+    /// the text also says that one needing no document — a greeting, an action, a question the tools answer — is answered
+    /// as usual.
+    /// </summary>
+    public required string RagNothingFound { get; init; }
+
     /// <summary>The texts for <paramref name="language"/>; a value outside <c>MentorLanguage</c> gets English.</summary>
     public static MentorPromptTexts For(MentorLanguage language) => language switch
     {
@@ -215,6 +236,25 @@ internal sealed class MentorPromptTexts
             offered one, say now, in one short sentence, that you cannot do it here. Never call one of your tools in
             its place: each tool does only what its description says.
             """,
+        AnnouncedActionNotRun = """
+            Your last reply announced or reported an action, but no tool ran in this turn: nothing was done. If one
+            of your tools does what the user asked for, call it now. Otherwise tell the user, in one short sentence,
+            that it was not done. Do not announce it again, and do not write that it was done unless a tool you call
+            now returns that it was.
+            """,
+        AnnouncedActionCall = """
+            Your last reply announced or reported the action of the tool {tool}, but no tool ran in this turn:
+            nothing was done. {tool} is one of your tools and is available to you now: call it now, with what the
+            user asked for. Do not write that it cannot be done here or that signing in is needed, and do not write
+            that it was done unless {tool} returns that it was.
+            """,
+        RagNothingFound = """
+            The search of the knowledge base found no document for this message. If the user asks about
+            something the documents would cover — a policy, a procedure, the details of a product or a service —
+            say that you did not find it in the documents, and do not answer from memory as if a document said it.
+            A message that needs no document — a greeting, an action, a question about the application's data,
+            which your tools answer — is answered as usual.
+            """,
     };
 
     internal static readonly MentorPromptTexts Italian = new()
@@ -272,6 +312,27 @@ internal sealed class MentorPromptTexts
             un tuo messaggio precedente — un sì, una scelta, un valore — non rende disponibile un'azione del genere: se
             l'hai offerta, di' ora, in una frase breve, che qui non puoi farla. Non chiamare mai uno dei tuoi strumenti al
             suo posto: ogni strumento fa solo quello che dice la sua descrizione.
+            """,
+        AnnouncedActionNotRun = """
+            La tua ultima risposta ha annunciato o riferito un'azione, ma in questo turno non è stato eseguito
+            nessuno strumento: non è stato fatto nulla. Se uno dei tuoi strumenti fa ciò che l'utente ha chiesto,
+            chiamalo adesso. Altrimenti di' all'utente, in una frase breve, che non è stato fatto. Non annunciarlo
+            di nuovo e non scrivere che è stato fatto, a meno che uno strumento che chiami adesso non restituisca
+            che lo è.
+            """,
+        AnnouncedActionCall = """
+            La tua ultima risposta ha annunciato o riferito l'azione dello strumento {tool}, ma in questo turno non
+            è stato eseguito nessuno strumento: non è stato fatto nulla. {tool} è uno dei tuoi strumenti ed è
+            disponibile adesso: chiamalo adesso, con quello che l'utente ha chiesto. Non scrivere che qui non si può
+            fare o che serve l'accesso, e non scrivere che è stato fatto, a meno che {tool} non restituisca che lo
+            è.
+            """,
+        RagNothingFound = """
+            La ricerca nella base di conoscenza non ha trovato nessun documento per questo messaggio. Se l'utente
+            chiede qualcosa che i documenti tratterebbero — una regola, una procedura, i dettagli di un prodotto o
+            di un servizio — di' che non l'hai trovato nei documenti, e non rispondere a memoria come se lo dicesse
+            un documento. Un messaggio che non ha bisogno di documenti — un saluto, un'azione, una domanda sui dati
+            dell'applicazione, a cui rispondono i tuoi strumenti — si tratta come sempre.
             """,
     };
 
@@ -331,6 +392,27 @@ internal sealed class MentorPromptTexts
             action disponible : si tu l'as proposée, dis maintenant, en une phrase courte, que tu ne peux pas la faire ici.
             N'appelle jamais l'un de tes outils à sa place : chaque outil fait seulement ce que dit sa description.
             """,
+        AnnouncedActionNotRun = """
+            Ta dernière réponse a annoncé ou rapporté une action, mais aucun outil n'a été exécuté pendant ce tour :
+            rien n'a été fait. Si l'un de tes outils fait ce que l'utilisateur a demandé, appelle-le maintenant.
+            Sinon, dis à l'utilisateur, en une courte phrase, que cela n'a pas été fait. Ne l'annonce pas de
+            nouveau, et n'écris pas que c'est fait, sauf si un outil que tu appelles maintenant renvoie que c'est le
+            cas.
+            """,
+        AnnouncedActionCall = """
+            Ta dernière réponse a annoncé ou rapporté l'action de l'outil {tool}, mais aucun outil n'a été exécuté
+            pendant ce tour : rien n'a été fait. {tool} est l'un de tes outils et il est disponible maintenant :
+            appelle-le maintenant, avec ce que l'utilisateur a demandé. N'écris pas que cela ne peut pas être fait
+            ici ou qu'il faut se connecter, et n'écris pas que c'est fait, sauf si {tool} renvoie que c'est le cas.
+            """,
+        RagNothingFound = """
+            La recherche dans la base de connaissances n'a trouvé aucun document pour ce message. Si l'utilisateur
+            demande quelque chose que les documents couvriraient — une règle, une procédure, les détails d'un
+            produit ou d'un service —, dis que tu ne l'as pas trouvé dans les documents, et ne réponds pas de
+            mémoire comme si un document le disait. Un message qui n'a besoin d'aucun document — une salutation,
+            une action, une question sur les données de l'application, à laquelle tes outils répondent — se
+            traite comme d'habitude.
+            """,
     };
 
     internal static readonly MentorPromptTexts German = new()
@@ -388,6 +470,28 @@ internal sealed class MentorPromptTexts
             Eine Antwort auf eine frühere Nachricht von dir — ein Ja, eine Auswahl, ein Wert — macht eine solche Aktion
             nicht verfügbar: Wenn du sie angeboten hast, sage jetzt in einem kurzen Satz, dass du sie hier nicht ausführen
             kannst. Rufe nie eines deiner Tools an ihrer Stelle auf: Jedes Tool tut nur, was seine Beschreibung sagt.
+            """,
+        AnnouncedActionNotRun = """
+            Deine letzte Antwort hat eine Aktion angekündigt oder gemeldet, aber in dieser Runde wurde kein Tool
+            ausgeführt: Es wurde nichts getan. Wenn eines deiner Tools tut, worum der Benutzer gebeten hat, rufe es
+            jetzt auf. Andernfalls sage dem Benutzer in einem kurzen Satz, dass es nicht getan wurde. Kündige es
+            nicht erneut an und schreibe nicht, dass es erledigt ist, es sei denn, ein Tool, das du jetzt aufrufst,
+            meldet, dass es erledigt wurde.
+            """,
+        AnnouncedActionCall = """
+            Deine letzte Antwort hat die Aktion des Tools {tool} angekündigt oder gemeldet, aber in dieser Runde
+            wurde kein Tool ausgeführt: Es wurde nichts getan. {tool} ist eines deiner Tools und steht dir jetzt zur
+            Verfügung: Rufe es jetzt auf, mit dem, worum der Benutzer gebeten hat. Schreibe nicht, dass es hier
+            nicht möglich ist oder dass eine Anmeldung nötig ist, und schreibe nicht, dass es erledigt ist, es sei
+            denn, {tool} meldet, dass es erledigt wurde.
+            """,
+        RagNothingFound = """
+            Die Suche in der Wissensdatenbank hat für diese Nachricht kein Dokument gefunden. Wenn der Benutzer
+            nach etwas fragt, das die Dokumente abdecken würden — eine Regel, ein Verfahren, die Einzelheiten eines
+            Produkts oder einer Dienstleistung —, sage, dass du es in den Dokumenten nicht gefunden hast, und
+            antworte nicht aus dem Gedächtnis, als stünde es in einem Dokument. Eine Nachricht, die kein Dokument
+            braucht — eine Begrüßung, eine Aktion, eine Frage zu den Daten der Anwendung, die deine Tools
+            beantworten —, wird wie gewohnt beantwortet.
             """,
     };
 
@@ -447,6 +551,26 @@ internal sealed class MentorPromptTexts
             ofreciste, di ahora, en una frase breve, que aquí no puedes hacerla. Nunca llames a una de tus herramientas en
             su lugar: cada herramienta hace solo lo que dice su descripción.
             """,
+        AnnouncedActionNotRun = """
+            Tu última respuesta anunció o informó de una acción, pero en este turno no se ejecutó ninguna
+            herramienta: no se hizo nada. Si una de tus herramientas hace lo que el usuario pidió, llámala ahora. Si
+            no, dile al usuario, en una frase breve, que no se hizo. No lo vuelvas a anunciar y no escribas que se
+            hizo, salvo que una herramienta que llames ahora devuelva que se hizo.
+            """,
+        AnnouncedActionCall = """
+            Tu última respuesta anunció o informó de la acción de la herramienta {tool}, pero en este turno no se
+            ejecutó ninguna herramienta: no se hizo nada. {tool} es una de tus herramientas y está disponible ahora:
+            llámala ahora, con lo que el usuario pidió. No escribas que aquí no se puede hacer o que hace falta
+            iniciar sesión, y no escribas que se hizo, salvo que {tool} devuelva que se hizo.
+            """,
+        RagNothingFound = """
+            La búsqueda en la base de conocimiento no encontró ningún documento para este mensaje. Si el usuario
+            pregunta por algo que los documentos cubrirían — una norma, un procedimiento, los detalles de un
+            producto o de un servicio —, di que no lo encontraste en los documentos, y no respondas de memoria
+            como si lo dijera un documento. Un mensaje que no necesita ningún documento — un saludo, una acción,
+            una pregunta sobre los datos de la aplicación, que responden tus herramientas — se atiende como
+            siempre.
+            """,
     };
 
     internal static readonly MentorPromptTexts Portuguese = new()
@@ -504,6 +628,26 @@ internal sealed class MentorPromptTexts
             resposta a uma mensagem sua anterior — um sim, uma escolha, um valor — não torna essa ação disponível: se você a
             ofereceu, diga agora, em uma frase curta, que não pode fazê-la aqui. Nunca chame uma das suas ferramentas no
             lugar dela: cada ferramenta faz apenas o que diz a sua descrição.
+            """,
+        AnnouncedActionNotRun = """
+            Sua última resposta anunciou ou relatou uma ação, mas nenhuma ferramenta foi executada neste turno: nada
+            foi feito. Se uma das suas ferramentas faz o que o usuário pediu, chame-a agora. Caso contrário, diga ao
+            usuário, em uma frase curta, que isso não foi feito. Não anuncie isso de novo e não escreva que foi
+            feito, a menos que uma ferramenta que você chamar agora retorne que foi.
+            """,
+        AnnouncedActionCall = """
+            Sua última resposta anunciou ou relatou a ação da ferramenta {tool}, mas nenhuma ferramenta foi
+            executada neste turno: nada foi feito. {tool} é uma das suas ferramentas e está disponível agora:
+            chame-a agora, com o que o usuário pediu. Não escreva que isso não pode ser feito aqui ou que é preciso
+            entrar na conta, e não escreva que foi feito, a menos que {tool} retorne que foi.
+            """,
+        RagNothingFound = """
+            A pesquisa na base de conhecimento não encontrou nenhum documento para esta mensagem. Se o usuário
+            perguntar sobre algo que os documentos cobririam — uma regra, um procedimento, os detalhes de um
+            produto ou de um serviço —, diga que não o encontrou nos documentos e não responda de memória como se
+            um documento o dissesse. Uma mensagem que não precisa de nenhum documento — uma saudação, uma ação,
+            uma pergunta sobre os dados da aplicação, que as suas ferramentas respondem — é tratada como de
+            costume.
             """,
     };
 
@@ -563,6 +707,25 @@ internal sealed class MentorPromptTexts
             aangeboden, zeg dan nu in één korte zin dat je die hier niet kunt uitvoeren. Roep nooit een van je tools aan in
             plaats ervan: elke tool doet alleen wat de beschrijving ervan zegt.
             """,
+        AnnouncedActionNotRun = """
+            Je laatste antwoord kondigde een actie aan of meldde er een, maar in deze beurt is geen tool uitgevoerd:
+            er is niets gedaan. Als een van je tools doet wat de gebruiker vroeg, roep die nu aan. Zeg anders tegen
+            de gebruiker, in één korte zin, dat het niet is gedaan. Kondig het niet opnieuw aan en schrijf niet dat
+            het gedaan is, tenzij een tool die je nu aanroept meldt dat het gedaan is.
+            """,
+        AnnouncedActionCall = """
+            Je laatste antwoord kondigde de actie van de tool {tool} aan of meldde die, maar in deze beurt is geen
+            tool uitgevoerd: er is niets gedaan. {tool} is een van je tools en is nu voor je beschikbaar: roep die
+            nu aan, met wat de gebruiker vroeg. Schrijf niet dat het hier niet kan of dat inloggen nodig is, en
+            schrijf niet dat het gedaan is, tenzij {tool} meldt dat het gedaan is.
+            """,
+        RagNothingFound = """
+            De zoekopdracht in de kennisbank heeft geen document gevonden voor dit bericht. Als de gebruiker vraagt
+            naar iets wat de documenten zouden behandelen — een regel, een procedure, de details van een product of
+            een dienst — zeg dan dat je het niet in de documenten hebt gevonden, en antwoord niet uit je geheugen
+            alsof een document het zei. Een bericht dat geen document nodig heeft — een begroeting, een actie, een
+            vraag over de gegevens van de applicatie, die je tools beantwoorden — behandel je zoals altijd.
+            """,
     };
 
     internal static readonly MentorPromptTexts Polish = new()
@@ -621,6 +784,26 @@ internal sealed class MentorPromptTexts
             jeśli ją zaproponowano, powiedz teraz, jednym krótkim zdaniem, że nie możesz jej tutaj wykonać. Nigdy nie wywołuj
             żadnego ze swoich narzędzi zamiast niej: każde narzędzie robi tylko to, co mówi jego opis.
             """,
+        AnnouncedActionNotRun = """
+            Twoja ostatnia odpowiedź zapowiedziała lub zgłosiła akcję, ale w tej turze nie uruchomiono żadnego
+            narzędzia: nic nie zostało zrobione. Jeśli jedno z twoich narzędzi robi to, o co prosił użytkownik,
+            wywołaj je teraz. W przeciwnym razie powiedz użytkownikowi jednym krótkim zdaniem, że nie zostało to
+            zrobione. Nie zapowiadaj tego ponownie i nie pisz, że zostało to zrobione, chyba że narzędzie, które
+            teraz wywołasz, zwróci, że tak.
+            """,
+        AnnouncedActionCall = """
+            Twoja ostatnia odpowiedź zapowiedziała lub zgłosiła akcję narzędzia {tool}, ale w tej turze nie
+            uruchomiono żadnego narzędzia: nic nie zostało zrobione. {tool} jest jednym z twoich narzędzi i jest
+            teraz dostępne: wywołaj je teraz, z tym, o co prosił użytkownik. Nie pisz, że nie da się tego zrobić
+            tutaj ani że trzeba się zalogować, i nie pisz, że zostało to zrobione, chyba że {tool} zwróci, że tak.
+            """,
+        RagNothingFound = """
+            Wyszukiwanie w bazie wiedzy nie znalazło żadnego dokumentu dla tej wiadomości. Jeśli użytkownik pyta
+            o coś, co obejmowałyby dokumenty — zasadę, procedurę, szczegóły produktu lub usługi — powiedz, że nie
+            znalazłeś tego w dokumentach, i nie odpowiadaj z pamięci, jakby mówił to dokument. Wiadomość, która nie
+            wymaga żadnego dokumentu — powitanie, działanie, pytanie o dane aplikacji, na które odpowiadają twoje
+            narzędzia — traktuj jak zwykle.
+            """,
     };
 
     internal static readonly MentorPromptTexts Japanese = new()
@@ -667,6 +850,18 @@ internal sealed class MentorPromptTexts
         NotAvailableFollowUp = """
             どのツールでもできない操作を提案せず、それを行うかどうかをユーザーに尋ねないでください。あなたの前のメッセージへの返事（「はい」、選択、値）は、そのような操作を利用できるようにはしません。提案してしまった場合は、ここではできないことを今、短い文で伝えてください。その代わりにほかのツールを呼び出すことは決してしないでください。各ツールは、その説明にあることしか行いません。
             """,
+        AnnouncedActionNotRun = """
+            あなたの直前の返答は操作を予告または報告しましたが、このターンではどのツールも実行されていません。つまり、何も行われていません。ユーザーが求めたことをあなたのツールのどれかが行えるなら、今それを呼び出してください。そうでなければ、行われていないことを、短い一文でユーザーに伝えてください。もう一度予告しないでください。また、今呼び出したツールが完了したと返さない限り、完了したとは書かないでください。
+            """,
+        AnnouncedActionCall = """
+            あなたの直前の返答はツール {tool} の操作を予告または報告しましたが、このターンではどのツールも実行されていません。つまり、何も行われていません。{tool} はあなたのツールの一つで、今使えます。ユーザーが求めた内容で、今それを呼び出してください。ここではできない、またはサインインが必要だとは書かないでください。また、{tool} が完了したと返さない限り、完了したとは書かないでください。
+            """,
+        RagNothingFound = """
+            ナレッジベースの検索では、このメッセージに該当する文書は見つかりませんでした。ユーザーが文書で扱われるはずの内容
+            （規則、手順、製品やサービスの詳細など）について尋ねている場合は、文書の中に見つからなかったと伝え、文書に
+            書かれているかのように記憶から答えないでください。文書を必要としないメッセージ（あいさつ、操作の依頼、ツールが
+            答えるアプリケーションのデータに関する質問など）には、いつもどおりに対応してください。
+            """,
     };
 
     internal static readonly MentorPromptTexts Chinese = new()
@@ -712,6 +907,17 @@ internal sealed class MentorPromptTexts
             """,
         NotAvailableFollowUp = """
             不要提供你的任何工具都做不到的操作，也不要询问用户是否要执行它。用户对你之前消息的回复（“是”、一个选择、一个值）不会让这样的操作变得可用：如果你提出过它，现在用一句简短的话说明你在这里做不到。绝不要调用你的某个工具来代替它：每个工具只做其描述所说的事。
+            """,
+        AnnouncedActionNotRun = """
+            你上一条回复预告或报告了一个操作，但本轮没有运行任何工具：什么都没有做。如果你的某个工具能完成用户要求的事，现在就调用它。否则，用一句简短的话告诉用户这件事没有完成。不要再次预告，也不要写已经完成，除非你现在调用的工具返回已完成。
+            """,
+        AnnouncedActionCall = """
+            你上一条回复预告或报告了工具 {tool} 的操作，但本轮没有运行任何工具：什么都没有做。{tool} 是你的工具之一，现在就可以使用：现在就按用户的要求调用它。不要写这里无法完成或需要登录，也不要写已经完成，除非 {tool} 返回已完成。
+            """,
+        RagNothingFound = """
+            知识库的搜索没有为这条消息找到任何文档。如果用户询问的是文档本应涵盖的内容（规则、流程、产品或服务的细节等），
+            请说明你在文档中没有找到，不要凭记忆回答，好像某个文档这样说过一样。不需要文档的消息（问候、操作请求、由你的
+            工具回答的关于应用数据的问题）照常处理。
             """,
     };
 }

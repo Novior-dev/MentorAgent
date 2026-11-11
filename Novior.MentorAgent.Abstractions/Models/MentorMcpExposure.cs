@@ -10,8 +10,9 @@ public enum MentorMcpExposure
     PublishedToRoles = 1,
 
     /// <summary>
-    /// Never published: it asks for confirmation, the <c>RequiresApproval</c> predicate keeps it back, or it
-    /// requires roles and no <c>McpCallerPrincipal</c> is set.
+    /// Never published: it asks for confirmation, the <c>RequiresApproval</c> predicate keeps it back, it
+    /// requires roles and no <c>McpCallerPrincipal</c> is set, or the code ships it off
+    /// (<see cref="MentorActionInfo.EnabledByDefault"/>), unless an <c>IMentorActionGovernor</c> turns it on.
     /// </summary>
     Withheld = 2,
 

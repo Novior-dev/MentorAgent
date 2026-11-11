@@ -140,9 +140,10 @@ internal sealed class MentorTourService : IMentorTour
         // The tool list is what makes TryAsking concrete. Descriptions only: names are internal
         // and a user would never type "get_all_orders". Only the actions that need no role (BUG-206):
         // the tour is one for every visitor, and /mentor/tour answers anyone — an action some of them
-        // may not run is not one to suggest, and the MCP server describes it to nobody without the role.
+        // may not run is not one to suggest, and the MCP server describes it to nobody without the role. Nor one the
+        // code ships off (story 1549): the tour is built once, and cannot follow what a governor turns on per session.
         var tools = discovered.Level1Methods
-            .Where(m => m.RequiredRoles.Length == 0)
+            .Where(m => m.RequiredRoles.Length == 0 && m.EnabledByDefault)
             .Select(m => m.Description)
             .Where(d => !string.IsNullOrWhiteSpace(d))
             .Distinct(StringComparer.OrdinalIgnoreCase)

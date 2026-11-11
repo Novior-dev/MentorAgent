@@ -6,7 +6,8 @@ public sealed record MentorActionCount(string Action, long Count);
 /// <summary>
 /// A point-in-time view of MentorAgent usage for the admin token &amp; cost dashboard (roadmap #9).
 /// Produced by <c>IMentorMetrics.GetSnapshot()</c>. Process-wide (single instance); for
-/// multi-instance production aggregation use OpenTelemetry (roadmap #8).
+/// multi-instance production aggregation use OpenTelemetry (roadmap #8). With a tenant resolver,
+/// <c>IMentorMetrics.GetSnapshot(tenant)</c> produces one tenant's.
 /// </summary>
 public sealed record MentorMetricsSnapshot
 {

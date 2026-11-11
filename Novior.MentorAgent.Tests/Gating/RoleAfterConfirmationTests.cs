@@ -21,6 +21,7 @@ namespace Novior.MentorAgent.Tests.Gating;
 /// are documented as indistinguishable from the outside, so both are asserted here.
 /// </para>
 /// </summary>
+[Trait("Rule", "roles.checked-before-confirmation")]
 public sealed class RoleAfterConfirmationTests
 {
     private static string RoleRequired(MentorHostFixture host)

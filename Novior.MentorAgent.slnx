@@ -7,4 +7,5 @@
   <Project Path="Novior.MentorAgent/Novior.MentorAgent.csproj" />
   <Project Path="Novior.MentorAgent.Tests/Novior.MentorAgent.Tests.csproj" />
   <Project Path="Novior.MentorAgent.Tests.App/Novior.MentorAgent.Tests.App.csproj" />
+  <Project Path="Novior.MentorAgent.Tests.Rules/Novior.MentorAgent.Tests.Rules.csproj" />
 </Solution>

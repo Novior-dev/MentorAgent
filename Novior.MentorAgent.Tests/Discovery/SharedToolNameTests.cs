@@ -23,6 +23,7 @@ namespace Novior.MentorAgent.Tests.Discovery;
 /// <c>find_shared_invoice</c>; the third gives level 1 the test app's specialist action <c>get_tracking_status</c>.
 /// </para>
 /// </summary>
+[Trait("Rule", "name.shared-warned")]
 public sealed class SharedToolNameTests
 {
     private sealed class SharedInvoiceReader
