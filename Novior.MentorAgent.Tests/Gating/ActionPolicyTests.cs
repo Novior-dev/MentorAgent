@@ -388,9 +388,9 @@ public sealed class ActionPolicyTests
         (bob.Instructions ?? "").Should().Contain("Some other actions of this application are NOT available to this user on this turn")
             .And.NotContain("count_open_orders", "the notice names no action");
 
-        // bob's model calls it anyway: refused, and never run.
+        // bob's model calls it anyway: refused, and never run. BUG-233 — as not offered, without asking the policy again.
         host.Get<TestOrderService>().Invoked.Should().BeEmpty();
-        observer.Steps("count_open_orders").Should().Equal("Denied/not-authorized");
+        observer.Steps("count_open_orders").Should().Equal("Denied/not-offered");
     }
 
     // ── A task from another agent ────────────────────────────────────────────────

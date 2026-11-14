@@ -169,6 +169,7 @@ internal sealed class GroupChatBuilder
             // list the member's tools with their descriptions.
             var promptBuilder = _promptBuilder;
             var memberClient = ForTurn(Middleware.AgentRoleFilterChatClient.For(chatClient, tools, _gate,
+                MentorAgentKind.TeamMember, member.Attribute.Role,
                 mayRun => (promptBuilder.TeamMemberToolsBlock(member.Tools),
                            promptBuilder.TeamMemberToolsBlock([.. member.Tools.Where(t => mayRun(t.ToolName, t.Method))]))));
 

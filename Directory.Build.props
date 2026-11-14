@@ -1,7 +1,7 @@
 ﻿<Project>
   <PropertyGroup>
     <!-- Single version source for all MentorAgent packages -->
-    <Version>1.3.0</Version>
+    <Version>1.3.1</Version>
 
     <!-- Common metadata. Copyright matches NOTICE, which every package ships beside LICENSE.
          RepositoryUrl names the GitHub repository the source is published to. -->
@@ -45,7 +45,7 @@
          with the reason, in the project's CompatibilitySuppressions.xml. Move the baseline forward at each
          release. 1.0.0 had none: its ids (Novior.MentorAgent.*) were new. -->
     <EnablePackageValidation>true</EnablePackageValidation>
-    <PackageValidationBaselineVersion>1.2.0</PackageValidationBaselineVersion>
+    <PackageValidationBaselineVersion>1.3.0</PackageValidationBaselineVersion>
 
     <!-- A software bill of materials in every package: SPDX 2.2, at _manifest/spdx_2.2/manifest.spdx.json inside
          the .nupkg, so whoever installs a package can read what it is made of without looking for the pipeline's

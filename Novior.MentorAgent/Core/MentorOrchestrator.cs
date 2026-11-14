@@ -1167,7 +1167,7 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         try
         {
             var description = _warmTools?.OfType<AIFunction>().FirstOrDefault(t => t.Name == call.ToolName)?.Description;
-            check = await policies.CheckCallAsync(
+            check = await _uiMiddleware.CheckCallAsync(policies, call,
                 _uiMiddleware.PolicyRequest(call, arguments, description, requiresConfirmation: true), allowedOnly, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1952,7 +1952,8 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
         // tools this turn's user may run, as the coordinator is (BUG-205). Story 1274 — with the session's id, the one
         // the governor is asked with: on /mentor/chat and over A2A the coordinator is built again at every request.
         var context = new MentorAgentSourceContext(
-            Middleware.AgentRoleFilterChatClient.For(GetSpecialistChatClient() ?? _options.ChatClient, gated, _uiMiddleware),
+            Middleware.AgentRoleFilterChatClient.For(GetSpecialistChatClient() ?? _options.ChatClient, gated, _uiMiddleware,
+                MentorAgentKind.AgentSource, agentName: null),
             gated)
         {
             SessionId = _uiMiddleware.Session?.Id,
@@ -3458,7 +3459,11 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
                 if (!leftOut.Contains(function.Name)
                     && _uiMiddleware.IsApplicationAction(function.Name, MentorAgentKind.Coordinator)
                     && !await policies.IsOfferedAsync(_uiMiddleware.OfferRequest(function, user, _coordinator?.Name), ct))
+                {
                     leftOut.Add(function.Name);
+                    // BUG-233 — the function-invoking client still holds it: a call to it is refused at the gate.
+                    Turn?.NotOfferedByPolicies(MentorAgentKind.Coordinator, _coordinator?.Name, function.Name);
+                }
 
         _leftOutThisTurn = leftOut;
         // The model is told that something is missing, or it may claim what it has no tool for.

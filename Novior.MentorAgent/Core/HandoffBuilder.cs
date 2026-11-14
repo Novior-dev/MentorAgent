@@ -93,7 +93,8 @@ internal sealed class HandoffBuilder
                 // BUG-205: offered only the tools this turn's user may run, as the coordinator is. The language swap
                 // comes first, before the role filter, as on the coordinator.
                 Middleware.TurnLanguageChatClient.For(
-                    Middleware.AgentRoleFilterChatClient.For(chatClient, tools, _gate),
+                    Middleware.AgentRoleFilterChatClient.For(chatClient, tools, _gate,
+                        MentorAgentKind.Specialist, descriptor.Attribute.Name),
                     _sp.GetService<MentorTurnLanguage>(), builtLanguage, instructions, variant, descriptor.Attribute.Name, _logger),
                 new ChatClientAgentOptions
                 {

@@ -28,6 +28,37 @@ names of their time.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-14
+
+### Security
+
+- **Novior.MentorAgent:** a user could run an action an `IMentorActionPolicy` did not offer them (BUG-233, S1),
+  in 1.2.0 and 1.3.0. The policies were asked at `MentorActionStage.Offer` only about the coordinator's actions, so
+  a specialist, a team member and an agent of an `IMentorAgentSource` were offered such an action and could call it;
+  and a call to an action left out of the request — the coordinator's on Path A, whose function-invoking client still
+  holds it — was decided by the policies' answer at `MentorActionStage.Call` alone. A policy that decides whether the
+  user may use an action only at the offer, and looks at the record alone at the call, as the README's example did,
+  let it run. The policies now decide the offer of every agent's tools, asked once a turn at the agent's first
+  request with its `AgentKind` and `AgentName`; a call to an action they did not offer that agent in the turn is
+  refused as `Denied`, `not-offered`, without asking them about the call and before any banner; the README's example
+  asks the coarse question at the call too. Roles and the governor were not affected. Without this version, answer
+  at `MentorActionStage.Call` the question you answer at `MentorActionStage.Offer`.
+
+### Changed
+
+- **Novior.MentorAgent:** with an `IMentorActionPolicy` registered, specialists, team members and the agents of an
+  `IMentorAgentSource` are offered fewer tools: those the policies offer the user, as the coordinator is. A policy is
+  asked at `MentorActionStage.Offer` with `AgentKind` `Specialist`, `TeamMember` or `AgentSource` as well, once a turn
+  for each tool of an agent that works in the turn, and no longer at `MentorActionStage.Call` for a call to an action
+  it did not offer in the turn. `IMentorActionObserver` sees that call as `Denied`, `not-offered`, not
+  `not-authorized`. No public API changes.
+- The support policy: only the latest minor version gets fixes, in grouped patch versions built from its release
+  branch, and a security fix ships as soon as it is ready; every fix of a patch is also in the next minor version.
+  Earlier minor versions get no more fixes, security fixes included: upgrade to the latest minor version, which is
+  always compatible with the earlier ones. The security fixes promised for 1.0.x, 1.1.x and 1.2.x are withdrawn; a
+  new major version will state its support window when it is released. See *Versioning and support* in the README
+  and SECURITY.md.
+
 ## [1.3.0] - 2026-11-05
 
 ### Added
@@ -1815,6 +1846,7 @@ names of their time.
 - **MentorAgent:** `MentorRemoteAgent.RequiredRoles` is not enforced: any user can reach a remote agent.
 
 [Unreleased]: https://www.nuget.org/packages/Novior.MentorAgent
+[1.3.1]: https://www.nuget.org/packages/Novior.MentorAgent/1.3.1
 [1.3.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.3.0
 [1.2.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.2.0
 [1.1.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.1.0

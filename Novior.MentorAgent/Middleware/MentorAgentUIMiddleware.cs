@@ -795,8 +795,12 @@ internal sealed class MentorAgentUIMiddleware
     private MentorActionRequest GovernorRequest(GateCall call, IEnumerable<KeyValuePair<string, object?>>? arguments)
         => PolicyRequest(call, arguments, description: null, _confirmations.CodeRequiresApproval(call.ToolName, call.Method));
 
-    /// <summary>What the policies are asked about one of the coordinator's actions, as a turn decides what to offer.</summary>
-    internal MentorActionRequest OfferRequest(AIFunction function, ClaimsPrincipal? user, string? agentName)
+    /// <summary>
+    /// What the policies are asked about one of an agent's actions, as a turn decides what to offer: the coordinator's,
+    /// or (BUG-233) a specialist's, a team member's or an agent source's.
+    /// </summary>
+    internal MentorActionRequest OfferRequest(AIFunction function, ClaimsPrincipal? user, string? agentName,
+        MentorAgentKind agentKind = MentorAgentKind.Coordinator)
         => new()
         {
             Stage                = MentorActionStage.Offer,
@@ -804,7 +808,7 @@ internal sealed class MentorAgentUIMiddleware
             Description          = string.IsNullOrWhiteSpace(function.Description) ? null : function.Description,
             User                 = user,
             Surface              = Turn?.Surface ?? MentorActionSurface.InProcess,
-            AgentKind            = MentorAgentKind.Coordinator,
+            AgentKind            = agentKind,
             AgentName            = agentName,
             SessionId            = Session?.Id,
             TurnId               = Turn?.TurnId,
@@ -978,7 +982,7 @@ internal sealed class MentorAgentUIMiddleware
         PolicyCheck check;
         try
         {
-            check = await policies.CheckCallAsync(PolicyRequest(call, arguments, description, requiresConfirmation),
+            check = await CheckCallAsync(policies, call, PolicyRequest(call, arguments, description, requiresConfirmation),
                 allowedOnly, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -995,6 +999,19 @@ internal sealed class MentorAgentUIMiddleware
     }
 
     /// <summary>
+    /// The policies' decision about one call. BUG-233 — a call to an action they did not offer this agent in the turn is
+    /// refused without asking them (<see cref="MentorActionReasons.NotOffered"/>): a policy may decide whether the user
+    /// may use an action only when it is offered, and look at the record alone at the call, so asking it again could
+    /// run an action it took away. The model is offered all the tools it calls only through its function-invoking
+    /// client, which still holds those left out.
+    /// </summary>
+    internal ValueTask<PolicyCheck> CheckCallAsync(MentorActionPolicies policies, GateCall call,
+        MentorActionRequest request, bool allowedOnly, CancellationToken ct)
+        => call.AgentKind is { } agentKind && Turn?.WasNotOfferedByPolicies(agentKind, call.AgentName, call.ToolName) == true
+            ? ValueTask.FromResult(new PolicyCheck(PolicyResult.NotAllowed, ReasonCode: MentorActionReasons.NotOffered))
+            : policies.CheckCallAsync(request, allowedOnly, ct);
+
+    /// <summary>
     /// What the model reads for a call the policies refused, with its log line; null when they let it through. Never
     /// "declined by the user": nobody was asked.
     /// </summary>
@@ -1002,6 +1019,11 @@ internal sealed class MentorAgentUIMiddleware
     {
         switch (check.Result)
         {
+            case PolicyResult.NotAllowed when check.ReasonCode == MentorActionReasons.NotOffered:
+                _logger.LogWarning(
+                    "[MentorAgent] {Caller} called tool '{Tool}', which an action policy did not offer on this turn — blocked.",
+                    MentorUserKey.LogTag(call.User), call.ToolName);
+                return L.Get("auth.not.authorized");
             case PolicyResult.NotAllowed:
                 _logger.LogWarning("[MentorAgent] {Caller} not allowed tool '{Tool}' by an action policy — blocked.",
                     MentorUserKey.LogTag(call.User), call.ToolName);

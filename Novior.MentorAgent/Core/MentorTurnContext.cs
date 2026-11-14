@@ -23,6 +23,12 @@ internal sealed class MentorTurnContext
     /// <summary>The calls of this turn that reached the gate, by the model's id (story 526).</summary>
     private readonly ConcurrentDictionary<string, byte> _gated = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The actions the application's policies did not offer in this turn, by agent (BUG-233): a call to one is refused
+    /// at the gate, whatever the policies answer about the call.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, byte> _notOffered = new(StringComparer.Ordinal);
+
     /// <summary>Where this scope's turns come from. Set by the transport; in-process when none runs.</summary>
     internal MentorActionSurface Surface { get; set; } = MentorActionSurface.InProcess;
 
@@ -96,7 +102,24 @@ internal sealed class MentorTurnContext
         Language = default;
         _confirmed.Clear();
         _gated.Clear();
+        _notOffered.Clear();
     }
+
+    /// <summary>
+    /// Records that the application's policies did not offer <paramref name="toolName"/> to this agent in this turn
+    /// (BUG-233). A specialist and a team member are told apart by their name; the coordinator and the agents of the
+    /// agent sources, which share one client, by their kind.
+    /// </summary>
+    internal void NotOfferedByPolicies(MentorAgentKind agentKind, string? agentName, string toolName)
+        => _notOffered[NotOfferedKey(agentKind, agentName, toolName)] = 0;
+
+    /// <summary>Whether the application's policies did not offer <paramref name="toolName"/> to this agent in this turn.</summary>
+    internal bool WasNotOfferedByPolicies(MentorAgentKind agentKind, string? agentName, string toolName)
+        => _notOffered.ContainsKey(NotOfferedKey(agentKind, agentName, toolName));
+
+    private static string NotOfferedKey(MentorAgentKind agentKind, string? agentName, string toolName)
+        => string.Concat(((int)agentKind).ToString(System.Globalization.CultureInfo.InvariantCulture), "\u001f",
+            agentKind is MentorAgentKind.Specialist or MentorAgentKind.TeamMember ? agentName : null, "\u001f", toolName);
 
     /// <summary>
     /// Records whom this turn's tools are offered to, as the orchestrator read the user when the turn started, and the

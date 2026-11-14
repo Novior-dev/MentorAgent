@@ -268,7 +268,7 @@ In `MainLayout.razor` (or `App.razor`):
 <ChatWidget />
 ```
 
-That's it. The widget injects its own CSS and JS automatically — no changes to `App.razor` or `_Host.cshtml` are required. Only `ChatWidget` does this: a surface composed from the package's components without `ChatWidget` must add the `<link>` to `_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.3.0` and the `<script>` for `_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.3.0` itself, or it renders unstyled and voice, paste and drag-and-drop stay off. The `?v=` is the version of the package you install: change it when you upgrade.
+That's it. The widget injects its own CSS and JS automatically — no changes to `App.razor` or `_Host.cshtml` are required. Only `ChatWidget` does this: a surface composed from the package's components without `ChatWidget` must add the `<link>` to `_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.3.1` and the `<script>` for `_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.3.1` itself, or it renders unstyled and voice, paste and drag-and-drop stay off. The `?v=` is the version of the package you install: change it when you upgrade.
 
 > **The widget must be interactive.** In a Blazor Web App make the app interactive as a whole — `<Routes @rendermode="InteractiveServer" />` in `App.razor` (the template's *Interactivity location: Global*). In a layout that renders statically, `<ChatWidget />` shows its button and nothing happens when it is clicked. A page rendered statically has no circuit either, so it cannot register `IMentorPageContext` data or UI actions. For Auto / WebAssembly apps see [Blazor Server vs Blazor WASM](#blazor-server-vs-blazor-wasm).
 
@@ -2071,7 +2071,7 @@ builder.Services.AddMentorAgentBlazor(options =>
 ```
 
 > ⚠️ **Three WASM-only setup steps** not required in Blazor Server:
-> 1. **CSS/JS links** — in a standalone WASM app the static `index.html` is served before the .NET runtime starts, so the widget cannot inject its own assets. A Blazor Web App has no `index.html`: prerendered, the widget writes the tags itself; without prerendering they go in `App.razor`. Where you add them, add `<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.3.0" rel="stylesheet" />` and `<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.3.0"></script>` manually — **set the `?v=` to the version of the package you install and change it on every upgrade**, because nothing fingerprints these two and a cached older `MentorAgent.js` silently costs you the onboarding tour and streaming voice.
+> 1. **CSS/JS links** — in a standalone WASM app the static `index.html` is served before the .NET runtime starts, so the widget cannot inject its own assets. A Blazor Web App has no `index.html`: prerendered, the widget writes the tags itself; without prerendering they go in `App.razor`. Where you add them, add `<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.3.1" rel="stylesheet" />` and `<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.3.1"></script>` manually — **set the `?v=` to the version of the package you install and change it on every upgrade**, because nothing fingerprints these two and a cached older `MentorAgent.js` silently costs you the onboarding tour and streaming voice.
 > 2. **CORS + absolute `HubUrl`** when the WASM app and the server are on different origins (different ports). Confirmations and Stop (`POST /mentor/approve`, `/mentor/cancel`) then go to the hub's origin with the `AccessTokenProvider` token, through the `HttpClient` the client registers (step 3). See the [Novior.MentorAgent.Server](https://www.nuget.org/packages/Novior.MentorAgent.Server) and [Novior.MentorAgent.Blazor](https://www.nuget.org/packages/Novior.MentorAgent.Blazor) READMEs.
 > 3. **An `HttpClient` in the client project** — the widget sends Stop and confirmations through it, and `AddMentorAgentBlazor()` does not register one. The standalone WebAssembly template does; the client project of a Blazor Web App does not, and without it the WebAssembly runtime does not start (`CannotResolveService … HttpClient`). Add `builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) });` to its `Program.cs`, as in the snippet above.
 
@@ -2102,7 +2102,7 @@ with `NU1605`: `Microsoft.Extensions.Hosting` came in with the same server depen
 
 ```xml
 <!-- in the <ItemGroup> the MAUI template generated -->
-<PackageReference Include="Novior.MentorAgent" Version="1.3.0" />
+<PackageReference Include="Novior.MentorAgent" Version="1.3.1" />
 ```
 
 **2 · Reference the widget's static assets.** A MAUI app serves `wwwroot/index.html` itself, and the
@@ -2447,8 +2447,9 @@ public sealed class CompanyPolicy : IMentorActionPolicy
     public async ValueTask<bool> IsAllowedAsync(MentorActionRequest request, CancellationToken ct)
     {
         var permissions = request.Services.GetRequiredService<IPermissionService>();   // scoped
-        if (request.Stage == MentorActionStage.Offer)
-            return await permissions.MayUseAsync(request.User, request.ToolName, ct);    // coarse: the company
+        // Coarse: may this user use the action at all? Asked at the offer and again at every call.
+        if (!await permissions.MayUseAsync(request.User, request.ToolName, ct)) return false;
+        if (request.Stage == MentorActionStage.Offer) return true;
 
         // Call: the record the model asks about. The value comes from the model: parse it, never trust it.
         return request.Arguments?.TryGetValue("orderId", out var id) == true
@@ -2469,13 +2470,18 @@ the order of registration. Both methods have a default body, so a policy writes 
 
 **`IsAllowedAsync` — may this user use this action?** `true` by default. It is asked with `Stage` set to
 `MentorActionStage.Offer` when MentorAgent decides what to offer: at every turn, for each of the application's
-actions the coordinator holds, and at every `tools/list` of the MCP server, for each tool it publishes. There is no
-call yet, so `Arguments` and `CallId` are `null`. An action it does not allow is left out as one the user has no role
-for (see [Role-based actions](#role-based-actions)): not offered, not counted in the prompt, with the same notice
-that names nothing. It is asked again with `MentorActionStage.Call` before every call, with the arguments, and once
-more after the user confirmed: a permission taken away while the banner waits stops the action, as a role does. A
-call it does not allow is refused (`Denied`, `not-authorized`): the model reads that the user may not use this
-action, and the log has one Warning.
+actions the coordinator holds; for each tool of a specialist, a team member or an agent of an `IMentorAgentSource`
+at that agent's first request of the turn, with its `AgentKind` and `AgentName`; and at every `tools/list` of the
+MCP server, for each tool it publishes. There is no call yet, so `Arguments` and `CallId` are `null`. An action it
+does not allow is left out as one the user has no role for (see [Role-based actions](#role-based-actions)): not
+offered, not counted in the prompt, with the same notice that names nothing. A call to it all the same — the model
+remembers it from an earlier turn, or the user dictates it — is refused for that turn (`Denied`, `not-offered`),
+without asking the policy about the call. It is asked again with `MentorActionStage.Call` before every call, with
+the arguments, and once more after the user confirmed: a permission taken away while the banner waits stops the
+action, as a role does. A call it does not allow is refused (`Denied`, `not-authorized`): the model reads that the
+user may not use this action, and the log has one Warning. Answer the coarse question at the call too, as the
+example does: up to 1.3.0 a call to an action a policy had not offered was decided by its answer at the call alone,
+and through a specialist or a team the action was offered as well (BUG-233).
 
 **`BeforeActionAsync` — may this call run?** Asked before every call, once the roles and `IsAllowedAsync` have let
 it through, it answers a `MentorActionVerdict`:
@@ -2525,7 +2531,7 @@ The log names the exception's type, never its message.
 | Surface | `IsAllowedAsync` at `Offer` | Before a call | A `Confirm` |
 |---|---|---|---|
 | The widget, the hub and `/mentor/chat`, in `Blocking` and in `Native` mode | At every turn | `IsAllowedAsync`, then `BeforeActionAsync` | The usual banner |
-| Specialists, team members, the agents of an `IMentorAgentSource` | Not asked: a policy leaves none of their tools out (their roles do — see [Role-based actions](#role-based-actions)) | `IsAllowedAsync`, then `BeforeActionAsync` | The usual banner |
+| Specialists, team members, the agents of an `IMentorAgentSource` | At the agent's first request of the turn, once a turn for each of its tools, with its `AgentKind` and `AgentName`. A call to a tool it did not offer is refused without asking it: `not-offered` | `IsAllowedAsync`, then `BeforeActionAsync` | The usual banner |
 | A task from another agent (A2A) | At every turn | The same | Refused: `nobody-to-confirm` |
 | The MCP server | At every `tools/list` | At every `tools/call` | Refused: `nobody-to-confirm` |
 
@@ -2715,7 +2721,7 @@ the CHANGELOG says so.
 | `Outcome` | When | `ReasonCode` |
 |---|---|---|
 | `Allowed` | The roles and every [`IMentorActionPolicy`](#deciding-before-an-action-runs--imentoractionpolicy) allow the call; the confirmation, when the action or a policy asks for one, comes next | `allowed`; `auto-approved` when, in `Native` mode, an `AutoApprovalRules` rule let a call that asks for confirmation run without asking |
-| `Denied` | Refused | `disabled` (the action is off: shipped off and not turned on, or turned off by the governor), `role-missing`, `login-required` (a role is required and nobody is signed in), `auth-not-configured` (no `AuthenticationStateProvider`), `auth-check-failed` (reading the user threw), `not-authorized` (a policy does not allow this user the action), `nobody-to-confirm` (the action or a policy asks for a confirmation nobody can give: a task from another agent, a call to the MCP server), `not-offered` (the model called an action of the application its agent was not given in the turn — one that is off, or another agent's: no gate saw the call, and nothing ran); on the MCP server also `withheld` (an action it does not publish) and `rate-limited` |
+| `Denied` | Refused | `disabled` (the action is off: shipped off and not turned on, or turned off by the governor), `role-missing`, `login-required` (a role is required and nobody is signed in), `auth-not-configured` (no `AuthenticationStateProvider`), `auth-check-failed` (reading the user threw), `not-authorized` (a policy does not allow this user the action), `nobody-to-confirm` (the action or a policy asks for a confirmation nobody can give: a task from another agent, a call to the MCP server), `not-offered` (the model called an action of the application its agent was not given in the turn — one that is off, or another agent's: no gate saw the call, and nothing ran; or one an action policy did not offer that agent in the turn: the gate refused it without asking the policies about the call); on the MCP server also `withheld` (an action it does not publish) and `rate-limited` |
 | `ConfirmationRequested`, `Confirmed`, `Rejected` | The user is asked, says yes, says no | `operator`; `policy` on `ConfirmationRequested` when a policy asked for a confirmation the action does not ask for itself; `confirmation-timeout` on `Rejected` when nobody answered within `ConfirmationTimeout` |
 | `Stopped` | Stopped before it finished | `stop` (Stop, `/mentor/cancel`, the MCP client cancelled the call, or the caller cancelled the A2A task — also after the confirmation, before the action started), `session-ended` (the circuit, the hub connection or the request closed), `turn-ended` (in `Native` mode, the turn ended before a confirmed call could run) |
 | `Executed` | The action ran | `completed`; `result-withheld` when `OnToolResult` threw — on the MCP server the caller then gets an error result |
@@ -5302,7 +5308,8 @@ conversation belongs to another organization. Reload the page to start a new one
   together with one version number, and each one requires the others at exactly that version. Upgrade them
   together.
 - **Semantic Versioning 2.0.0, from 1.0.0.** A breaking change to the public contract ships only in a new
-  major version. Minor versions add features; patch versions fix defects.
+  major version. Minor versions add features; patch versions only fix defects of the latest minor version (see
+  *Support*).
 - **What the contract is:** the public C# API of the five packages; the hub methods, hub events, SSE
   frames and HTTP endpoints documented in the Novior.MentorAgent.Server README; the names of the tools the
   library itself gives the model (`route_to_specialist`, `navigate_to`, `load_skill` and the others this
@@ -5318,11 +5325,14 @@ conversation belongs to another organization. Reload the page to start a new one
   newer version that breaks MentorAgent — as A2A 1.0.0-preview3 did with 1.1.0 — is fixed in the next version and
   listed under *Known issues* in the CHANGELOG until then. The AI provider's packages are not among them: their
   versions are the host's (see [Provider package versions](#provider-package-versions)).
-- **Support.** .NET 10. The latest minor version gets every fix. When a new minor version is released, the
-  previous one still gets security fixes for 3 months; when a new major version is released, the previous major
-  gets them for 6 months. 1.0.x gets security fixes until 21 January 2027. A vulnerability report is acknowledged
-  within 5 working days, best effort, and its fix is announced as a GitHub Security Advisory and in the release
-  notes. See [SECURITY.md](https://github.com/Novior-dev/MentorAgent/blob/main/SECURITY.md).
+- **Support.** .NET 10. Only the latest minor version gets fixes. They ship in its patch versions, built from
+  its release branch and grouped: one patch for a set of defects, not one for each. A security fix ships as soon as
+  it is ready. Every fix of a patch is also in the next minor version. Earlier minor versions get no more fixes:
+  upgrade to the latest one, which is always compatible, because every package is checked against the public API
+  of the last published version before it is released. A new major version will state its support window when it
+  is released. A vulnerability report is acknowledged within 5 working days, best effort, and its fix is announced
+  as a GitHub Security Advisory and in the release notes. See
+  [SECURITY.md](https://github.com/Novior-dev/MentorAgent/blob/main/SECURITY.md).
 - **Questions, bugs and requests.** Questions go to
   [Discussions](https://github.com/Novior-dev/MentorAgent/discussions), bugs and feature requests to
   [issues](https://github.com/Novior-dev/MentorAgent/issues/new/choose) on GitHub, and a vulnerability privately to
