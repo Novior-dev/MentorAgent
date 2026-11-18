@@ -48,6 +48,15 @@ public static class ServiceCollectionExtensions
     /// also reads (<c>webSearch</c>, <c>codeInterpreter</c>, <c>fileSearch</c>, <c>mcp</c>) are removed
     /// with a warning: those capabilities are the host's to configure.
     /// </para>
+    ///
+    /// <para>
+    /// A team is written the same way, in a <c>*.team.yaml</c> file of the same folder
+    /// (<see cref="MentorDeclarativeOptions.TeamSearchPattern"/>) or in
+    /// <see cref="MentorDeclarativeOptions.TeamDefinitions"/>: <c>name</c>, <c>description</c>, <c>members</c> with their
+    /// <c>role</c>, <c>instructions</c> and <c>tools</c> named as the session's actions, and optionally <c>approver</c>,
+    /// <c>triggerOn</c>, <c>maxIterations</c> and <c>handoffTo</c>. A file that does not hold is left out with its line
+    /// and column.
+    /// </para>
     /// </summary>
     public static IServiceCollection AddMentorAgentDeclarative(
         this IServiceCollection services,
@@ -70,6 +79,13 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<MentorDeclarativeOptions>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetService<IConfiguration>())));
+
+        // Story 1570, slice B: the teams of the same folder (*.team.yaml) and TeamDefinitions, through the core's
+        // IMentorTeamSource: the core checks them as it checks any source's.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IMentorTeamSource, DeclarativeTeamSource>(sp => new DeclarativeTeamSource(
+                sp.GetRequiredService<MentorDeclarativeOptions>(),
+                sp.GetRequiredService<ILoggerFactory>())));
 
         return services;
     }

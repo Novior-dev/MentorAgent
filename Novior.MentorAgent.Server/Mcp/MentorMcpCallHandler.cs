@@ -621,6 +621,8 @@ internal sealed class MentorMcpCallHandler(
             SessionId     = context.Server?.SessionId is { Length: > 0 } session ? "mcp#" + Fingerprint(session) : null,
             CallId        = context.JsonRpcRequest?.Id.ToString(),
             User          = user?.Identity?.IsAuthenticated == true ? user : null,
+            // Story 1620 — the request's tenant, entered before anything is decided for it.
+            TenantId      = MentorTenantContext.Ambient,
             RequiredRoles = lookup.RequiredRoles,
             RolesFromOutside = lookup.RolesFromOutside,
             ConfirmationFromOutside = lookup.ConfirmationFromOutside,

@@ -225,10 +225,13 @@ internal sealed class MentorConfirmationBuilder
     /// </summary>
     public string BuildMessage(
         string toolName, IEnumerable<KeyValuePair<string, object?>>? arguments, IServiceProvider? services = null,
-        MethodInfo? method = null)
+        MethodInfo? method = null, string? description = null)
     {
-        var description = GetToolDescription(toolName, method);
-        var shown = ShownArguments(toolName, arguments, method);
+        // A UI action of the page (story 1501) gives its own description, and its arguments in the model's order: nothing
+        // is looked up by its name, which may be an action's the session does not offer.
+        var own = description is not null;
+        description ??= GetToolDescription(toolName, method);
+        var shown = ShownArguments(toolName, arguments, method, declared: !own);
 
         var message = shown.Count > 0
             ? $"{description} — {string.Join(" · ", shown.Select(a => $"{a.Label}: {a.Value}"))}"
@@ -274,13 +277,13 @@ internal sealed class MentorConfirmationBuilder
     /// without the empty ones.
     /// </summary>
     private List<MentorConfirmationArgument> ShownArguments(
-        string toolName, IEnumerable<KeyValuePair<string, object?>>? arguments, MethodInfo? method)
+        string toolName, IEnumerable<KeyValuePair<string, object?>>? arguments, MethodInfo? method, bool declared = true)
     {
         if (arguments is null) return [];
 
         var given = arguments.ToList();
         var ordered = new List<KeyValuePair<string, object?>>(given.Count);
-        foreach (var parameter in DeclaredParameters(toolName, method))
+        foreach (var parameter in declared ? DeclaredParameters(toolName, method) : [])
         {
             var i = given.FindIndex(kv => string.Equals(kv.Key, parameter, StringComparison.Ordinal));
             if (i < 0) i = given.FindIndex(kv => string.Equals(kv.Key, parameter, StringComparison.OrdinalIgnoreCase));
@@ -301,9 +304,15 @@ internal sealed class MentorConfirmationBuilder
         return shown;
     }
 
-    /// <summary>The parameter names of the method behind <paramref name="toolName"/>, in order; none for an MCP tool.</summary>
+    /// <summary>
+    /// The parameter names of the method behind <paramref name="toolName"/>, in order; for a command or a query, its
+    /// type's public properties, in order (story 1286); none for an MCP tool.
+    /// </summary>
     private IEnumerable<string> DeclaredParameters(string toolName, MethodInfo? method)
-        => Discovery.Called(toolName, method)?.Method.GetParameters().Select(p => p.Name).OfType<string>() ?? [];
+        => Discovery.Called(toolName, method) is not { } called ? []
+            : called.Message is { } message
+                ? message.MessageType.GetProperties(BindingFlags.Public | BindingFlags.Instance).OrderBy(p => p.MetadataToken).Select(p => p.Name)
+                : called.Method.GetParameters().Select(p => p.Name).OfType<string>();
 
     /// <summary>
     /// One value as the banner shows it: control characters, line and paragraph separators, the bidirectional

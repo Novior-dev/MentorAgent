@@ -290,7 +290,7 @@ public sealed class DiscoveryTests
         // Discovery itself skips it and warns (the warning is asserted in the constraint suite).
         // Dropping it here rather than later is the right call: a team record with an empty member
         // list would have to be defended against everywhere downstream.
-        Discover().Level3Teams.Select(t => t.Type.Name).Should().NotContain(nameof(TestEmptyTeam));
+        Discover().Level3Teams.Select(t => t.Type?.Name).Should().NotContain(nameof(TestEmptyTeam));
         Discover().Level3Teams.Should().OnlyContain(t => t.Members.Count > 0);
     }
 

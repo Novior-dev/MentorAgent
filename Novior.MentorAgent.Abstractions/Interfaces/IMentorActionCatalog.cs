@@ -17,4 +17,13 @@ public interface IMentorActionCatalog
 {
     /// <summary>The actions, in the order discovery finds them; decided again at every call.</summary>
     IReadOnlyList<MentorActionInfo> GetActions();
+
+    /// <summary>
+    /// The places the application declares its actions in, one per source: a class read for its attributes, the actions
+    /// registered in code for one class, then one per page with the names of the UI actions it declared since the
+    /// application started (<see cref="MentorActionOrigins.Page"/>, within <see cref="MentorPageActionLimits"/>). Each
+    /// lists the actions it gives and what it left out, and every action of <see cref="GetActions"/> names its own with
+    /// <see cref="MentorActionInfo.RegistrationId"/>. A catalogue written before this member returns none.
+    /// </summary>
+    IReadOnlyList<MentorActionRegistration> GetRegistrations() => [];
 }

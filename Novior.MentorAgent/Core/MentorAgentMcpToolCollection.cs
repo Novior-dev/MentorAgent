@@ -280,7 +280,8 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
     /// caller sees is still decided when that request builds the catalogue, and per request after it.
     /// </summary>
     internal void ReportWithheld()
-        => LogWithheld([.. _discovery.Discover().Level1Methods.Select(m => WithheldReason(m, out _)).OfType<string>()]);
+        => LogWithheld([.. _discovery.Discover().Level1Methods.Where(m => m.Endpoint is null)
+            .Select(m => WithheldReason(m, out _)).OfType<string>()]);
 
     private Catalogue BuildCatalogue()
     {
@@ -296,6 +297,10 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
 
         foreach (var method in methods)
         {
+            // Story 1287 (endpoint.not-published) — an endpoint's action runs the endpoint as the user of the turn, with
+            // its authorization; an MCP caller is not that user, so the server does not publish it.
+            if (method.Endpoint is not null) continue;
+
             // The report says what the predicate holds back now; the catalogue does not keep its answer, which is
             // asked again for every list and every call (BUG-202).
             if (WithheldReason(method, out _) is { } reason)
@@ -314,11 +319,7 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
             try
             {
                 var instance = _scope.ServiceProvider.GetRequiredService(method.DeclaringType);
-                var aiFunc = AIFunctionFactory.Create(
-                    method:      method.Method,
-                    target:      instance,
-                    name:        method.ToolName,
-                    description: method.Description);
+                var aiFunc = MentorActionFunctions.Create(method, instance, method.Description);
 
                 // OnToolResult travels with the function, so the hook sees the action's own result, as
                 // it does in a chat turn (BUG-107).
@@ -465,7 +466,7 @@ internal sealed class MentorAgentMcpToolCollection : IEnumerable<McpServerTool>,
     /// </summary>
     internal MentorMcpExposure ExposureOf(MethodDiscoveryInfo method)
     {
-        if (!Mapped) return MentorMcpExposure.NotServed;
+        if (!Mapped || method.Endpoint is not null) return MentorMcpExposure.NotServed;   // endpoint.not-published
         if (WithheldReason(method, out _, readPredicate: false) is not null) return MentorMcpExposure.Withheld;
         if (!method.EnabledByDefault) return MentorMcpExposure.Withheld;   // the code ships it off (story 1549)
 

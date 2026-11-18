@@ -231,7 +231,7 @@ ignores it and still receives the whole answer — so the three-frame reader bel
 code. Read the extra frames when you want cards, routing, or approvals; skip them and nothing
 breaks except those features.
 
-> **Each `/mentor/chat` request is its own conversation.** The endpoint runs the turn in the request's own DI scope, so every `GET`/`POST` starts a fresh session. The model does not see the previous turns, a follow-up such as *"and the second one?"* has nothing to refer to, and per-session counters (`MaxHostedToolCallsPerSession`) reset on every call. SSE also has no way to send a `PageContextSnapshot`, so page context and client-side UI actions are not available. For a multi-turn chat, use [SignalR](#option-b--signalr-full-feature-set), whose scope and conversation span the connection.
+> **Each `/mentor/chat` request is its own conversation.** The endpoint runs the turn in the request's own DI scope, so every `GET`/`POST` starts a fresh session. The model does not see the previous turns, a follow-up such as *"and the second one?"* has nothing to refer to, and per-session counters (`MaxHostedToolCallsPerSession`) reset on every call. SSE also has no way to send a `PageContextSnapshot`, so page context and client-side UI actions are not available: no UI action is offered to the model, or reaches the gate, on a `/mentor/chat` turn. For a multi-turn chat, use [SignalR](#option-b--signalr-full-feature-set), whose scope and conversation span the connection.
 
 **The turn's language.** `GET /mentor/chat?message=…&language=it`, or `"language": "it"` in the `POST` body, sets the language of this turn: the name or the ISO code of a `MentorLanguage`. Anything else, or none, is the application's `Language`.
 
@@ -1720,6 +1720,82 @@ Only public instance methods declared on the class itself are discovered (not in
 not an empty `[Description]`), at every level. A method with `[Description]` alone has no roles and no
 confirmation — those exist only on `[MentorAction]` — so give a method that changes data `[MentorAction]`.
 
+**Endpoints as actions.** An endpoint the application already has becomes one of the coordinator's actions without
+being written again:
+
+```csharp
+app.MapPost("/orders/{id:int}/cancel", (int id, CancelRequest body, OrderStore store) => store.Cancel(id, body.Reason))
+   .RequireAuthorization("Managers")
+   .WithMentorAction("cancel_order", a => a.Describe("Cancels an order"));
+
+// A controller's action: [MentorAction] on its method, read from its endpoint.
+[HttpGet("{sku}")]
+[MentorAction(Description = "Reads the stock level of a product")]
+public IActionResult GetStockLevel(string sku) => Ok(_stock.Level(sku));
+```
+
+- The action runs **the endpoint itself**, in the process, as the user of the turn: the endpoint's authorization
+  first (`[Authorize]`, its policies, the fallback policy), then its filters, its binding and its validation. A user
+  the endpoint refuses gets no call: the action fails with 401 or 403, and the model reads why.
+- The model gives the route values, the query values and one JSON body. Services, `HttpContext` and the cancellation
+  token are not the model's; an endpoint that reads a header, a form or a file cannot be an action.
+- The name is the one given to `WithMentorAction(name, …)`, then the endpoint's `WithName(…)`, then its handler's
+  method, in snake_case. A lambda needs one of the first two.
+- `GET` and `HEAD` only read. The other verbs write, so they ask for a confirmation unless the declaration says
+  otherwise (`RequireConfirmation(false)`, `ReadOnly()`).
+- An answer of 400 or more is a failed action, with its status. The model reads at most 16,000 characters of an
+  answer.
+- **Limit:** the application's middleware does not run for these calls. What it does before routing — rate limiting,
+  CORS, headers, exception pages — is not there; the endpoint and its filters are.
+- They are not published on `/mcp` nor on the A2A card: an MCP caller is not the user the endpoint's authorization
+  is decided for. A mistake in a declaration stops the application when it starts, naming the endpoint. The rules are
+  the `endpoint` area of ACTION-RULES.md.
+- In `IMentorActionCatalog.GetRegistrations()` each endpoint is a registration of its own, `Origin` `endpoint`, named
+  by its verb and its route as mapped: `endpoint:POST /orders/{id:int}/cancel`.
+- **Roles from the endpoint's authorization.** The roles the endpoint asks for become the action's `RequiredRoles`:
+  `[Authorize(Roles = "Manager,Admin")]`, `RequireAuthorization(p => p.RequireRole("Manager"))`, a policy by name
+  that requires a role, the fallback policy when the endpoint says nothing. The model is then offered the action only
+  for a user who holds one of them, and a user without them is refused before any confirmation. `[AllowAnonymous]`
+  gives none; roles declared with `RequireRoles(…)` replace them. Two role requirements together (a role on the
+  class **and** another on the method) cannot be said as "any one of these": the action takes no roles from them, the
+  log says so, and the endpoint still refuses the call:
+
+  ```text
+  [MentorAgent] The endpoint <endpoint> asks for roles together (<roles>), which an action's roles cannot say: the action takes no roles from its authorization, and the endpoint still refuses the call (403) to a user without them.
+  ```
+
+  To have the action offered only to the right users, declare the roles it is for with
+  `WithMentorAction(a => a.RequireRoles(…))`. Claims and other requirements give no roles: the endpoint checks them
+  at the call.
+
+**When a declaration stops the application.** The endpoints are read once the host has started. A declaration the
+action cannot honour writes one `Critical` entry in the log, from
+`Novior.MentorAgent.Server.Endpoints.MentorEndpointActionDiscovery`, and stops the application:
+
+```text
+[MentorAgent] The endpoint <endpoint> is declared as an action, but <why>. The application stops.
+```
+
+`<endpoint>` is the endpoint's display name, as ASP.NET Core gives it. What `<why>` says, and how to fix it:
+
+| `<why>` | Fix |
+|---|---|
+| `it has no description: give it one with Describe(…), or in [MentorAction]` | `WithMentorAction(a => a.Describe("…"))`, or `[MentorAction(Description = "…")]` |
+| `it answers every verb; an action needs an endpoint with one verb` (or `it answers GET, POST; …`) | Map it with one verb (`MapGet`, `MapPost`, `[HttpPost]`…), or declare a separate endpoint per verb |
+| `its handler is a lambda: name the action with WithMentorAction(name, …) or the endpoint with WithName(…)` | `WithMentorAction("cancel_order", a => …)`, or `.WithName("CancelOrder")`, or a named method as handler |
+| `the name '…' is not a tool name (letters, digits, _ and -, up to 64)` | Give a name made of `A-Z`, `a-z`, `0-9`, `_` and `-`, at most 64 characters |
+| `its parameter '…' comes from a header, a form, a file or [AsParameters], which a model cannot give` | Read that value elsewhere (a service, the user's claims), or declare a separate endpoint for the model with route, query and body parameters only |
+| `it reads more than one body` | One JSON body: put the values in one request type |
+| `its authorization names the policy '…', which is not registered` | Register it, `builder.Services.AddAuthorization(o => o.AddPolicy("…", p => …))`, or correct the name in `RequireAuthorization("…")` or `[Authorize(Policy = "…")]` |
+| `its handler cannot be read` | Declare an endpoint mapped with its handler (`MapGet`, `MapPost`…, a controller's action): an endpoint built another way may carry no handler method |
+
+Two more messages, with the same `[MentorAgent]` start and the same stop:
+
+| Message | Fix |
+|---|---|
+| `Two endpoint actions are named '…' (POST /a, POST /b). Give each its own name with WithMentorAction(name, …).` | A name for each, with `WithMentorAction(name, …)` |
+| `The endpoint action '…' has the name of another action (Class.Method). Give it another name with WithMentorAction(name, …).` | Another name for the endpoint, or for the other action |
+
 ### Level 2 — Specialized agents (Handoff)
 
 ```csharp
@@ -2962,7 +3038,7 @@ first connection.
 | `SkillsFolder` | `string` | `"Skills"` | Folder to scan for file-based skills (`SKILL.md`) |
 | `SkillSources` | `IList<AgentSkillsSource>` | empty | Extra sources using the Agent Framework's own abstraction — a database, a remote catalogue, or Microsoft's `AgentFileSkillsSource`. Your own skills win a name collision |
 | `SkillFilter` | `Func<AgentSkill, bool>?` | `null` | Keeps or drops a skill from `SkillSources`. Never applies to skills MentorAgent discovered itself |
-| `SkillsRefreshInterval` | `TimeSpan?` | `null` | Set: the composed `SkillSources` (wrapped in the Agent Framework's `CachingAgentSkillsSource`) are held **once per process** and shared by every session; the list is re-fetched when a session is built after the interval has passed. `null`: every new session (circuit, hub connection, SSE request) re-reads the sources when its coordinator is built and keeps that list for its lifetime — nothing is cached for the process. Worth setting for a remote or expensive source |
+| `SkillsRefreshInterval` | `TimeSpan?` | `null` | Set: the composed `SkillSources` (wrapped in the Agent Framework's `CachingAgentSkillsSource`) are held **once per process** and shared by every session; the list is re-fetched when a session is built after the interval has passed. Each source has its own cache, and a source wrapped in `MentorLiveSkillsSource` has none: it is read at every session. `null`: every new session (circuit, hub connection, SSE request) re-reads the sources when its coordinator is built and keeps that list for its lifetime — nothing is cached for the process. Worth setting for a remote or expensive source |
 
 ### RAG
 

@@ -17,10 +17,11 @@ namespace Novior.MentorAgent.Middleware;
 /// configured; if tool filtering is enabled without one, no filtering happens (all tools are sent).
 ///
 /// Safe by design: only L1 business actions + MCP tools (<c>filterableNames</c>) are ever removed;
-/// core tools — navigation, memory, routing, teams, skills, and the UI-action tools added later by
-/// <see cref="UIActionsMiddleware"/> — are always kept.
+/// core tools — navigation, memory, routing, teams, skills, and the page's UI actions, which
+/// <see cref="UIActionTools"/> hands to every run (story 1288) — are always kept.
 ///
-/// Must sit OUTERMOST (before <see cref="UIActionsMiddleware"/>) so it never removes UI tools.
+/// Must sit OUTERMOST in the coordinator's pipeline, above <see cref="UIActionsMiddleware"/>, which reads the
+/// forced-call marker it sets.
 /// </summary>
 internal sealed class ToolFilterChatClient : DelegatingChatClient
 {
@@ -90,8 +91,9 @@ internal sealed class ToolFilterChatClient : DelegatingChatClient
     private readonly IReadOnlySet<string> _forcedCompanionTools;
 
     /// <summary>
-    /// Marks the one request a turn's first call is forced on, so <see cref="UIActionsMiddleware"/> does not
-    /// add its own tools to it: a UI action must not be able to satisfy a required read, action or navigation.
+    /// Marks the one request a turn's first call is forced on, for <see cref="UIActionsMiddleware"/>, which reports a
+    /// provider that answers it without a call. The request declares only the tools it forces: a UI action must not be
+    /// able to satisfy a required read, action or navigation.
     /// </summary>
     internal const string ForcedCallKey = "mentoragent.forced-call";
 
@@ -682,7 +684,7 @@ internal sealed class ToolFilterChatClient : DelegatingChatClient
 
     /// <summary>
     /// The first request of a turn with only <paramref name="tools"/> declared and a call to one of them required.
-    /// The marker tells <see cref="UIActionsMiddleware"/> to add none of its own, and is removed there. Also the
+    /// The page's UI actions are not among them. The marker is read and removed in <see cref="UIActionsMiddleware"/>. Also the
     /// forced read without filtering (<see cref="ForcedReadChatClient"/>).
     /// </summary>
     internal static ChatOptions Forced(ChatOptions options, List<AITool> tools, string? notice)

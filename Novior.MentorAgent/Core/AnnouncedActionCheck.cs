@@ -1,6 +1,6 @@
 namespace Novior.MentorAgent.Core;
 
-/// <summary>What a reply that called no tool says about an action (story 526).</summary>
+/// <summary>What a reply says about an action that did not run (story 526; in a turn that called tools, story 1693).</summary>
 internal enum AnnouncedAction
 {
     /// <summary>Nothing to correct: an answer, a question to the user, an offer that waits for a yes, a refusal.</summary>
@@ -45,12 +45,37 @@ internal static class AnnouncedActionCheck
         """;
 
     /// <summary>
-    /// The user's message, the reply and the names of the tools the model was sent in the turn, as the classifier reads
-    /// them: one line each, bounded, so a long reply costs no more than a few hundred tokens.
+    /// Story 1693 — the question after a turn that called tools: whether its reply announces or reports an action that
+    /// none of the tools it called does. Asked only then: the turns that called none keep <see cref="Question"/>, word
+    /// for word, as it was measured live (story 526, BUG-231). A reply that reports what the called tools did or returned
+    /// is NONE.
     /// </summary>
-    internal static string Input(string? userMessage, string reply, IReadOnlyCollection<string> tools)
+    internal const string QuestionAfterCalls = """
+        You check one reply of an assistant that can act in a software application only by calling its tools. In this
+        turn the assistant called the tools listed after "Called:", and only those ran in the application.
+        Read the user's message, the assistant's reply, the names of the assistant's tools and of the tools it called,
+        and answer with one label:
+        ANNOUNCED - the reply says the assistant is doing an action in the application, or is about to do it now,
+        without waiting for an answer from the user, and none of the called tools does that action.
+        CLAIMED - the reply says the assistant has just done an action in the application, and none of the called tools
+        does that action. The state or the values of the records the called tools read are not an action done now.
+        NONE - anything else: an answer or an explanation, one that reports what the called tools did or returned, or
+        the state and the values of the records they read, included; a question to the user, an offer or a plan that
+        waits for the user's yes, a refusal, or a statement that something cannot be done.
+        After ANNOUNCED or CLAIMED, write the name of the tool that does that action, exactly as it is listed, when one of
+        the tools does it; write nothing after the label when none does. Write nothing after NONE.
+        """;
+
+    /// <summary>
+    /// The user's message, the reply and the names of the tools the model was sent in the turn, as the classifier reads
+    /// them: one line each, bounded, so a long reply costs no more than a few hundred tokens. After a turn that called
+    /// tools (story 1693), one more line names them.
+    /// </summary>
+    internal static string Input(string? userMessage, string reply, IReadOnlyCollection<string> tools,
+        IReadOnlyCollection<string>? called = null)
         => $"User: {RequestClassifier.OneLine(userMessage, 600)}\nAssistant: {RequestClassifier.OneLine(reply, 1200)}" +
-           $"\nTools: {RequestClassifier.OneLine(tools.Count == 0 ? "none" : string.Join(", ", tools), 1200)}";
+           $"\nTools: {RequestClassifier.OneLine(tools.Count == 0 ? "none" : string.Join(", ", tools), 1200)}" +
+           (called is { Count: > 0 } ? $"\nCalled: {RequestClassifier.OneLine(string.Join(", ", called), 600)}" : "");
 
     /// <summary>
     /// The label of <paramref name="answer"/>, or <see langword="null"/> when it starts with none: read from the first

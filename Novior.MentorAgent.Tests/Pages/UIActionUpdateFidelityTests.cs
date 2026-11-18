@@ -11,13 +11,14 @@ using Xunit;
 namespace Novior.MentorAgent.Tests.Pages;
 
 /// <summary>
-/// What survives when <see cref="UIActionsMiddleware"/> has to rebuild a streaming update.
+/// What survives of a streaming update that carries text and a UI-action call together.
 ///
 /// <para>
 /// BUG-052 made the middleware forward updates as they arrive and withhold only calls to its own
-/// registered actions. When an update carries <b>both</b> — a UI-action call and something else —
-/// the original cannot be passed through unchanged, so a new one is built from the surviving
-/// content. Everything not copied onto that new object is silently lost.
+/// registered actions. When an update carried <b>both</b> — a UI-action call and something else —
+/// a new one was built from the surviving content, and everything not copied onto it was silently
+/// lost. From story 1288 the call is a call of the run and nothing is withheld: the update passes
+/// through as it came, with all of its metadata.
 /// </para>
 ///
 /// <para>
@@ -107,15 +108,15 @@ public sealed class UIActionUpdateFidelityTests
     }
 
     [Fact]
-    public async Task The_UI_action_call_is_still_withheld_from_the_rebuilt_update()
+    public async Task The_mixed_update_passes_through_intact()
     {
-        // The guarantee the rebuild exists to keep. If preserving metadata were achieved by passing
-        // the original update through untouched, this is the test that would catch it.
+        // Story 1288 — the call is the run's to make, so the update is neither rebuilt nor split: its
+        // text and its call reach the agent's function-invoking client together, in the one object.
         var updates = await StreamAsync();
 
-        updates.SelectMany(u => u.Contents).OfType<FunctionCallContent>()
-            .Select(f => f.Name)
-            .Should().NotContain(MixedUpdateClient.Ours,
-                "the outer pipeline has never heard of this tool and could not resolve a call to it");
+        updates.Should().ContainSingle();
+        updates[0].Contents.Select(c => c.GetType().Name)
+            .Should().Equal([nameof(TextContent), nameof(FunctionCallContent)],
+                "nothing is withheld: the function-invoking client above resolves the call");
     }
 }

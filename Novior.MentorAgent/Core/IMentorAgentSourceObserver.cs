@@ -14,6 +14,13 @@ public interface IMentorAgentSourceObserver
 {
     /// <summary>One report per source, every time a coordinator is built — also when the source loaded nothing.</summary>
     void OnAgentsLoaded(MentorAgentSourceReport report);
+
+    /// <summary>
+    /// One report per <see cref="IMentorTeamSource"/>, every time a coordinator is built — also when the source gave no
+    /// team. <see cref="MentorAgentSourceReport.Loaded"/> names the teams that joined the coordinator. Does nothing unless
+    /// the observer implements it.
+    /// </summary>
+    void OnTeamsLoaded(MentorAgentSourceReport report) { }
 }
 
 /// <summary>What one <see cref="IMentorAgentSource"/> loaded and left out for one coordinator.</summary>

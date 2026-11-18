@@ -33,6 +33,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Story 1569, slice B: the documentation file of the AutoMentor's candidate services in CandidateTests, next to the
+         assembly as the compiler would write it. The test project does not generate one. -->
+    <None Include="Discovery\CandidateDocs.xml" Link="Novior.MentorAgent.Tests.xml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
     <ProjectReference Include="..\Novior.MentorAgent.Declarative\Novior.MentorAgent.Declarative.csproj" />
     <ProjectReference Include="..\Novior.MentorAgent.Tests.App\Novior.MentorAgent.Tests.App.csproj" />

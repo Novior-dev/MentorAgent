@@ -9,7 +9,8 @@ namespace Novior.MentorAgent.Core;
 internal sealed class MentorActionCatalog(
     MentorDiscoveryService discovery,
     IOptions<MentorOptions> options,
-    IServiceProvider services) : IMentorActionCatalog
+    IServiceProvider services,
+    MentorPageActionTrace? pageTrace = null) : IMentorActionCatalog
 {
     private readonly MentorOptions _options = options.Value;
 
@@ -44,6 +45,62 @@ internal sealed class MentorActionCatalog(
         return actions;
     }
 
+    /// <summary>
+    /// Story 1285 — the one public trace of where the actions come from: one registration per origin and class, in the
+    /// order discovery finds their first action, with every action it gives — the coordinator's, a specialist's or a team
+    /// member's, those shipped off included. A method found twice (a skill's, a member's toolbox) is listed once.
+    /// An endpoint declared as an action (story 1287) is a registration of its own, named by its verb and route
+    /// (<c>endpoint.trace</c>): its handler's class says nothing, and for a lambda it is the compiler's.
+    /// After them, story 1288 slice C: one registration per page, with the names of the UI actions it declared
+    /// (<see cref="MentorPageActionTrace"/>).
+    /// </summary>
+    public IReadOnlyList<MentorActionRegistration> GetRegistrations()
+        => [.. CodeRegistrations(), .. pageTrace?.Registrations() ?? []];
+
+    private IEnumerable<MentorActionRegistration> CodeRegistrations()
+    {
+        var found = discovery.Discover();
+        var registrations = found.Level1Methods
+            .Concat(found.Level2Agents.SelectMany(a => a.Methods))
+            .Concat(found.Level3Teams.SelectMany(t => t.Members).SelectMany(m => m.Tools))
+            .DistinctBy(m => (m.Origin, m.Method, SourceOf(m)))   // two endpoints may share their handler
+            .GroupBy(RegistrationId)
+            .Select(g => new MentorActionRegistration
+            {
+                Id      = g.Key,
+                Origin  = g.First().Origin,
+                Source  = SourceOf(g.First()),
+                Actions = [.. g.Select(m => m.ToolName)],
+            })
+            .ToList();
+
+        // Story 1569: the candidates a rule left out, in their class's registration, or in one of their own when the
+        // class gives no candidate.
+        foreach (var rejected in found.CandidateRejections.GroupBy(r => r.Type))
+        {
+            var source = rejected.Key.FullName ?? rejected.Key.Name;
+            var id = MentorActionOrigins.Candidate + ":" + source;
+            var rejections = rejected.Select(r => new MentorActionRejection { Name = r.Name, Rule = r.Rule }).ToList();
+            var index = registrations.FindIndex(r => r.Id == id);
+            if (index >= 0)
+                registrations[index] = registrations[index] with { Rejected = rejections };
+            else
+                registrations.Add(new MentorActionRegistration
+                {
+                    Id = id, Origin = MentorActionOrigins.Candidate, Source = source, Rejected = rejections,
+                });
+        }
+        return registrations;
+    }
+
+    /// <summary>The <see cref="MentorActionRegistration.Id"/> of the registration that gives <paramref name="method"/>.</summary>
+    private static string RegistrationId(MethodDiscoveryInfo method) => method.Origin + ":" + SourceOf(method);
+
+    private static string SourceOf(MethodDiscoveryInfo method)
+        => method.Endpoint?.Display
+           ?? (method.Message is { } message ? message.MessageType.FullName ?? message.MessageType.Name : null)   // story 1286
+           ?? method.DeclaringType.FullName ?? method.DeclaringType.Name;
+
     private MentorActionInfo Info(MethodDiscoveryInfo method, MentorAgentKind kind, string? agentName,
         MentorMcpExposure exposure, bool onCard)
     {
@@ -61,6 +118,20 @@ internal sealed class MentorActionCatalog(
             EnabledByDefault     = method.EnabledByDefault,
             McpExposure          = exposure,
             OnAgentCard          = onCard,
+            Origin               = method.Origin,
+            RegistrationId       = RegistrationId(method),
+            Method               = MethodOf(method),
         };
     }
+
+    /// <summary>
+    /// The method of an action written as one (story 1571's inventory reads its parameters): an endpoint's
+    /// <see cref="MethodDiscoveryInfo.Method"/> is its handler's, a lambda's included, and is not given. A command's or a
+    /// query's is its handler's <c>HandleAsync</c> (story 1286), whose parameter is the type the model's arguments make.
+    /// </summary>
+    private static System.Reflection.MethodInfo? MethodOf(MethodDiscoveryInfo method)
+        => method.Origin is MentorActionOrigins.Attribute or MentorActionOrigins.Fluent or MentorActionOrigins.Candidate
+               or MentorActionOrigins.Command or MentorActionOrigins.Query
+            ? method.Method
+            : null;
 }

@@ -15,6 +15,12 @@ internal sealed class GateCall
     internal MentorAgentKind? AgentKind { get; init; }
     internal string? AgentName { get; init; }
 
+    /// <summary>
+    /// A UI action of the page (story 1288): it says itself that it started and finished, so the gate's own feedback
+    /// is not raised for it, and its description is the text shown.
+    /// </summary>
+    internal bool PageAction { get; init; }
+
     /// <summary>Read once, at the first decision.</summary>
     internal string? DisplayName { get; set; }
 

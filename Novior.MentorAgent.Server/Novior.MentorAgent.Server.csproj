@@ -30,6 +30,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Novior.MentorAgent.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Story 105: the MCP server and the A2A agent endpoints moved here from MentorAgent. Both packages
          require Microsoft.AspNetCore.App; in the core they kept every MAUI target but Windows from
          compiling. A2A.AspNetCore, not Microsoft.Agents.AI.Hosting.A2A.AspNetCore which the core used to

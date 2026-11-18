@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FluentAssertions;
+using Novior.MentorAgent.Abstractions.Interfaces;
 using Novior.MentorAgent.Core;
 using Novior.MentorAgent.Middleware;
 using Novior.MentorAgent.Tests.Fakes;
@@ -11,21 +12,20 @@ using Xunit;
 namespace Novior.MentorAgent.Tests.Pages;
 
 /// <summary>
-/// <see cref="UIActionsMiddleware"/> — the piece that turns the current page's registered actions
-/// into named tools and runs their function-calling loop itself.
+/// <see cref="UIActionTools"/> — the piece that turns the current page's registered actions into named
+/// tools of the run.
 ///
 /// <para>
-/// It has to run that loop internally because the Agent Framework resolves function calls against a
-/// static registry built at startup, and a page's actions change on every navigation. So this
-/// middleware injects tools the outer pipeline has never heard of, executes any calls to them, and
-/// hands back a response that looks as though they were never offered. Every one of those steps is a
-/// place where a call can be executed twice, executed against the wrong page, or silently dropped.
+/// Up to 1.3.0 <see cref="UIActionsMiddleware"/> added them below the agent and ran their calls in a loop
+/// of its own. From story 1288 they are tools of the run, called by the agent's function-invoking client
+/// through the gate, and brought up to the page after every call. Every step is still a place where a
+/// call can be executed twice, executed against the wrong page, or silently dropped.
 /// </para>
 ///
 /// <para>
-/// It is driven directly here rather than through a turn: the loop is the subject, and a full turn
-/// would put the Agent Framework's own function-calling machinery between the assertion and the
-/// behaviour.
+/// Driven here through a <see cref="FunctionInvokingChatClient"/> over the middleware, with the page's
+/// actions among the request's tools and refreshed after each call — what the agent's run does, without
+/// the gate between the assertion and the behaviour. The gate itself is <c>UIActionGateTests</c>.
 /// </para>
 /// </summary>
 public sealed class UIActionToolTests
@@ -37,26 +37,49 @@ public sealed class UIActionToolTests
         internal RecordingStateService State { get; } = new();
         internal TestLogCollector Logs { get; } = new();
 
-        internal UIActionsMiddleware Middleware => new(
-            Inner, Page, State,
-            new TypedLogger<UIActionsMiddleware>(new TestLoggerProvider(Logs).CreateLogger("ui")));
+        private ILogger<UIActionsMiddleware> Logger
+            => new TypedLogger<UIActionsMiddleware>(new TestLoggerProvider(Logs).CreateLogger("ui"));
 
-        /// <summary>Runs one non-streaming call through the middleware.</summary>
+        /// <summary>
+        /// The run as the agent makes it: a function-invoking client over the middleware, the page's actions
+        /// refreshed after every call, as the gate does.
+        /// </summary>
+        private (IChatClient Client, ChatOptions Options) Run(ChatOptions? options)
+        {
+            var tools = new UIActionTools(Page, State, Logger);
+            var client = new FunctionInvokingChatClient(new UIActionsMiddleware(Inner, Page, State, Logger))
+            {
+                FunctionInvoker = async (context, ct) =>
+                {
+                    try { return await context.Function.InvokeAsync(context.Arguments, ct); }
+                    finally { tools.Refresh(context.Options?.Tools); }
+                },
+            };
+
+            var run = options?.Clone() ?? new ChatOptions();
+            var page = tools.Current(run.Tools);
+            if (page.Count > 0) run.Tools = [.. run.Tools ?? [], .. page];
+            return (client, run);
+        }
+
+        /// <summary>Runs one non-streaming request of the run.</summary>
         internal async Task<ChatResponse> SendAsync(ChatOptions? options = null)
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            return await Middleware.GetResponseAsync(
-                [new ChatMessage(ChatRole.User, "do the thing")], options, deadline.Token);
+            var (client, run) = Run(options);
+            return await client.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, "do the thing")], run, deadline.Token);
         }
 
-        /// <summary>Runs one streamed call through the middleware and returns the text.</summary>
+        /// <summary>Runs one streamed request of the run and returns the text.</summary>
         internal async Task<string> StreamAsync(ChatOptions? options = null)
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var (client, run) = Run(options);
             var text = new System.Text.StringBuilder();
 
-            await foreach (var update in Middleware.GetStreamingResponseAsync(
-                               [new ChatMessage(ChatRole.User, "do the thing")], options, deadline.Token))
+            await foreach (var update in client.GetStreamingResponseAsync(
+                               [new ChatMessage(ChatRole.User, "do the thing")], run, deadline.Token))
                 text.Append(update.Text);
 
             return text.ToString();
@@ -89,8 +112,8 @@ public sealed class UIActionToolTests
     [Fact]
     public async Task With_no_actions_registered_streaming_really_streams()
     {
-        // The pass-through branch: with no actions registered the middleware is not in the way at
-        // all. Kept as the control for the streaming assertions in UIActionStreamingTests.
+        // With no actions registered nothing of the page is in the way at all. Kept as the control
+        // for the streaming assertions in UIActionStreamingTests.
         var rig = new Rig();
         rig.Inner.Say("hello there");
 
@@ -107,7 +130,8 @@ public sealed class UIActionToolTests
         // finished reply as updates. The trade-off was real but its cost had never been felt,
         // because no live client with UI actions had ever been driven — a page that registers one
         // action lost token streaming for every turn, including the ordinary ones that never call
-        // an action. BUG-052 fixed that; this now pins the fix from the inner client's side.
+        // an action. BUG-052 fixed that; this now pins the fix from the inner client's side. From
+        // story 1288 there is no loop of the page's own: the run streams like any other.
         var rig = new Rig();
         rig.Page.RegisterUIAction("highlight_row", "Highlights a row", _ => { });
         rig.Inner.Say("hello there");
@@ -115,7 +139,7 @@ public sealed class UIActionToolTests
         await rig.StreamAsync();
 
         rig.Inner.Calls[0].Streaming.Should().BeTrue(
-            "the UI-action loop runs over the streamed response now, not over a buffered one");
+            "the request with the page's actions is streamed, not buffered");
     }
 
     [Fact]
@@ -161,8 +185,8 @@ public sealed class UIActionToolTests
     public async Task An_action_that_collides_with_a_real_tool_is_skipped_and_reported()
     {
         // Two tools with one name is ambiguous at best; at worst the model calls the page action
-        // expecting the business tool. The business tool wins because it is the one the outer
-        // pipeline can actually resolve.
+        // expecting the business tool. The business tool wins: it is the application's action, and
+        // the page cannot shadow it.
         var rig = new Rig();
         rig.Page.RegisterUIAction("get_orders", "A page action with an unlucky name", _ => { });
         rig.Inner.Say("ok");
@@ -202,9 +226,10 @@ public sealed class UIActionToolTests
     [Fact]
     public async Task The_conversation_id_survives_the_options_clone()
     {
-        // The options are cloned to merge the tools in. A hand-written copy dropped ConversationId,
-        // and under service-managed history that loses previous_response_id — the provider then
-        // rejects the tool result with "HTTP 400 — No tool call found for function call output".
+        // The page's actions travel in the run's options. A hand-written copy of options dropped
+        // ConversationId, and under service-managed history that loses previous_response_id — the
+        // provider then rejects the tool result with "HTTP 400 — No tool call found for function call
+        // output".
         var rig = new Rig();
         rig.Page.RegisterUIAction("highlight_row", "Highlights a row", _ => { });
         rig.Inner.Say("ok");
@@ -358,19 +383,23 @@ public sealed class UIActionToolTests
     // ── What is not ours ────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task A_call_to_a_business_tool_is_left_for_the_outer_pipeline()
+    public async Task A_call_to_a_business_tool_runs_the_business_tool_and_no_page_action()
     {
-        // The middleware must only intercept names it injected. Swallowing a business tool call
-        // would strand the outer function-calling loop waiting for a result it never gets.
+        // Story 1288: one client runs both now, so the page's actions must not catch a call that is
+        // not theirs. Up to 1.3.0 the middleware handed such a call back to the outer loop untouched.
         var rig = new Rig();
-        rig.Page.RegisterUIAction("highlight_row", "d", _ => { });
-        rig.Inner.CallTool("cancel_order", new { orderId = 7 });
+        var highlighted = false;
+        var cancelled = 0;
+        rig.Page.RegisterUIAction("highlight_row", "d", _ => highlighted = true);
+        CallThenReply(rig.Inner, "cancel_order", new { orderId = 7 });
 
-        var response = await rig.SendAsync();
+        await rig.SendAsync(new ChatOptions
+        {
+            Tools = [AIFunctionFactory.Create((int orderId) => { cancelled++; return "cancelled"; }, name: "cancel_order")],
+        });
 
-        response.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>()
-                .Select(c => c.Name).Should().ContainSingle().Which.Should().Be("cancel_order");
-        rig.Inner.CallCount.Should().Be(1, "the middleware returned immediately, it did not loop");
+        cancelled.Should().Be(1, "the business tool ran, once");
+        highlighted.Should().BeFalse("no page action was run for a call to another tool");
     }
 
     [Fact]
@@ -438,20 +467,29 @@ public sealed class UIActionToolTests
     [Fact]
     public async Task A_model_that_keeps_calling_the_same_action_is_stopped()
     {
-        // Ten iterations, then out. Without the cap a model stuck in a loop would drive UI actions
-        // against the page forever, one paid call at a time.
-        var rig = new Rig();
+        // Without a cap a model stuck in a loop would drive UI actions against the page forever, one
+        // paid call at a time. Up to 1.3.0 the page's own loop stopped at ten. From story 1288 the
+        // actions are tools of the run, and the cap is the run's, the same as for every other action:
+        // MaximumIterationsPerRequest of the agent's function-invoking client, which MentorAgent does
+        // not set — Microsoft.Extensions.AI's default of 40, then a last request with no tool.
+        await using var host = MentorHostFixture.Create(o => o.MemoryAutoCapture = false);
         var runs = 0;
-        rig.Page.RegisterUIAction("highlight_row", "d", _ => runs++);
-        rig.Inner.Respond((_, _) => new ChatResponse(new ChatMessage(ChatRole.Assistant,
+        host.Get<IMentorPageContext>().RegisterUIAction("highlight_row", "d", _ => runs++);
+        host.Chat!.Respond((_, _) => new ChatResponse(new ChatMessage(ChatRole.Assistant,
             [new FunctionCallContent(Guid.NewGuid().ToString("N"), "highlight_row",
                                      new Dictionary<string, object?>())])));
 
-        await rig.SendAsync();
+        await host.RunTurnAsync("highlight the row");
 
-        runs.Should().Be(10, "MaxUIActionIterations is the documented ceiling");
-        rig.Logs.HasWarning("max iterations").Should().BeTrue(rig.Logs.WarningText);
+        runs.Should().Be(MaxRunsPerTurn, "the run's cap is the ceiling, as for the application's own actions");
+        host.Chat.Calls.Last().ToolNames.Should().NotContain("highlight_row", "the last request offers no tool");
     }
+
+    /// <summary>
+    /// The runs of one action a turn allows: <c>FunctionInvokingChatClient.MaximumIterationsPerRequest</c>, 40 by
+    /// default, and then one more request that offers no tool, so the model has to answer.
+    /// </summary>
+    private const int MaxRunsPerTurn = 40;
 
     // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -462,7 +500,7 @@ public sealed class UIActionToolTests
     private static string? DescriptionOf(Rig rig, string toolName)
         => rig.Inner.Calls[0].Tool(toolName)?.Description;
 
-    /// <summary>Every tool result the middleware fed back into the conversation, concatenated.</summary>
+    /// <summary>Every tool result the run fed back into the conversation, concatenated.</summary>
     private static string ToolResultsOf(Rig rig)
         => string.Join("\n", rig.Inner.Calls
             .SelectMany(c => c.Messages)

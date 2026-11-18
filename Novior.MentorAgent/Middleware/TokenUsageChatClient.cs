@@ -11,8 +11,8 @@ namespace Novior.MentorAgent.Middleware;
 ///
 /// It is placed <b>outside</b> the routing client but <b>inside</b> everything else, so it measures the
 /// actual prompt/completion tokens of whichever model served — cheap or strong — via
-/// <c>response.ModelId</c>, including the extra round-trips performed by
-/// <see cref="UIActionsMiddleware"/>'s internal loop.
+/// <c>response.ModelId</c>, including every round trip of the agent's function-invoking client —
+/// the page's UI actions among them (story 1288).
 /// </summary>
 internal sealed class TokenUsageChatClient : DelegatingChatClient
 {

@@ -18,7 +18,7 @@ namespace Novior.MentorAgent.Middleware;
 ///
 /// <para>
 /// Installed only where <see cref="ToolFilterChatClient"/> is not, at its place in the pipeline: outside
-/// <see cref="UIActionsMiddleware"/>, which adds no UI action to a forced request. One decision per turn.
+/// <see cref="UIActionsMiddleware"/>, which reads the forced request's marker. One decision per turn.
 /// </para>
 /// </summary>
 internal sealed class ForcedReadChatClient : DelegatingChatClient

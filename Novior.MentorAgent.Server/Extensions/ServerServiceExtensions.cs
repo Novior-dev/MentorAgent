@@ -37,6 +37,10 @@ public static class ServerServiceExtensions
         services.AddMentorAgentMcp();
         services.AddMentorAgentA2A();
 
+        // Story 1287 — the endpoints declared as actions: read once the host has started, run as the user of the turn.
+        services.TryAddSingleton<Novior.MentorAgent.Core.IMentorEndpointActionRunner, Endpoints.MentorEndpointActionRunner>();
+        services.AddHostedService<Endpoints.MentorEndpointActionDiscovery>();
+
         // AddHubOptions<MentorHub> is what flips the internal "user has set values" flag on
         // HubOptions<MentorHub>. Without it SignalR ignores the per-hub options entirely and
         // falls back to the global ones, so the size raised below would never be applied.

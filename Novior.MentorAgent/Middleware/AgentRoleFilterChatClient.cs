@@ -159,7 +159,7 @@ internal sealed class AgentRoleFilterChatClient : DelegatingChatClient
                 if (!_offered.TryGetValue(function.Name, out var isOffered))
                 {
                     isOffered = await policies.IsOfferedAsync(
-                        _gate.OfferRequest(function, user, _agentName, _agentKind), ct);
+                        _gate.OfferRequest(function, user, _agentName, agentKind: _agentKind), ct);
                     _offered[function.Name] = isOffered;
                     if (!isOffered) _turn.NotOfferedByPolicies(_agentKind, _agentName, function.Name);
                 }

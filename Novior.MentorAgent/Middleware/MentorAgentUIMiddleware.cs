@@ -305,21 +305,51 @@ internal sealed class MentorAgentUIMiddleware
     /// Coordinator entry point: the Agent Framework function-invocation middleware.
     /// Delegates to <see cref="InvokeGatedAsync"/>, which is the single implementation of the gate.
     /// </summary>
-    public ValueTask<object?> InvokeFunctionCallingAsync(
+    public async ValueTask<object?> InvokeFunctionCallingAsync(
         AIAgent agent,
         FunctionInvocationContext context,
         Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
         CancellationToken cancellationToken)
-        => InvokeGatedAsync(
-               context.Function.Name,
-               context.Arguments,
-               ct => next(context, ct),
-               cancellationToken,
-               method: context.Function.UnderlyingMethod,
-               callId: context.CallContent?.CallId,
-               agentKind: MentorAgentKind.Coordinator,
-               agentName: agent?.Name,
-               description: context.Function.Description);
+    {
+        try
+        {
+            return await InvokeGatedAsync(
+                context.Function.Name,
+                context.Arguments,
+                ct => next(context, ct),
+                cancellationToken,
+                method: context.Function.UnderlyingMethod,
+                callId: context.CallContent?.CallId,
+                agentKind: MentorAgentKind.Coordinator,
+                agentName: agent?.Name,
+                description: context.Function.Description,
+                pageAction: UIActionTools.IsPageAction(context.Function));
+        }
+        finally
+        {
+            // Story 1288 — the call may have changed the page (navigate_to waits for the new page's SignalReady): the
+            // next request of the run offers the actions of the page now shown. Story 1501 (page.offered) — those the
+            // policies do not offer are left out of it, as at the start of the turn.
+            if (PageActions?.Refresh(context.Options?.Tools) == true && PageActionsChanged is { } changed
+                && !cancellationToken.IsCancellationRequested)
+            {
+                try { await changed(cancellationToken); }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Called when a call of the run changed the page's UI actions (story 1501): the orchestrator asks the policies
+    /// whether to offer the new ones. Null when the application registers no policy.
+    /// </summary>
+    internal Func<CancellationToken, ValueTask>? PageActionsChanged { get; set; }
+
+    /// <summary>
+    /// The page's UI actions as tools of the turn (story 1288), on Path A. Set by the orchestrator when it builds the
+    /// coordinator; null on Path B and when the middleware is built by hand.
+    /// </summary>
+    internal UIActionTools? PageActions { get; set; }
 
     /// <summary>
     /// The gate every tool call goes through: role check → HITL confirmation → action feedback →
@@ -358,6 +388,10 @@ internal sealed class MentorAgentUIMiddleware
     /// <param name="agentKind">Which kind of agent called the tool, for the decisions.</param>
     /// <param name="agentName">That agent's name, for the decisions.</param>
     /// <param name="description">The tool's description, as the model reads it, for the action policies.</param>
+    /// <param name="pageAction">
+    /// The call is one of the page's UI actions (story 1288): no feedback of the gate's own, since the action reports
+    /// its own start and end, and the description is the text shown.
+    /// </param>
     public async ValueTask<object?> InvokeGatedAsync(
         string toolName,
         IEnumerable<KeyValuePair<string, object?>>? arguments,
@@ -368,7 +402,8 @@ internal sealed class MentorAgentUIMiddleware
         string? callId = null,
         MentorAgentKind agentKind = MentorAgentKind.Coordinator,
         string? agentName = null,
-        string? description = null)
+        string? description = null,
+        bool pageAction = false)
     {
         _logger.LogDebug("[MentorAgent] Tool call: {Name}", toolName);
         Turn?.Gated(callId);                 // story 526 — the call was found, and reached the gate
@@ -387,6 +422,8 @@ internal sealed class MentorAgentUIMiddleware
             CallId    = callId,
             AgentKind = agentKind,
             AgentName = agentName,
+            PageAction = pageAction,
+            DisplayName = pageAction ? description : null,
         };
         call.Span = toolActivity;
 
@@ -409,7 +446,7 @@ internal sealed class MentorAgentUIMiddleware
         // Story 1546 — the governor's roles, when it gives them, in place of the code's: asked at every check.
         var governed = await GovernedRolesAsync(call, arguments, cancellationToken);
         if (governed.Refusal is { } governorFailed) return Refuse(governorFailed);
-        var roles = await CheckRolesAsync(toolName, cancellationToken, method, governed.Roles);
+        var roles = await CheckRolesAsync(toolName, cancellationToken, method, governed.Roles ?? (pageAction ? Array.Empty<string>() : null));
         call.Roles = roles.Roles;
         call.RolesFromOutside = governed.FromOutside;
         call.User  = roles.User ?? call.User;
@@ -502,7 +539,8 @@ internal sealed class MentorAgentUIMiddleware
             {
                 ActionId = actionId,
                 ToolName = toolName,
-                Message  = _confirmations.BuildMessage(toolName, arguments, _services, method),
+                Message  = _confirmations.BuildMessage(toolName, arguments, _services, method,
+                                                       description: pageAction ? call.DisplayName : null),
             };
 
             _logger.LogDebug("[MentorAgent] Confirmation required for tool '{Name}' (ActionId={Id})", toolName, actionId);
@@ -596,7 +634,7 @@ internal sealed class MentorAgentUIMiddleware
         }
 
         // -- 3. Action feedback ------------------------------------------------
-        if (_options.EnableActionFeedback)
+        if (_options.EnableActionFeedback && !call.PageAction)
             _state.NotifyActionExecuting(toolName, GetActionDisplayName(toolName, method));
 
         // -- 4. Execution ------------------------------------------------------
@@ -625,7 +663,7 @@ internal sealed class MentorAgentUIMiddleware
         {
             // The turn's token — Stop, or the scope closing under the turn — not a failure of the action.
             _logger.LogDebug("[MentorAgent] Tool '{Name}' was cancelled (Stop pressed, or the connection or circuit closed).", toolName);
-            if (_options.EnableActionFeedback)
+            if (_options.EnableActionFeedback && !call.PageAction)
                 _state.NotifyActionCompleted(toolName);
             Decide(call, MentorActionOutcome.Stopped, StopReason);
             return MentorUtils.ToolStopped(L.Get("stop.request"), Lang);
@@ -670,7 +708,7 @@ internal sealed class MentorAgentUIMiddleware
             // model.
             result = ExtractCards(toolName, result, call.Method);
 
-            if (_options.EnableActionFeedback)
+            if (_options.EnableActionFeedback && !call.PageAction)
                 _state.NotifyActionCompleted(toolName);
 
             // -- 5. Auto-navigation --------------------------------------------
@@ -689,6 +727,9 @@ internal sealed class MentorAgentUIMiddleware
                 if (currentUri is not null && !currentUri.EndsWith(navUrl, StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogDebug("[MentorAgent] Auto-navigation -> {Url}", navUrl);
+                    // page.left-not-offered — as navigate_to does: the page being left offers none of its UI actions
+                    // to the next request of the run. A readable Uri means a circuit.
+                    (_services?.GetService<IMentorPageContext>() as MentorPageContext)?.TakeUIActionsBack();
                     _state.NotifyNavigationRequested(navUrl);
                 }
             }
@@ -743,7 +784,7 @@ internal sealed class MentorAgentUIMiddleware
     internal IReadOnlySet<string>? ApprovalMarked { get; set; }
 
     /// <summary>MentorAgent's own tools on the coordinator, which no policy decides about; a team's tool is one too.</summary>
-    private static readonly HashSet<string> LibraryTools = new(
+    internal static readonly HashSet<string> LibraryTools = new(
         ["navigate_to", "invoke_ui_action", "remember", "forget_all", "load_skill", "read_skill_resource", "route_to_specialist"],
         StringComparer.Ordinal);
 
@@ -772,7 +813,7 @@ internal sealed class MentorAgentUIMiddleware
         {
             Stage                = MentorActionStage.Call,
             ToolName             = call.ToolName,
-            Description          = description ?? (_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method)?.Description,
+            Description          = description ?? Discovered(call)?.Description,
             Arguments            = new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(
                                        arguments is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(arguments)),
             User                 = call.User,
@@ -783,6 +824,7 @@ internal sealed class MentorAgentUIMiddleware
             TurnId               = Turn?.TurnId,
             CallId               = call.CallId,
             PageName             = PageName(),
+            Kind                 = call.PageAction ? MentorActionKind.UI : MentorActionKind.Server,
             RequiredRoles        = call.Roles,
             RequiresConfirmation = requiresConfirmation,
             Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
@@ -796,11 +838,13 @@ internal sealed class MentorAgentUIMiddleware
         => PolicyRequest(call, arguments, description: null, _confirmations.CodeRequiresApproval(call.ToolName, call.Method));
 
     /// <summary>
-    /// What the policies are asked about one of an agent's actions, as a turn decides what to offer: the coordinator's,
-    /// or (BUG-233) a specialist's, a team member's or an agent source's.
+    /// What the policies are asked about one of an agent's actions, as a turn decides what to offer: the coordinator's —
+    /// one of the application's, or a UI action of the page (<paramref name="pageAction"/>, story 1501), which has no
+    /// roles and no confirmation of its own and is never looked up by its name (page.kind) — or (BUG-233) a
+    /// specialist's, a team member's or an agent source's.
     /// </summary>
     internal MentorActionRequest OfferRequest(AIFunction function, ClaimsPrincipal? user, string? agentName,
-        MentorAgentKind agentKind = MentorAgentKind.Coordinator)
+        bool pageAction = false, MentorAgentKind agentKind = MentorAgentKind.Coordinator)
         => new()
         {
             Stage                = MentorActionStage.Offer,
@@ -813,8 +857,9 @@ internal sealed class MentorAgentUIMiddleware
             SessionId            = Session?.Id,
             TurnId               = Turn?.TurnId,
             PageName             = PageName(),
-            RequiredRoles        = GetRequiredRoles(function.Name, function.UnderlyingMethod),
-            RequiresConfirmation = _confirmations.RequiresApproval(function.Name, function.UnderlyingMethod),
+            Kind                 = pageAction ? MentorActionKind.UI : MentorActionKind.Server,
+            RequiredRoles        = pageAction ? [] : GetRequiredRoles(function.Name, function.UnderlyingMethod),
+            RequiresConfirmation = !pageAction && _confirmations.RequiresApproval(function.Name, function.UnderlyingMethod),
             Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
         };
 
@@ -851,7 +896,7 @@ internal sealed class MentorAgentUIMiddleware
     internal async ValueTask<OffCall?> CheckEnabledAsync(GateCall call, IEnumerable<KeyValuePair<string, object?>>? arguments,
         CancellationToken ct)
     {
-        if ((_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method) is not { } action) return null;
+        if (Discovered(call) is not { } action) return null;
 
         GovernorAnswer answer;
         if (Governance is not { Any: true } governance)
@@ -895,8 +940,7 @@ internal sealed class MentorAgentUIMiddleware
     internal async ValueTask<(string[]? Roles, bool FromOutside, OffCall? Refusal)> GovernedRolesAsync(GateCall call,
         IEnumerable<KeyValuePair<string, object?>>? arguments, CancellationToken ct)
     {
-        if (Governance is not { Any: true } governance
-            || (_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method) is not { } action)
+        if (Governance is not { Any: true } governance || Discovered(call) is not { } action)
             return (null, false, null);
 
         call.User ??= await ReadUserAsync(ct);
@@ -929,8 +973,7 @@ internal sealed class MentorAgentUIMiddleware
     internal async ValueTask<(MentorConfirmationChoice Choice, OffCall? Refusal)> GovernedConfirmationAsync(GateCall call,
         IEnumerable<KeyValuePair<string, object?>>? arguments, CancellationToken ct)
     {
-        if (Governance is not { Any: true } governance
-            || (_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method) is null)
+        if (Governance is not { Any: true } governance || Discovered(call) is null)
             return (MentorConfirmationChoice.Code, null);
 
         call.User ??= await ReadUserAsync(ct);
@@ -961,11 +1004,22 @@ internal sealed class MentorAgentUIMiddleware
     /// </summary>
     internal ConfirmationAtTheCall Confirms(GateCall call, MentorConfirmationChoice atTheCall)
     {
+        // page.gated: a UI action asks for no confirmation of its own; a policy may ask for one.
+        if (call.PageAction) return new(false, false);
+
         var asks = _confirmations.RequiresApproval(call.ToolName, call.Method, atTheCall);
         call.ConfirmationFromOutside = asks != _confirmations.CodeRequiresApproval(call.ToolName, call.Method);
         return new(asks, asks && (atTheCall == MentorConfirmationChoice.Required
                                   || _confirmations.RequiredForTheSession(call.ToolName, call.Method)));
     }
+
+    /// <summary>
+    /// The discovered action a call runs: the called method's, or the first of its name. None for a UI action of the page
+    /// (story 1501, <c>page.kind</c>): one that has the name of an action the session does not offer — off, or left out
+    /// by the governor — is still the page's, and nothing of that action applies to it.
+    /// </summary>
+    private MethodDiscoveryInfo? Discovered(GateCall call)
+        => call.PageAction ? null : (_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method);
 
     /// <summary>The page the user is on, for the policies; none in a task from another agent.</summary>
     internal string? PageName()
@@ -1095,6 +1149,11 @@ internal sealed class MentorAgentUIMiddleware
             CallId         = call.CallId,
             ConfirmationId = call.ConfirmationId,
             User           = call.User,
+            // Story 1620 — read now, in the turn's flow: the observers get the decision later, on another one.
+            TenantId       = MentorTenantContext.Ambient,
+            // Story 1501 — the kind, and the page read now, as the tenant.
+            Kind           = call.PageAction ? MentorActionKind.UI : MentorActionKind.Server,
+            PageName       = PageName(),
             RequiredRoles  = call.Roles,
             RolesFromOutside = call.RolesFromOutside,
             ConfirmationFromOutside = call.ConfirmationFromOutside,

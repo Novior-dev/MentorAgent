@@ -53,4 +53,26 @@ public sealed record MentorActionInfo
     /// <see langword="false"/> when the host does not serve A2A.
     /// </summary>
     public bool OnAgentCard { get; init; }
+
+    /// <summary>How the application declares the action: one of <see cref="MentorActionOrigins"/>, an open code.</summary>
+    public string Origin { get; init; } = MentorActionOrigins.Attribute;
+
+    /// <summary>
+    /// The <see cref="MentorActionRegistration.Id"/> of the registration that gives the action, from
+    /// <see cref="Interfaces.IMentorActionCatalog.GetRegistrations"/>; <see langword="null"/> from a catalogue that has
+    /// none.
+    /// </summary>
+    public string? RegistrationId { get; init; }
+
+    /// <summary>
+    /// The application's method the action runs, for an action written as one: <c>[MentorAction]</c>
+    /// (<see cref="MentorActionOrigins.Attribute"/>), one registered in code (<see cref="MentorActionOrigins.Fluent"/>)
+    /// and the AutoMentor's candidates (<see cref="MentorActionOrigins.Candidate"/>). Read its parameters and attributes
+    /// from it, as the tool's schema is built from them. <see langword="null"/> for every other origin, an endpoint
+    /// declared as an action (<see cref="MentorActionOrigins.Endpoint"/>) among them, whose parameters are the route's,
+    /// the query's and the body's; and from a catalogue that has none. It is a reflection object, so it is left out of
+    /// JSON.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public System.Reflection.MethodInfo? Method { get; init; }
 }

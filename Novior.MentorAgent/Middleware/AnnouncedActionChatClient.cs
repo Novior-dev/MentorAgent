@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Novior.MentorAgent.Abstractions.Models;
 
 namespace Novior.MentorAgent.Middleware;
 
@@ -36,14 +37,65 @@ internal sealed class AnnouncedActionChatClient(IChatClient innerClient, ILogger
     /// <summary>The heading, English in every language as the other headings of the prompts.</summary>
     internal const string Heading = "## No action ran in this turn — MANDATORY for THIS request\n";
 
+    /// <summary>
+    /// The heading after a turn that called tools (story 1693): something ran, so "no action ran" would be false; the
+    /// action the reply reported did not.
+    /// </summary>
+    internal const string HeadingAfterCalls = "## The action you reported did not run in this turn — MANDATORY for THIS request\n";
+
     private string? _instruction;
 
     private readonly HashSet<string> _offered = new(StringComparer.Ordinal);
 
-    /// <summary>A user turn begins: the tools of the requests to come are this turn's.</summary>
+    // Story 1694 — the turn's requests, and those the application's chat client answered itself without a model
+    // (MentorChatKeys.ModelNotCalled), with the last cause it gave.
+    private int _requests;
+    private int _notFromAModel;
+    private string? _cause;
+
+    /// <summary>A user turn begins: the tools of the requests to come are this turn's, and so are their answers.</summary>
     internal void BeginTurn()
     {
-        lock (_offered) _offered.Clear();
+        lock (_offered)
+        {
+            _offered.Clear();
+            _requests = 0;
+            _notFromAModel = 0;
+            _cause = null;
+        }
+    }
+
+    /// <summary>
+    /// Story 1694 — when every request of the turn was answered without a model (<see cref="MentorChatKeys.ModelNotCalled"/>
+    /// on each), the cause the application's chat client gave, empty when it gave none; otherwise <see langword="null"/>,
+    /// a turn with no request included. A missing or zero usage decides nothing.
+    /// </summary>
+    internal string? NoModelReached
+    {
+        get
+        {
+            lock (_offered) return _requests > 0 && _notFromAModel == _requests ? _cause ?? string.Empty : null;
+        }
+    }
+
+    private void Answered(bool fromAModel, string? cause)
+    {
+        lock (_offered)
+        {
+            _requests++;
+            if (fromAModel) return;
+            _notFromAModel++;
+            _cause = cause;
+        }
+    }
+
+    /// <summary>Whether <paramref name="properties"/> say the answer came from no model, and the cause.</summary>
+    private static bool NotFromAModel(AdditionalPropertiesDictionary? properties, out string? cause)
+    {
+        cause = null;
+        if (properties is null || !properties.TryGetValue(MentorChatKeys.ModelNotCalled, out var value)) return false;
+        cause = value?.ToString();
+        return true;
     }
 
     /// <summary>The names of the tools the requests of this turn were sent with.</summary>
@@ -61,13 +113,16 @@ internal sealed class AnnouncedActionChatClient(IChatClient innerClient, ILogger
     /// <summary>No request is given the instruction: the second pass is over, whether its first request was sent or not.</summary>
     internal void Disarm() => Volatile.Write(ref _instruction, null);
 
-    public override Task<ChatResponse> GetResponseAsync(
+    public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         var (withMessages, withOptions) = WithInstruction(messages, options);
-        return base.GetResponseAsync(withMessages, withOptions, cancellationToken);
+        var response = await base.GetResponseAsync(withMessages, withOptions, cancellationToken);
+        var stopped = NotFromAModel(response.AdditionalProperties, out var cause);
+        Answered(!stopped, cause);
+        return response;
     }
 
     public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -76,8 +131,18 @@ internal sealed class AnnouncedActionChatClient(IChatClient innerClient, ILogger
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var (withMessages, withOptions) = WithInstruction(messages, options);
+        var stopped = false;
+        string? cause = null;
         await foreach (var update in base.GetStreamingResponseAsync(withMessages, withOptions, cancellationToken))
+        {
+            if (!stopped && NotFromAModel(update.AdditionalProperties, out var said))
+            {
+                stopped = true;
+                cause = said;
+            }
             yield return update;
+        }
+        Answered(!stopped, cause);
     }
 
     /// <summary>

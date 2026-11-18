@@ -353,7 +353,12 @@ public sealed class ForcedActionTests
     public async Task A_page_request_must_first_navigate_and_no_ui_action_can_stand_in()
     {
         await using var host = Host();
-        host.Get<IMentorPageContext>().RegisterUIAction("highlight_row", "Highlights a row", _ => { });
+        var page = host.Get<IMentorPageContext>();
+        page.RegisterUIAction("highlight_row", "Highlights a row", _ => { });
+        // The reports page registers its own row action when it opens: the actions of the page left are taken back
+        // before the navigation (page.left-not-offered), and the ones of the page now shown are offered.
+        host.Get<IMentorStateService>().OnNavigationRequested += _ =>
+            page.SetPageName("Reports").RegisterUIAction("highlight_row", "Highlights a row", _ => { });
         SeedMatch(host, "", Page);
         host.Chat!.Say("NAVIGATE").CallTool("navigate_to", new { url = "/reports" }).Say("Eccoti nei report.");
 

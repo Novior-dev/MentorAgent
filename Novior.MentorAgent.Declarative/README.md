@@ -33,6 +33,7 @@ Built on the Agent Framework's declarative agent factory (`Microsoft.Agents.AI.D
 - [Security — a definition file is code](#security--a-definition-file-is-code)
 - [When to use YAML and when to use C#](#when-to-use-yaml-and-when-to-use-c)
 - [Loading definitions from somewhere else](#loading-definitions-from-somewhere-else)
+- [Teams in YAML — `*.team.yaml`](#teams-in-yaml--teamyaml)
 - [Configuration options](#configuration-options)
   - [`ConfigurationSection` — exposing configuration to a definition](#configurationsection--exposing-configuration-to-a-definition)
 - [How to test it](#how-to-test-it)
@@ -231,7 +232,7 @@ The second point is the one people skip: YAML feels like configuration, and conf
 |---|---|---|
 | Change an agent's instructions | Edit a file | Recompile |
 | New tool / new logic | Not possible — tools stay in C# | Where it belongs |
-| Compile-time checking | None; a bad tool name is silent | Full |
+| Compile-time checking | None at compile time; a tool name the session does not have is taken away with a warning when the agent loads | Full |
 | Who can author it | Anyone who can edit a reviewed file | Developers |
 | Fits when | Wording and routing get tuned often | The agent has real behaviour |
 
@@ -292,8 +293,9 @@ public sealed class DatabaseAgentSource : IMentorAgentSource
     public async Task<IReadOnlyList<AIAgent>> GetAgentsAsync(
         MentorAgentSourceContext context, CancellationToken ct = default)
     {
-        // context.ChatClient — your MentorOptions.ChatClient wrapped only in the token meter
-        //                      (not the coordinator's pipeline), so usage lands in the metrics
+        // context.ChatClient — your MentorOptions.ChatClient wrapped for the agents under the coordinator:
+        //                      one id per call (BUG-225), the token meter and metrics, the role filter on the
+        //                      tools (BUG-205). Not the coordinator's pipeline: no routing, no safety checks
         // context.Tools      — the Level-1 tools, already gated
         …
     }
@@ -301,6 +303,58 @@ public sealed class DatabaseAgentSource : IMentorAgentSource
 
 builder.Services.AddSingleton<IMentorAgentSource, DatabaseAgentSource>();
 ```
+
+---
+
+## Teams in YAML — `*.team.yaml`
+
+A team of agents that discuss a task and reach a verdict can be written in a file too, next to the agents: every
+`*.team.yaml` file of `Directory`, and every entry of `TeamDefinitions`, gives one team. It is the team an
+`IMentorTeamSource` gives in code (see the core README, *Teams from a source*), checked the same way, and it works as
+a `[MentorTeam]` class does: the coordinator gets a tool named after it in snake_case, and the members discuss until
+a verdict.
+
+```yaml
+kind: Team                     # optional
+name: Order Review
+description: Reviews an order before anything is done with it.
+approver: Approver             # the member whose verdict ends the discussion
+maxIterations: 6               # optional, 10 by default
+triggerOn: [review, check]     # optional
+handoffTo: [ShippingAgent]     # optional
+members:
+  - role: Clerk
+    instructions: |
+      Look at the order and say what you see.
+    tools: [get_order]         # the session's actions, by name
+  - role: Approver
+    instructions: Decide, with [TEAM:APPROVED] or [TEAM:REJECTED].
+```
+
+A member's `tools` are names of the actions the session already has, as in an agent's definition: a name it does not
+have, or one that is off, is taken away and reported, and each tool runs through the gate with its roles and its
+confirmation. A file cannot add a capability.
+
+**A file that does not hold is left out, never half-read.** The YAML is read with YamlDotNet's node model, and every key
+is checked: YAML the parser refuses, a key written twice, an unknown key (a misspelt `membres`), a list where a text
+goes, two documents in one file. The team is left out with `invalid-definition` and where the fault is — `line 2,
+column 1: unknown key 'membres' in a team` — in the log and in `IMentorAgentSourceObserver.OnTeamsLoaded`. A team whose
+name the code already uses, or without members, is left out by the core with its own reason. The rule is
+`team.from-yaml` in [ACTION-RULES.md](https://github.com/Novior-dev/MentorAgent/blob/main/ACTION-RULES.md).
+
+The files come from the same `Directory` as the agents, with a pattern of their own; teams that live elsewhere, in a
+database say, are given inline:
+
+```csharp
+builder.Services.AddMentorAgentDeclarative(o =>
+{
+    o.Directory = "Agents";                    // Agents/*.agent.yaml and Agents/*.team.yaml
+    o.TeamSearchPattern = "*.team.yaml";       // the default
+    o.TeamDefinitions.Add(teamYamlFromStore);  // one team each, in addition to the files
+});
+```
+
+A file the teams' pattern matches is never read as an agent, even when `SearchPattern` is widened to `*.yaml`.
 
 ---
 
@@ -312,6 +366,8 @@ builder.Services.AddSingleton<IMentorAgentSource, DatabaseAgentSource>();
 | `SearchPattern` | `string` | `"*.agent.yaml"` | File pattern inside `Directory` |
 | `Recursive` | `bool` | `false` | Scan subdirectories too |
 | `Definitions` | `IList<string>` | empty | YAML supplied inline, loaded in addition to `Directory` |
+| `TeamSearchPattern` | `string` | `"*.team.yaml"` | File pattern of the team definitions inside `Directory`. A file it matches is never read as an agent |
+| `TeamDefinitions` | `IList<string>` | empty | Team definitions supplied inline, one team each, loaded in addition to `Directory` |
 | `ConfigurationSection` | `string?` | `null` | Name of the configuration section the YAML may reference. `null` exposes nothing |
 
 ### `SearchPattern` and `Recursive` — what the scan is allowed to reach
@@ -425,6 +481,10 @@ actually need substitution.
 `Microsoft.Agents.AI.Declarative` brings the **Power Fx interpreter** (YAML expressions are Power Fx), the Agents object model in three assemblies, `Microsoft.ML.Tokenizers` and several more.
 
 That is a fair price for file-based authoring and pure overhead for everyone else, so it stays out of the `Novior.MentorAgent` core package. Installing this one is an explicit decision to pay it.
+
+The team files are read with **YamlDotNet 18.1.0** (MIT), its node model only, which brings no dependency of its own.
+An application that references an older YamlDotNet itself gets NuGet's downgrade error (NU1605) until it references
+18.1.0 or later.
 
 The reference is `Microsoft.Agents.AI.Declarative` **1.27.0-rc1**, on the same 1.27 line as `Microsoft.Agents.AI` 1.27.0 in the core package, so adding it does not move the rest of the library onto a different Agent Framework version. The declarative package is still a prerelease upstream.
 

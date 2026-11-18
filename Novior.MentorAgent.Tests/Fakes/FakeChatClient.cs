@@ -132,6 +132,7 @@ internal sealed class FakeChatClient : IChatClient
                         {
                             ModelId = response.ModelId,
                             ConversationId = response.ConversationId,
+                            AdditionalProperties = response.AdditionalProperties,
                         };
                     }
                 }
@@ -141,6 +142,7 @@ internal sealed class FakeChatClient : IChatClient
                     {
                         ModelId = response.ModelId,
                         ConversationId = response.ConversationId,
+                        AdditionalProperties = response.AdditionalProperties,
                     };
                 }
             }

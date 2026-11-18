@@ -94,8 +94,8 @@ internal sealed class AppContextProvider : AIContextProvider
         }
 
         // Note: UI actions are not listed here.
-        // Path A (IChatClient): UIActionsMiddleware injects each action as its own named
-        // AI tool before every LLM call — the LLM discovers them via the tool list.
+        // Path A (IChatClient): each action is a named tool of every run (UIActionTools, story 1288),
+        // brought up to the page after every call — the LLM discovers them via the tool list.
         // Path B (pre-built AIAgent): the legacy invoke_ui_action dispatcher is still active.
 
         // -- Auth --------------------------------------------------------------

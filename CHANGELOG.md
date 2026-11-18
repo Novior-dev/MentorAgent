@@ -28,6 +28,163 @@ names of their time.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-18
+
+### Added
+
+- Actions registered in code, without attributes:
+  `options.Actions.Add<OrderActions>(nameof(OrderActions.CancelOrderAsync), action => action.Describe("…").RequireRoles("Manager").RequireConfirmation())`.
+  A registered action is one of the coordinator's actions, like a `[MentorAction]` method: its roles, its confirmation
+  and the default for writes, the `IMentorActionGovernor`, `/mcp` and the A2A card apply to it the same way. The builder
+  declares what the attribute does: `Describe`, `Category`, `RequireConfirmation`, `ReadOnly`, `RequireRoles`, `Off`,
+  `NavigateTo`, `Hint`. A mistake stops the application when it starts, naming the method: a method that is not
+  there, overloaded, static or generic, a registration without a description, a method registered twice or already an
+  action by its attributes. New rules in ACTION-RULES.md: `fluent.coordinator-action`, `fluent.method-must-exist`,
+  `fluent.declared-decides`, `fluent.description-required`, `fluent.no-double`.
+- Commands and queries as actions: a type of its own and its handler, registered with
+  `options.Actions.AddCommand<CancelOrder, CancelOrderHandler>(action => action.Describe("…"))` or `AddQuery<…>`. The
+  handlers implement `IMentorCommandHandler<TCommand>`, `IMentorCommandHandler<TCommand, TResult>` or
+  `IMentorQueryHandler<TQuery, TResult>`, new in Novior.MentorAgent.Abstractions. The action is named after the type in
+  snake case, its parameters are the type's public properties, a query is always read-only and a command is a write;
+  roles, confirmations, the governor, the policies, `/mcp`, the A2A card and team members apply as to a method
+  registered in code. In the catalogue its origin is `command` or `query` (`MentorActionOrigins.Command`, `Query`), one
+  registration per type, and its `Method` is the handler's `HandleAsync`. The builder's new `Name(…)` gives any action
+  registered in code another name. New rules in ACTION-RULES.md: `fluent.command`, `fluent.query`,
+  `fluent.message-checked`, `fluent.message-trace`.
+- `MentorChatKeys.ModelNotCalled` (`"mentoragent.model_not_called"`): the key an application's own `IChatClient` sets
+  in the `AdditionalProperties` of a response it answered without a model, and of each streaming update, with the
+  cause as the value (`ai_switch`, `budget`, an open string). A turn none of whose requests reached a model is not
+  checked for an announced action, and a line at Debug says why; a missing or zero `Usage` decides nothing.
+- `IMentorActionCatalog.GetRegistrations()`: where the actions come from, one `MentorActionRegistration` per origin and
+  class — its `Origin`, its `Source` (the class), the actions it gives and what it left out (`Rejected`, by the rule's
+  name). `MentorActionOrigins` holds the codes, `attribute` and `fluent` today: an open list that later versions extend.
+  Every `MentorActionInfo` now names its `Origin` and its `RegistrationId`. The new member has a default
+  implementation, so a catalogue the application wrote itself compiles as before and returns none.
+- `MentorActionInfo.Method`: the application's method an action runs, for the origins `attribute`, `fluent` and
+  `candidate`, to read its parameters and attributes; `null` for an endpoint declared as an action, whose parameters
+  are the route's, the query's and the body's, and for any other origin. It is left out of JSON.
+- The pages in `GetRegistrations()`: after the registrations of the code, one per page that declared UI actions, of
+  the new origin `MentorActionOrigins.Page` (`page`), with `Id` `page:<page>` and the names its pages declared since
+  the application started, in every session. A page declares from the browser, so only names are kept, within the
+  limits of `MentorPageActionLimits` (64 actions per page, 200 pages, tool-shaped action names, page names of 1 to
+  128 characters without control or format characters); what goes beyond them is in `Rejected`. The new
+  `MentorActionRegistration.Revision` grows when a page changes, and is 0 for the registrations of the code. New
+  rules in ACTION-RULES.md: `page.gated`, `page.trace-names-only`, `page.union-since-start`, `page.name-shape`,
+  `page.limit`.
+- Endpoints as actions (Novior.MentorAgent.Server): `app.MapPost("/orders/{id}/cancel", …).WithMentorAction(a =>
+  a.Describe("Cancels an order"))`, or `[MentorAction]` on a controller's action, makes the endpoint one of the
+  coordinator's actions without writing it again. The action runs the endpoint itself, in the process, as the user
+  of the turn: the endpoint's authorization first, then its filters, its binding and its validation. The model gives
+  the route values, the query values and one JSON body; an answer of 400 or more is a failed action, with its status.
+  `GET` and `HEAD` read; the other verbs write, and ask for a confirmation by default. The application's middleware
+  before routing (rate limiting, CORS) does not run for these calls. They are not published on `/mcp` nor on the A2A
+  card. `MentorActionOrigins.Endpoint` (`endpoint`) is their origin, and in `GetRegistrations()` each endpoint is a
+  registration of its own, named by its verb and route (`endpoint:POST /orders/{id:int}/cancel`). A declaration the
+  action cannot honour stops the application when it starts, naming the endpoint; the Server's README lists each
+  message and its fix. New rules in ACTION-RULES.md: `endpoint.declared`, `endpoint.authorization-first`,
+  `endpoint.runs-the-pipeline`, `endpoint.verb-default`, `endpoint.not-published`, `endpoint.trace`,
+  `scan.controllers-are-endpoints`.
+- The AutoMentor's candidates: with `options.AutoMentor.Enabled` and the namespaces of the perimeter in
+  `options.AutoMentor.Namespaces`, the public methods of the services there become actions of the coordinator of the
+  new origin `MentorActionOrigins.Candidate` (`candidate`). A candidate starts off and asks for a confirmation: it is
+  offered to no model until an `IMentorActionGovernor` turns it on. `[MentorExclude]`, on a class or a method, keeps
+  it out. Nothing outside the perimeter becomes an action, whatever a governor says. `GetRegistrations()` lists one
+  registration per class, with its candidates and, in `Rejected`, the methods a rule left out. New rules in
+  ACTION-RULES.md, area `candidate`: `candidate.opt-in`, `candidate.in-perimeter`, `candidate.shape`,
+  `candidate.excluded`, `candidate.not-yet-an-action`, `candidate.di-resolvable`, `candidate.schema`, `candidate.name`,
+  `candidate.off-and-confirmed`, `candidate.never-outside`, `candidate.trace`. A candidate's description is the
+  `<summary>` of its XML documentation comment, from the `.xml` file next to its assembly
+  (`candidate.described-by-xml`), and its roles are those of its `[Authorize(Roles = …)]`
+  (`candidate.roles-from-authorize`). README: «Candidates from your services».
+- An endpoint's action takes its roles from the endpoint's authorization: `[Authorize(Roles = …)]`, `RequireRole`, a
+  policy by name, the fallback policy. It is offered only to a user who holds one of them, and a user without them is
+  refused before any confirmation; roles declared on the action replace them. Roles asked together give none, with a
+  line in the log, and the endpoint still refuses the call. A policy named and not registered stops the application
+  when it starts, naming the endpoint. New rule in ACTION-RULES.md: `endpoint.roles-from-authorization`.
+- `MentorPreferredSkillsSource`: wrap an `AgentSkillsSource` in it, in `SkillSources`, and its skills replace the
+  application's own of the same name, and the other sources', with a log line naming each; the console of an
+  integration that manages the assistant's skills is the case. Without it nothing changes: the application's skills
+  win, then the first source registered. New rule in ACTION-RULES.md, area `skill`: `skill.name-precedence`.
+- `MentorLiveSkillsSource`: wrap an `AgentSkillsSource` in it, in `SkillSources`, and `SkillsRefreshInterval` never
+  caches it: it is asked at every session, so a skill it withdraws is gone for the next one, while the other sources
+  keep their cache. With an interval each source is now cached on its own rather than the whole list. Without an
+  interval nothing changes. New rule in ACTION-RULES.md, area `skill`: `skill.live-source`.
+- **Novior.MentorAgent.Declarative:** teams in YAML. Every `*.team.yaml` file of the folder (`TeamSearchPattern`)
+  and every `TeamDefinitions` entry gives a team, with the fields of `MentorTeamDefinition`, checked as any
+  `IMentorTeamSource`'s is. A file that does not hold is left out with `invalid-definition` and the line and column
+  of the fault; an unknown key or a key written twice is a fault. A team file is never read as an agent, even by a
+  wider `SearchPattern`. New rule in ACTION-RULES.md: `team.from-yaml`.
+- **Novior.MentorAgent.Declarative** now depends on **YamlDotNet 18.1.0** (MIT), which reads the team files. An
+  application that gets an older YamlDotNet through another package moves to 18.1.0 with this version; one that
+  references an older version itself gets NuGet's downgrade error (NU1605) until it references 18.1.0 or later. If
+  your code uses YamlDotNet, read its release notes for the versions in between.
+- Teams from a source: an `IMentorTeamSource` (`AddMentorTeamSource<T>()`) gives teams that are not written in C#,
+  as `MentorTeamDefinition`s with the fields of `[MentorTeam]` and `[TeamMember]`, a member's tools named as the
+  session's actions, and an `Approver`, the member whose verdict ends the discussion. It is asked each time a
+  coordinator is built, and its teams join it as the ones written in C# do. What does not hold is left out with its
+  reason, reported to `IMentorAgentSourceObserver.OnTeamsLoaded` (a new method with an empty default) and in the log;
+  new reason codes `name-taken` and `no-members`. A member's tools, of a source's team or of one written in C#, may be
+  writes: each keeps its roles and its confirmation, through the gate once. New rules in ACTION-RULES.md, area `team`:
+  `team.from-source`, `team.member-tools`, `team.approver`, `team.rejected-with-reason`.
+- `MentorActionDecision.TenantId`: the tenant of the call, the one the `IMentorTenantResolver` resolved for the turn or,
+  on the MCP server, for the request; `null` without a resolver. An observer of several tenants now tells the same user
+  in two of them apart.
+
+### Changed
+
+- `CheckAnnouncedActions` also checks a turn that called tools. A model could read a record and then write that it
+  had taken it in charge without calling the tool that does it; the check skipped every turn with a call, so it did
+  not see it. Now the question also names the tools the turn called, and only an action none of them did counts: a
+  reply that reports what they did or returned, or the state of the records they read, is not one. The second request
+  then says that this action did not run. A turn that handed the request to a specialist, a team or a remote agent,
+  used a hosted tool or waits for an approval is still not checked. The cost, measured on gpt-4.1 over 18 turns that
+  read records, with the question on the main deployment: one more call of about 440 tokens (386 to 643) in each turn
+  with a call, 0.5 to 0.7 s while the provider answered in its usual time, after the reply has reached the user; no
+  reply was flagged by mistake.
+- The support policy is the one of 1.3.1 (see its section below): only the latest minor version gets fixes, and the
+  security fixes promised for earlier minor versions are withdrawn.
+- Every package is now checked at pack time against the public API of 1.3.1, so 1.4.0 cannot break code built
+  against 1.3.1 by accident. An intended break is listed in this file as Breaking.
+- `ScanAssemblies` no longer reads controllers (`scan.controllers-are-endpoints`). A `[MentorAction]` on a
+  controller's action used to become an action that called the method on an instance from the container, past the
+  endpoint's `[Authorize]` and filters, and failed when the controller was not registered as a service. It is now
+  read from the controller's endpoint and runs the endpoint, with `AddMentorAgentServer()`. Which classes are
+  controllers is read from the attributes' metadata, without creating them: an attribute of the application whose
+  constructor throws, or whose type does not load, does not stop it (`scan.attributes-not-created`).
+- The `dotnet new` template in the repository, `templates/mentoragent-blazor`, creates its project on
+  Novior.MentorAgent 1.4.0.
+- On Path A the coordinator calls a page's UI actions through the gate, like every other action: the action policies
+  and their before-action hook are asked about them, `IMentorActionObserver` receives their decisions (with the
+  action's description as `DisplayName`), they get a span and Stop reaches them. Up to 1.3.0 they ran in a loop of
+  their own below the agent, which none of these saw. A UI action still asks for no confirmation and needs no role of
+  its own, and the widget shows its start and end as before; a policy that decides about every tool now decides about
+  UI actions too. After `navigate_to` the next request of the same turn offers the actions of the page now shown. A
+  model that keeps calling UI actions is stopped by the run's cap, as for the application's own actions: 40 calls in a
+  turn, the default `MaximumIterationsPerRequest` of the agent's function-invoking client, which MentorAgent does not
+  change and offers no option for; up to 1.3.0 the loop of the UI actions stopped at 10.
+- `MentorActionRequest.Kind` and `MentorActionDecision.Kind` (`MentorActionKind.Server` or `UI`), and
+  `MentorActionDecision.PageName`: a policy and an observer tell a UI action from an action of the application, and
+  know the page. A UI action with the name of an action of the application that is off is the page's: that action's
+  roles, confirmation and governor do not apply to it. New rule in ACTION-RULES.md: `page.kind`.
+- The action policies decide whether a page's UI action is offered, as for the application's actions: one
+  `IsAllowedAsync` does not allow at `Offer` is left out of the turn's requests, the actions of a page `navigate_to`
+  opens during the turn included — asked about with the page's name, even when its actions have the names of the
+  page left — and a call to it anyway is refused at the gate. One left out stays out for the rest of the turn. New
+  rule in ACTION-RULES.md: `page.offered`.
+- What the action policies decide about the offer since 1.3.1 (see its section) is a rule in ACTION-RULES.md:
+  `policy.offered-to-agents`. Every agent of the turn is offered only the application's actions the policies allow,
+  a member of a team read from a `*.team.yaml` file as one written in C#, and a call to one left out is refused at
+  the gate as `not-offered`.
+
+### Fixed
+
+- After a navigation the next request of the turn no longer offers the UI actions of the page being left
+  (BUG-234). Blazor disposes that page only after the next one has initialized, and `navigate_to` does not wait for
+  a page without UI actions, so the request after `navigate_to`, or after an action whose `NavigateTo` opens another
+  page, still offered them, and a call to one ran its handler on a page going away. They are now taken back before
+  the navigation is asked for, in a turn with a Blazor circuit; over the hub, SSE and A2A the page's actions still
+  come with the client's snapshot. New rule in ACTION-RULES.md: `page.left-not-offered`.
+
 ## [1.3.1] - 2026-11-14
 
 ### Security
@@ -59,7 +216,7 @@ names of their time.
   new major version will state its support window when it is released. See *Versioning and support* in the README
   and SECURITY.md.
 
-## [1.3.0] - 2026-11-05
+## [1.3.0] - 2026-11-11
 
 ### Added
 
@@ -308,7 +465,7 @@ names of their time.
 
 ### Fixed
 
-- When a restored conversation the service no longer knew was replaced by a new one (BUG-110), the knowledge-base
+- When a restored conversation the service no longer knew was replaced by a new one (BUG-232), the knowledge-base
   search kept the recent messages of the conversation that was gone: the first search of the new one was given the
   message of the turn that had failed. They are now cleared, as on a reset or a restore.
 
@@ -328,6 +485,26 @@ names of their time.
   `chat.cross-site-refused` without the question. Your own page's calls, clients without Fetch Metadata and `cors`
   requests work as before. With a `SameSite=None` cookie, or for browsers that send no Fetch Metadata, add a check
   of your own: the Server README says how.
+
+### Known issues
+
+- **Novior.MentorAgent:** BUG-074 (S3) is closed by default: since 1.2.0 `MentorshipLevel.Proactive` asks for no
+  closing offers unless `ProactiveNextSteps` is on. With it on, the assistant can still offer next steps the
+  application does not have — 4 of 15 closing offers on the headless server sample, measured on 1.2.0.
+- **Novior.MentorAgent:** BUG-118 (S2) is reduced by default on Path A with the history MentorAgent keeps, and closed
+  for hosts that opt in to `RequireActionForChangeRequests`. There `CheckAnnouncedActions`, on by default, finds a
+  reply that says an action ran when no tool was called, and makes one more request; it is a second check made by a
+  model, the first reply is already on the screen when the second comes, and it does not run with
+  `UseServiceManagedHistory` or with an `Agent` you built. Without the option the model can still narrate an action it
+  never performed — "Stock aggiornato" with no tool called, or "Ecco la pagina Prodotti" with no navigation — and with
+  it a complete request the classifier does not recognise runs as without the option.
+- **Novior.MentorAgent:** BUG-224 (S2) leaves a residue in a turn in a language other than English: when the role
+  filter leaves an action out, the assistant can still offer it, and after the user's "yes" it can, rarely, call
+  another action the user may run in its place — once in 10 Italian tries on the demo, a new expense claim instead of
+  an approval. The confirmation that write actions ask for by default stops that call: keep `RequireConfirmation`
+  and `RequireConfirmationForWrites` on.
+- **Novior.MentorAgent:** BUG-106's residue is closed for hosts that opt in to `RequireLookupForRecordQuestions`;
+  without it, a catalogue question can still be answered with an offer to look the value up.
 
 ## [1.2.0] - 2026-10-27
 
@@ -1846,6 +2023,7 @@ names of their time.
 - **MentorAgent:** `MentorRemoteAgent.RequiredRoles` is not enforced: any user can reach a remote agent.
 
 [Unreleased]: https://www.nuget.org/packages/Novior.MentorAgent
+[1.4.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.4.0
 [1.3.1]: https://www.nuget.org/packages/Novior.MentorAgent/1.3.1
 [1.3.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.3.0
 [1.2.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.2.0

@@ -15,7 +15,7 @@ namespace Novior.MentorAgent.Core;
 /// Thread-safety: pages write on the Blazor UI thread,
 /// AppContextProvider reads on the AI thread. We use a lock for safety.
 /// </summary>
-internal sealed class MentorPageContext : IMentorPageContext
+internal sealed class MentorPageContext(MentorPageActionTrace? trace = null) : IMentorPageContext
 {
     private readonly Lock _lock = new();
 
@@ -131,7 +131,15 @@ internal sealed class MentorPageContext : IMentorPageContext
 
     private MentorPageContext Add(UIActionRegistration registration)
     {
-        lock (_lock) _actions[registration.ActionName] = new(_pageName, registration);
+        string? page;
+        lock (_lock)
+        {
+            page = _pageName;
+            _actions[registration.ActionName] = new(page, registration);
+        }
+
+        // Story 1288, slice C — the trace of the process keeps the name only, never the description or the handler.
+        trace?.Record(page, registration.ActionName);
         return this;
     }
 
@@ -177,6 +185,18 @@ internal sealed class MentorPageContext : IMentorPageContext
     internal void TakeReadySignalBack()
     {
         lock (_lock) _readyTcs = new TaskCompletionSource<bool>();
+    }
+
+    /// <summary>
+    /// Takes the UI actions of the page now shown back (page.left-not-offered). <c>navigate_to</c>, and an action that
+    /// opens another page, call it before they ask for the navigation: Blazor disposes the page being left, which
+    /// clears its actions, only after the next page has initialized, and a request of the run in between would still
+    /// offer them, and run one on a page that is going away. The next page registers its own when it opens. The
+    /// page's context data stays until its <c>Dispose</c>, as before.
+    /// </summary>
+    internal void TakeUIActionsBack()
+    {
+        lock (_lock) _actions.Clear();
     }
 
     public IMentorPageContext SignalReady()

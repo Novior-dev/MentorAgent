@@ -226,7 +226,7 @@ public sealed class AgentSourceReportTests
         typeof(MentorAgentRejectionReasons).GetFields(BindingFlags.Public | BindingFlags.Static)
             .Select(f => (string)f.GetRawConstantValue()!)
             .Should().BeEquivalentTo(["invalid-definition", "not-an-agent", "foreign-tools", "invalid-configuration",
-                                      "source-failed", "tool-not-found", "hosted-tool-removed"]);
+                                      "source-failed", "tool-not-found", "hosted-tool-removed", "name-taken", "no-members"]);
     }
 
     // ── A definition and the actions of the session ──────────────────────────────

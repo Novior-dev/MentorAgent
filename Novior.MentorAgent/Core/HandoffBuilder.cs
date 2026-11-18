@@ -193,11 +193,7 @@ internal sealed class HandoffBuilder
             {
                 var instance = _sp.GetRequiredService(descriptor.Type);
 
-                AITool tool = AIFunctionFactory.Create(
-                    method: method.Method,
-                    target: instance,
-                    name: method.ToolName,
-                    description: method.ToolDescription);
+                AITool tool = MentorActionFunctions.Create(method, instance, method.ToolDescription);
 
                 // This agent runs its own function-calling loop inside the handoff workflow, where
                 // the coordinator's middleware never reaches. Wrapping the function carries the gate

@@ -180,6 +180,29 @@ public sealed class MentorOptions
     [MentorOptionReadAt(MentorOptionReadAt.Startup)]
     public required Assembly[] ScanAssemblies { get; set; }
 
+    /// <summary>
+    /// Actions registered in code, without attributes: each a public instance method of a class in the services, with
+    /// what <c>[MentorAction]</c> would declare. A registered action is one of the coordinator's actions, like a
+    /// <c>[MentorAction]</c> method found in <see cref="ScanAssemblies"/>. A method that is already an action by its
+    /// attributes in one of <see cref="ScanAssemblies"/> cannot be registered here too: the application stops when it
+    /// starts, naming it. Read once, at startup, like <see cref="ScanAssemblies"/>; it is a list to add to, not an option
+    /// to set, so it is not among <see cref="MentorRuntimeOptions.Changeable"/>.
+    /// <code>
+    /// options.Actions.Add&lt;OrderActions&gt;(nameof(OrderActions.CountOpenOrders), action =&gt; action
+    ///     .Describe("Counts the open orders")
+    ///     .ReadOnly());
+    /// </code>
+    /// </summary>
+    public MentorActionRegistrations Actions { get; } = new();
+
+    /// <summary>
+    /// The AutoMentor's candidates: with <see cref="MentorAutoMentorOptions.Enabled"/>, the public methods of the
+    /// services in the perimeter the code declares (<see cref="MentorAutoMentorOptions.Namespaces"/>) become actions of
+    /// the coordinator that start off and ask for a confirmation; an <c>IMentorActionGovernor</c> may turn one on.
+    /// <c>[MentorExclude]</c> keeps a class or a method out. Off by default. Read once, at startup.
+    /// </summary>
+    public MentorAutoMentorOptions AutoMentor { get; } = new();
+
     // ── UI ────────────────────────────────────────────────────────────────────
 
     /// <summary>Widget visual theme. Default: Default.</summary>
@@ -2085,9 +2108,14 @@ public sealed class MentorOptions
 
     /// <summary>
     /// How long a skill list fetched from <see cref="SkillSources"/> stays fresh before it is
-    /// re-fetched. When set, the composition is wrapped in the framework's
-    /// <c>CachingAgentSkillsSource</c> and shared by every session in the process: sessions reuse the
-    /// list, and the first one built after the interval has passed fetches it again.
+    /// re-fetched. When set, each source is wrapped in the framework's
+    /// <c>CachingAgentSkillsSource</c> and the composition is shared by every session in the process:
+    /// sessions reuse the lists, and the first one built after the interval has passed fetches them again.
+    ///
+    /// <para>
+    /// A source wrapped in <see cref="Core.MentorLiveSkillsSource"/> is never cached: it is asked at every
+    /// session, so a skill it withdraws is gone for the next one (<c>skill.live-source</c>).
+    /// </para>
     ///
     /// <para>
     /// Without it (the default) every new session — each circuit, hub connection or SSE request —
@@ -2154,6 +2182,9 @@ public sealed class MentorOptions
             throw new InvalidOperationException(
                 "[MentorAgent] ScanAssemblies cannot be empty. " +
                 "Use: options.ScanAssemblies = [typeof(Program).Assembly];");
+
+        // Story 1285 — rule fluent.no-double, once ScanAssemblies is known.
+        Actions.Validate(ScanAssemblies);
 
         CoordinatorSampling?.Validate(nameof(CoordinatorSampling));
     }

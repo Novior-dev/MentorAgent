@@ -12,20 +12,23 @@ namespace Novior.MentorAgent.Core;
 /// Executed only once at startup (lazy, thread-safe). The result is cached in
 /// <see cref="DiscoveryResult"/>.
 /// </summary>
-internal sealed class MentorDiscoveryService
+internal sealed partial class MentorDiscoveryService
 {
     private readonly MentorOptions _options;
     private readonly ILogger<MentorDiscoveryService> _logger;
+    private readonly IServiceProvider? _services;
 
     private DiscoveryResult? _cached;
     private readonly Lock _lock = new();
 
     public MentorDiscoveryService(
         IOptions<MentorOptions> options,
-        ILogger<MentorDiscoveryService> logger)
+        ILogger<MentorDiscoveryService> logger,
+        IServiceProvider? services = null)
     {
         _options = options.Value;
         _logger = logger;
+        _services = services;
     }
 
     /// <summary>
@@ -67,6 +70,8 @@ internal sealed class MentorDiscoveryService
                 ScanAssembly(asm, result);
 
             RemoveMemberToolsFromLevel1(result);
+            AddRegisteredActions(result);
+            AddCandidates(result);
 
             _logger.LogInformation(
                 "[MentorAgent] Discovery completed — L1 tools: {L1}, L2 agents: {L2}, L3 teams: {L3}, pages: {P}",
@@ -189,6 +194,41 @@ internal sealed class MentorDiscoveryService
         }
     }
 
+    /// <summary>
+    /// Story 1285 — the actions <see cref="MentorOptions.Actions"/> registers in code (rule <c>fluent.coordinator-action</c>):
+    /// the coordinator's, after the scan, as a <c>[MentorAction]</c> method would be, with what each registration declares
+    /// (<c>fluent.declared-decides</c>). <see cref="MentorOptions.Validate"/> has already refused the method registered twice.
+    /// </summary>
+    private void AddRegisteredActions(DiscoveryResult result)
+    {
+        foreach (var registration in _options.Actions.All)
+        {
+            // Story 1286 — a command or a query: named after its type, or as declared; a query is read-only.
+            var toolName = registration.ToolName;
+            result.Level1Methods.Add(new MethodDiscoveryInfo(
+                DeclaringType: registration.Type,
+                Method: registration.Method,
+                ToolName: toolName,
+                Description: registration.Description,
+                Category: registration.Category,
+                // As EffectiveConfirmation for a [MentorAction]: what it declares, or the default for writes.
+                RequiresConfirmation: registration.Confirmation
+                    ?? (_options.RequireConfirmationForWrites && !IsReadOnly(registration.ReadOnly, toolName)),
+                ProactiveHint: registration.ProactiveHint,
+                RequiredRoles: registration.Roles,
+                NavigateTo: registration.NavigateTo,
+                ReadOnly: registration.ReadOnly,
+                IsMentorAction: true,
+                ConfirmationDeclared: registration.Confirmation is not null,
+                EnabledByDefault: registration.Enabled,
+                Origin: registration.Message?.Origin ?? MentorActionOrigins.Fluent,
+                Message: registration.Message));
+        }
+
+        if (_options.Actions.Count > 0)
+            _logger.LogDebug("[MentorAgent] L1: {N} action(s) registered in Actions", _options.Actions.Count);
+    }
+
     // ── Scansione ─────────────────────────────────────────────────────────────
 
     private void ScanAssembly(Assembly asm, DiscoveryResult result)
@@ -207,7 +247,101 @@ internal sealed class MentorDiscoveryService
         }
 
         foreach (var type in types.Where(t => t.IsClass && !t.IsAbstract))
+        {
+            // Story 1287 (scan.controllers-are-endpoints): a controller's actions are endpoints. Read here, they ran as a
+            // method on an instance from the container, past the endpoint's authorization and filters; a [MentorAction]
+            // on a controller's action is read from the endpoint's metadata instead, by Novior.MentorAgent.Server.
+            var controller = IsController(type, out var unreadable);
+            if (unreadable)
+            {
+                // BUG-236 (scan.attributes-not-created): a type one of its attributes names does not load.
+                _logger.LogWarning(
+                    "[MentorAgent] The attributes of {Type} could not be read: a type they name does not load. The class is skipped.",
+                    type.FullName);
+                continue;
+            }
+            if (controller)
+            {
+                _logger.LogDebug("[MentorAgent] {Type} is a controller: its actions are read from its endpoints.", type.Name);
+                continue;
+            }
+
             ScanType(type, result);
+        }
+    }
+
+    /// <summary>
+    /// A class ASP.NET Core MVC serves as a controller: one that carries <c>[Controller]</c> or <c>[ApiController]</c>,
+    /// itself or from a base class, and not <c>[NonController]</c>. <c>ControllerBase</c> carries <c>[Controller]</c>, so
+    /// every class derived from it is one. Read by name: the core does not reference MVC.
+    /// </summary>
+    internal static bool IsController(Type type) => IsController(type, out _);
+
+    /// <summary>
+    /// <inheritdoc cref="IsController(Type)"/> BUG-236 (<c>scan.attributes-not-created</c>): the names are read from the
+    /// attributes' metadata (<see cref="CustomAttributeData"/>), the class's and its base classes', as the three
+    /// attributes are inherited, so no attribute of the application is created and one whose constructor throws cannot
+    /// stop the scan. <paramref name="unreadable"/> is set, and the class is not a controller, when a type one of its
+    /// attributes names does not load.
+    /// </summary>
+    internal static bool IsController(Type type, out bool unreadable)
+    {
+        unreadable = false;
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            for (var t = type; t is not null && t != typeof(object); t = t.BaseType)
+                foreach (var data in t.GetCustomAttributesData())
+                    if (data.AttributeType.FullName is { } name) names.Add(name);
+        }
+        catch (Exception ex) when (IsLoadFailure(ex))
+        {
+            unreadable = true;
+            return false;
+        }
+        return !names.Contains("Microsoft.AspNetCore.Mvc.NonControllerAttribute")
+               && (names.Contains("Microsoft.AspNetCore.Mvc.ControllerAttribute") || names.Contains("Microsoft.AspNetCore.Mvc.ApiControllerAttribute"));
+    }
+
+    /// <summary>A type, or the assembly it is in, that does not load: what reading an attribute's metadata can throw.</summary>
+    internal static bool IsLoadFailure(Exception ex)
+        => ex is TypeLoadException or FileNotFoundException or FileLoadException or BadImageFormatException;
+
+    /// <summary>
+    /// Story 1287 — the actions of the application's endpoints, added once the host has started and mapped them
+    /// (<c>EndpointDataSource</c>), after the discovery of the code. A name an action already has stops the application:
+    /// a model calls one tool per name (<c>endpoint.declared</c>).
+    /// </summary>
+    internal void AddEndpointActions(IReadOnlyList<MethodDiscoveryInfo> actions)
+    {
+        if (actions.Count == 0) return;
+
+        var result = Discover();
+        lock (_lock)
+        {
+            foreach (var action in actions)
+            {
+                // Story 1569: a candidate gives way to the endpoint (candidate.name), it does not stop the application.
+                YieldCandidateName(result, action.ToolName);
+
+                var clash = result.Level1Methods
+                    .Concat(result.Level2Agents.SelectMany(a => a.Methods))
+                    .Concat(result.Level3Teams.SelectMany(t => t.Members).SelectMany(m => m.Tools))
+                    .FirstOrDefault(m => string.Equals(m.ToolName, action.ToolName, StringComparison.OrdinalIgnoreCase));
+                if (clash is not null)
+                    throw new InvalidOperationException(
+                        $"[MentorAgent] The endpoint action '{action.ToolName}' has the name of another action " +
+                        $"({clash.DeclaringType.Name}.{clash.Method.Name}). Give it another name with WithMentorAction(name, …).");
+
+                result.Level1Methods.Add(action);
+            }
+
+            _logger.LogInformation("[MentorAgent] L1: {N} action(s) from the application's endpoints: {Names}",
+                actions.Count, string.Join(", ", actions.Select(a => a.ToolName)));
+            var added = new DiscoveryResult();
+            added.Level1Methods.AddRange(actions);
+            WarnAboutUnconfirmedWrites(added);
+        }
     }
 
     private void ScanType(Type type, DiscoveryResult result)

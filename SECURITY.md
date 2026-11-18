@@ -35,7 +35,7 @@ compatible.
 
 | Version | Fixes |
 |---|---|
-| 1.3.x (latest minor) | ✅ Every fix |
+| 1.4.x (latest minor) | ✅ Every fix |
 | Earlier minor versions | ❌ Upgrade to the latest minor version, which is compatible |
 | Release candidates and previews | ❌ |
 

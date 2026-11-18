@@ -148,6 +148,7 @@ public class SkillSourceAdoptionTests
     /// the list wins — which is what makes registration order a contract a host can rely on.
     /// </summary>
     [Fact]
+    [Trait("Rule", "skill.name-precedence")]
     public void A_duplicate_name_across_sources_keeps_the_first_registered()
     {
         var (skills, _) = Build(o => o.SkillSources =
@@ -168,6 +169,7 @@ public class SkillSourceAdoptionTests
     /// replacement would be a supply-chain problem rather than a configuration one.
     /// </summary>
     [Fact]
+    [Trait("Rule", "skill.name-precedence")]
     public void An_application_skill_wins_a_collision_with_a_registered_source()
     {
         string? root = null;
@@ -185,6 +187,96 @@ public class SkillSourceAdoptionTests
 
         string.Join("\n", logs.Records.Select(r => r.Message)).Should().Contain("shipping",
             "the collision is skipped with a warning naming the skill, not in silence");
+    }
+
+    // ── …unless the application marks the source as preferred (story 1570, slice C) ──────────────
+
+    private static string Messages(TestLogCollector logs) => string.Join("\n", logs.Records.Select(r => r.Message));
+
+    [Fact]
+    [Trait("Rule", "skill.name-precedence")]
+    public void A_preferred_source_replaces_the_application_skill_of_the_same_name_and_says_so()
+    {
+        var (skills, logs) = Build(o =>
+        {
+            WriteFileSkill(o.SkillsFolder!, "shipping", "The application's own shipping rules");
+            WriteFileSkill(o.SkillsFolder!, "returns", "The application's own return rules");
+            o.SkillSources = [new MentorPreferredSkillsSource(new ScriptedSkillsSource(
+                Skill("shipping", "The console's shipping rules", "## Shipping\nFrom the console.")))];
+        });
+
+        var shipping = skills.Should().ContainSingle(s => s.Name == "shipping").Subject;
+        shipping.Description.Should().Be("The console's shipping rules");
+        shipping.InstructionsMarkdown.Should().Contain("From the console.");
+        shipping.Native.Should().NotBeNull("the source's skill is taken whole, its resources with it");
+        skills.Should().ContainSingle(s => s.Name == "returns")
+            .Which.Description.Should().Be("The application's own return rules", "only the name it gives is replaced");
+
+        Messages(logs).Should().Contain("'shipping' from a preferred source (MentorPreferredSkillsSource) replaces")
+            .And.NotContain("The application's skill is kept");
+    }
+
+    [Fact]
+    [Trait("Rule", "skill.name-precedence")]
+    public void A_preferred_source_wins_over_a_source_registered_before_it_and_the_first_preferred_wins()
+    {
+        var (skills, _) = Build(o => o.SkillSources =
+        [
+            new ScriptedSkillsSource(Skill("policy", "from a plain source", "plain"), Skill("faq", "plain faq", "f")),
+            new MentorPreferredSkillsSource(new ScriptedSkillsSource(Skill("policy", "from the first preferred", "p1"))),
+            new MentorPreferredSkillsSource(new ScriptedSkillsSource(
+                Skill("policy", "from the second preferred", "p2"), Skill("faq", "preferred faq", "pf"))),
+        ]);
+
+        skills.Should().ContainSingle(s => s.Name == "policy").Which.Description.Should().Be("from the first preferred");
+        skills.Should().ContainSingle(s => s.Name == "faq").Which.Description.Should().Be("preferred faq");
+    }
+
+    [Fact]
+    [Trait("Rule", "skill.name-precedence")]
+    public void A_preferred_source_still_wins_through_the_cache_and_the_filter_still_applies_to_it()
+    {
+        var (cached, _) = Build(o =>
+        {
+            WriteFileSkill(o.SkillsFolder!, "shipping", "The application's own shipping rules");
+            o.SkillsRefreshInterval = TimeSpan.FromMinutes(5);
+            o.SkillSources = [new MentorPreferredSkillsSource(new ScriptedSkillsSource(
+                Skill("shipping", "The console's shipping rules", "console")))];
+        });
+        cached.Should().ContainSingle(s => s.Name == "shipping").Which.Description.Should().Be("The console's shipping rules");
+
+        var (filtered, _) = Build(o =>
+        {
+            WriteFileSkill(o.SkillsFolder!, "shipping", "The application's own shipping rules");
+            o.SkillSources = [new MentorPreferredSkillsSource(new ScriptedSkillsSource(
+                Skill("shipping", "The console's shipping rules", "console")))];
+            o.SkillFilter = s => s.Frontmatter.Name != "shipping";
+        });
+        filtered.Should().ContainSingle(s => s.Name == "shipping")
+            .Which.Description.Should().Be("The application's own shipping rules", "a skill the filter drops replaces nothing");
+    }
+
+    [Fact]
+    [Trait("Rule", "skill.name-precedence")]
+    public void A_preferred_source_that_fails_leaves_the_application_skill()
+    {
+        var (skills, logs) = Build(o =>
+        {
+            WriteFileSkill(o.SkillsFolder!, "shipping", "The application's own shipping rules");
+            o.SkillSources = [new MentorPreferredSkillsSource(new ThrowingSkillsSource())];
+        });
+
+        skills.Should().ContainSingle(s => s.Name == "shipping").Which.Description.Should().Be("The application's own shipping rules");
+        Messages(logs).Should().Contain("AgentSkillsSource");
+    }
+
+    [Fact]
+    public void A_preferred_source_needs_a_source()
+    {
+        var act = () => new MentorPreferredSkillsSource(null!);
+        act.Should().Throw<ArgumentNullException>();
+        var inner = new ScriptedSkillsSource();
+        new MentorPreferredSkillsSource(inner).Inner.Should().BeSameAs(inner);
     }
 
     /// <summary>
@@ -365,4 +457,124 @@ public class SkillSourceAdoptionTests
     [Fact]
     public void Without_one_every_session_reads_the_sources()
         => FetchesAcrossTwoSessions(null).Should().Be(2, "the documented default: read once per session");
+
+    // ── MentorLiveSkillsSource (story 1573, skill.live-source) ──────────────────
+
+    /// <summary>A source whose skills change between sessions, as a console's do when it withdraws one.</summary>
+    private sealed class ChangingSkillsSource(params AgentSkill[] skills) : AgentSkillsSource
+    {
+        public List<AgentSkill> Skills { get; } = [.. skills];
+        public int Calls { get; private set; }
+
+        public override Task<IList<AgentSkill>> GetSkillsAsync(
+            AgentSkillsSourceContext context, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult<IList<AgentSkill>>([.. Skills]);
+        }
+    }
+
+    /// <summary>Builds one session's skills against the process-wide <paramref name="shared"/> composition.</summary>
+    private static List<SkillRegistration> Session(MentorOptions options, MentorSharedSkillSource shared, string? appSkill = null)
+    {
+        if (appSkill is not null) WriteFileSkill(options.SkillsFolder!, appSkill, "The application's own " + appSkill);
+        var builder = new MentorSkillsBuilder(
+            new OptionsWrapper<MentorOptions>(options),
+            new TestHostEnvironment { ContentRootPath = Path.GetTempPath() },
+            new TypedLogger<MentorSkillsBuilder>(NullLogger.Instance),
+            NullLoggerFactory.Instance,
+            sharedSource: shared);
+        return builder.BuildAsync().GetAwaiter().GetResult();
+    }
+
+    private static MentorOptions LiveOptions(TimeSpan? interval, params AgentSkillsSource[] sources)
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "mentor-skills-live-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        return new MentorOptions
+        {
+            AppName = "Test",
+            ScanAssemblies = [typeof(Novior.MentorAgent.Abstractions.Interfaces.IMentorPageContext).Assembly],
+            EnableSkills = true,
+            SkillsFolder = folder,
+            ChatClient = new Fakes.FakeChatClient(),
+            SkillSources = [.. sources],
+            SkillsRefreshInterval = interval,
+        };
+    }
+
+    [Fact]
+    [Trait("Rule", "skill.live-source")]
+    public void With_a_refresh_interval_a_live_source_withdraws_a_skill_at_once_and_the_others_keep_their_cache()
+    {
+        var console = new ChangingSkillsSource(Skill("desk", "The console's desk rules", "desk"));
+        var catalogue = new ChangingSkillsSource(Skill("promo", "Seasonal promotions", "promo"));
+        var options = LiveOptions(TimeSpan.FromMinutes(15), new MentorLiveSkillsSource(console), catalogue);
+        var shared = new MentorSharedSkillSource();
+
+        Session(options, shared).Select(s => s.Name).Should().Contain(["desk", "promo"]);
+
+        console.Skills.Clear();                                             // the console withdraws "desk"
+        console.Skills.Add(Skill("returns", "The console's return rules", "returns"));
+        catalogue.Skills.Clear();                                           // a cached source's change waits for the interval
+
+        var next = Session(options, shared).Select(s => s.Name).ToList();
+        next.Should().NotContain("desk", "a live source is asked again for the next session")
+            .And.Contain("returns", "and what it adds is there")
+            .And.Contain("promo", "the plain source is still served from its cache");
+        console.Calls.Should().Be(2);
+        catalogue.Calls.Should().Be(1, "the interval has not passed: one fetch for both sessions");
+    }
+
+    [Fact]
+    [Trait("Rule", "skill.live-source")]
+    public void Without_a_refresh_interval_a_live_source_changes_nothing()
+    {
+        var console = new ChangingSkillsSource(Skill("desk", "The console's desk rules", "desk"));
+        var catalogue = new ChangingSkillsSource(Skill("promo", "Seasonal promotions", "promo"));
+        var options = LiveOptions(null, new MentorLiveSkillsSource(console), catalogue);
+        var shared = new MentorSharedSkillSource();
+
+        Session(options, shared).Select(s => s.Name).Should().Contain(["desk", "promo"]);
+        console.Skills.Clear();
+        catalogue.Skills.Clear();
+
+        Session(options, shared).Select(s => s.Name).Should().NotContain("desk").And.NotContain("promo",
+            "without an interval every source is read at every session, live or not");
+        console.Calls.Should().Be(2);
+        catalogue.Calls.Should().Be(2);
+    }
+
+    [Theory]
+    [Trait("Rule", "skill.live-source")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_live_preferred_source_still_wins_a_name_and_is_still_live_in_either_order(bool liveOutside)
+    {
+        var console = new ChangingSkillsSource(Skill("shipping", "The console's shipping rules", "console"));
+        AgentSkillsSource wrapped = liveOutside
+            ? new MentorLiveSkillsSource(new MentorPreferredSkillsSource(console))
+            : new MentorPreferredSkillsSource(new MentorLiveSkillsSource(console));
+        var plain = new ChangingSkillsSource(Skill("shipping", "A plain source's shipping rules", "plain"));
+        var options = LiveOptions(TimeSpan.FromMinutes(15), plain, wrapped);
+        var shared = new MentorSharedSkillSource();
+
+        Session(options, shared, appSkill: "shipping").Should().ContainSingle(s => s.Name == "shipping")
+            .Which.Description.Should().Be("The console's shipping rules", "the preferred source is asked first and replaces the application's");
+
+        console.Skills.Clear();
+        Session(options, shared).Should().ContainSingle(s => s.Name == "shipping")
+            .Which.Description.Should().Be("The application's own shipping", "once withdrawn, the application's skill is back for the next session");
+        console.Calls.Should().Be(2);
+        plain.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public void A_live_source_needs_a_source()
+    {
+        var act = () => new MentorLiveSkillsSource(null!);
+        act.Should().Throw<ArgumentNullException>();
+        var inner = new ScriptedSkillsSource();
+        new MentorLiveSkillsSource(inner).Inner.Should().BeSameAs(inner);
+    }
 }

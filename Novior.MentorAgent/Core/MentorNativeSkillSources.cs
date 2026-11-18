@@ -26,7 +26,18 @@ namespace Novior.MentorAgent.Core;
 /// <b>Ordering is the contract.</b> <see cref="DeduplicatingAgentSkillsSource"/> keeps the *first*
 /// occurrence of a name, and MentorAgent's own source is aggregated first. So a host source cannot
 /// silently shadow an application skill by reusing its name — the application wins, the same way a
-/// class-based skill already wins over a file-based one of the same name.
+/// class-based skill already wins over a file-based one of the same name. The one exception is the
+/// application's own decision: a source it wraps in <see cref="MentorPreferredSkillsSource"/> is
+/// asked first and its skills replace the application's of the same name, with a log line
+/// (<c>skill.name-precedence</c>).
+/// </para>
+///
+/// <para>
+/// <b>The cache is per source.</b> With <see cref="MentorOptions.SkillsRefreshInterval"/> each source is wrapped in its
+/// own <c>CachingAgentSkillsSource</c> before the aggregation, never the composition as a whole, so a source wrapped in
+/// <see cref="MentorLiveSkillsSource"/> stays outside every cache and is asked at each coordinator build while the
+/// others keep theirs (<c>skill.live-source</c>). The filter and the de-duplication run over the cached and the live
+/// lists at each build, and they are cheap: the cost the interval saves is the sources' own.
 /// </para>
 /// </summary>
 internal static class MentorNativeSkillSources
@@ -37,8 +48,22 @@ internal static class MentorNativeSkillSources
     /// </summary>
     internal static AgentSkillsSource? Compose(MentorOptions options, ILoggerFactory loggerFactory)
     {
-        var sources = options.SkillSources;
-        if (sources is null || sources.Count == 0) return null;
+        if (options.SkillSources is not { Count: > 0 } registered) return null;
+
+        // Story 1570 slice C (skill.name-precedence): a MentorPreferredSkillsSource is asked first, in the order it was
+        // registered, so the de-duplication below keeps its skill over another source's of the same name. A stable sort:
+        // the others keep their order.
+        var sources = registered.OrderBy(s => PreferredOf(s) is null ? 1 : 0).ToList();
+
+        // Story 1573 (skill.live-source): with a refresh interval each source gets its own cache, and a live one none, so
+        // a skill a live source withdraws is gone for the next session while the others are still read once an interval.
+        if (options.SkillsRefreshInterval is { } interval && interval > TimeSpan.Zero)
+        {
+            var cache = new CachingAgentSkillsSourceOptions { RefreshInterval = interval };
+            sources = sources
+                .Select(s => IsLive(s) ? s : new CachingAgentSkillsSource(s, cache))
+                .ToList();
+        }
 
         AgentSkillsSource composed = sources.Count == 1
             ? sources[0]
@@ -52,15 +77,25 @@ internal static class MentorNativeSkillSources
 
         composed = new DeduplicatingAgentSkillsSource(composed, loggerFactory);
 
-        // With a refresh interval the result is cached — and the cache is only worth anything if it
-        // outlives one session, which is why MentorSharedSkillSource holds this composition once per
-        // process. Without one, every new coordinator re-reads the sources.
-        if (options.SkillsRefreshInterval is { } interval && interval > TimeSpan.Zero)
-            composed = new CachingAgentSkillsSource(
-                composed, new CachingAgentSkillsSourceOptions { RefreshInterval = interval });
-
+        // The caches above are only worth anything if they outlive one session, which is why
+        // MentorSharedSkillSource holds this composition once per process. Without an interval, every
+        // new coordinator re-reads the sources.
         return composed;
     }
+
+    /// <summary>
+    /// Whether <paramref name="source"/> is never cached: a <see cref="MentorLiveSkillsSource"/>, or a
+    /// <see cref="MentorPreferredSkillsSource"/> around one.
+    /// </summary>
+    internal static bool IsLive(AgentSkillsSource source)
+        => source is MentorLiveSkillsSource or MentorPreferredSkillsSource { Inner: MentorLiveSkillsSource };
+
+    /// <summary>
+    /// The <see cref="MentorPreferredSkillsSource"/> that <paramref name="source"/> is, or that it wraps in a
+    /// <see cref="MentorLiveSkillsSource"/>; <c>null</c> for any other source.
+    /// </summary>
+    internal static MentorPreferredSkillsSource? PreferredOf(AgentSkillsSource source)
+        => source as MentorPreferredSkillsSource ?? (source as MentorLiveSkillsSource)?.Inner as MentorPreferredSkillsSource;
 
     /// <summary>
     /// Invokes the composed source and maps each <see cref="AgentSkill"/> onto a

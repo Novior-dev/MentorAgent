@@ -29,6 +29,18 @@ public sealed class MentorDeclarativeOptions
     public IList<string> Definitions { get; } = [];
 
     /// <summary>
+    /// File pattern of the team definitions inside <see cref="Directory"/>. Default: <c>*.team.yaml</c>. A file it
+    /// matches is a team's, never an agent's, even when <see cref="SearchPattern"/> matches it too.
+    /// </summary>
+    public string TeamSearchPattern { get; set; } = "*.team.yaml";
+
+    /// <summary>
+    /// Team definitions in YAML supplied directly, one team each, for teams that come from a database, a
+    /// configuration service or a test. Loaded in addition to the files of <see cref="Directory"/>.
+    /// </summary>
+    public IList<string> TeamDefinitions { get; } = [];
+
+    /// <summary>
     /// Name of the configuration section whose values the YAML may reference. Default:
     /// <see langword="null"/> — no configuration is exposed.
     /// <para>

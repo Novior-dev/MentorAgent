@@ -100,6 +100,13 @@ public class MentorHub : Hub
     {
         BindScope();
         _pageContextStore.Store(Context.ConnectionId, snapshot);
+
+        // Story 1288, slice C — the snapshot reaches the page context only when a turn starts; the catalogue's trace of
+        // the pages lists the page when the client declares it. Names only: the trace never keeps a description.
+        if (_scopes.GetOrCreate(Context.ConnectionId).GetService<Novior.MentorAgent.Core.MentorPageActionTrace>() is { } trace)
+            foreach (var action in snapshot.UIActions ?? [])
+                trace.Record(snapshot.PageName, action?.Name);
+
         return Task.CompletedTask;
     }
 

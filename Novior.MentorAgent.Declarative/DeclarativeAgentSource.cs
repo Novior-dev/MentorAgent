@@ -228,42 +228,12 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
         return engine;
     }
 
-    /// <summary>Reads every definition as (source name, YAML). Inline ones first.</summary>
+    /// <summary>
+    /// Reads every definition as (source name, YAML), inline ones first. A file the teams' pattern matches is the
+    /// teams' source's (story 1570, slice B), even when <see cref="MentorDeclarativeOptions.SearchPattern"/> matches it
+    /// too.
+    /// </summary>
     private List<(string Name, string Yaml)> LoadDefinitions()
-    {
-        var result = new List<(string, string)>();
-
-        for (var i = 0; i < _options.Definitions.Count; i++)
-            if (!string.IsNullOrWhiteSpace(_options.Definitions[i]))
-                result.Add(($"inline[{i}]", _options.Definitions[i]));
-
-        if (string.IsNullOrWhiteSpace(_options.Directory)) return result;
-
-        var dir = Path.IsPathRooted(_options.Directory)
-            ? _options.Directory
-            : Path.Combine(AppContext.BaseDirectory, _options.Directory);
-
-        if (!System.IO.Directory.Exists(dir))
-        {
-            // Worth a warning rather than silence: a configured directory that is not there is
-            // almost always a file that was not copied to the output folder.
-            _logger.LogWarning("[MentorAgent:Declarative] Directory '{Dir}' does not exist.", dir);
-            return result;
-        }
-
-        var option = _options.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-        foreach (var path in System.IO.Directory.EnumerateFiles(dir, _options.SearchPattern, option).OrderBy(p => p))
-        {
-            try
-            {
-                result.Add((Path.GetFileName(path), File.ReadAllText(path)));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[MentorAgent:Declarative] Could not read '{Path}'.", path);
-            }
-        }
-
-        return result;
-    }
+        => DeclarativeFiles.Read(_options, _options.SearchPattern, _options.Definitions, _logger,
+            except: _options.TeamSearchPattern);
 }

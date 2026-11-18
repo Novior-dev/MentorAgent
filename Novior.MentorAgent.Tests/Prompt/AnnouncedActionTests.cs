@@ -339,18 +339,208 @@ public sealed class AnnouncedActionTests
     }
 
     [Fact]
-    public async Task A_turn_that_called_a_tool_is_not_checked()
+    public async Task A_turn_that_called_the_action_it_reports_gets_no_second_request()
+    {
+        // Story 1693: a turn that called tools is asked about too, with the tools it called; the action the classifier
+        // names was one of them, so nothing is done again.
+        var classifier = Classifier("CLAIMED count_open_orders");
+        await using var host = Host(classifier);
+        host.Chat!.CallTool("count_open_orders").Say("Ci sono 3 ordini aperti.");
+
+        (await host.RunTurnAsync("quanti ordini sono aperti?")).Should().BeNull(host.Logs.WarningText);
+
+        classifier.CallCount.Should().Be(1);
+        classifier.Calls[0].Messages[0].Text.Should().Be(AnnouncedActionCheck.QuestionAfterCalls);
+        classifier.Calls[0].Messages[1].Text.Should().EndWith("\nCalled: count_open_orders");
+        Coordinator(host).Should().HaveCount(2, "the call and the reply: no second request")
+            .And.OnlyContain(c => !HasInstruction(c));
+        host.Logs.Records.Should().Contain(r =>
+            r.Message.Contains("Announced-action check: CLAIMED count_open_orders (called in the turn) after 1 call(s)"));
+    }
+
+    [Fact]
+    public async Task A_read_then_an_action_reported_as_done_gets_one_more_request_told_that_it_did_not_run()
+    {
+        // Story 1693 — the case of the early check of #900: the model read a record, then wrote that it had taken it in
+        // charge without calling the tool that does it. Something ran, so the second request does not say "no tool ran".
+        var classifier = Classifier("CLAIMED mark_order_reviewed");
+        await using var host = Host(classifier);
+        host.Chat!.CallTool("count_open_orders").Say("Ho segnato l'ordine 7 come rivisto.").Say("Non è stato fatto.");
+
+        (await host.RunTurnAsync("conta gli ordini e segna il 7 come rivisto")).Should().BeNull(host.Logs.WarningText);
+
+        classifier.Calls[0].Messages[0].Text.Should().Be(AnnouncedActionCheck.QuestionAfterCalls);
+        classifier.Calls[0].Messages[1].Text.Should().Contain("Ho segnato l'ordine 7").And.EndWith("\nCalled: count_open_orders");
+        var requests = Coordinator(host);
+        requests.Should().HaveCount(3, "the read, the reply after it, and the second request");
+        LastInstruction(requests[2]).Should().Be(AnnouncedActionChatClient.HeadingAfterCalls
+            + MentorPromptTexts.English.AnnouncedActionNotDoneCall.Replace("{tool}", "mark_order_reviewed"));
+        requests[2].ToolNames.Should().Contain("mark_order_reviewed");
+        host.Logs.Records.Should().Contain(r => r.Message.Contains("the second request answered without calling one"));
+    }
+
+    [Fact]
+    public async Task Without_a_tool_named_the_second_request_after_calls_says_only_that_the_action_was_not_done()
     {
         var classifier = Classifier("ANNOUNCED");
         await using var host = Host(classifier);
-        host.Chat!.CallTool("count_open_orders").Say("Ci sono 3 ordini aperti.")
-            .Say("Procedo…").Say("Non è stato fatto.");
+        host.Chat!.CallTool("count_open_orders").Say("Ora archivio tutto.").Say("Non è stato fatto.");
+
+        await host.RunTurnAsync("conta e archivia");
+
+        LastInstruction(Coordinator(host)[2]).Should().Be(
+            AnnouncedActionChatClient.HeadingAfterCalls + MentorPromptTexts.English.AnnouncedActionNotDone);
+        MentorPromptTexts.English.AnnouncedActionNotDone.Should().NotContain("no tool ran", "a tool did run");
+    }
+
+    [Fact]
+    public async Task A_UI_action_of_the_page_is_one_of_the_turns_calls()
+    {
+        // Emanuele's note (1.3.0, Ministral): a UI action ran inside its own loop and the turn read as "no call". In 1.4.0
+        // a UI action is a tool of the run, and the classifier is told it was called.
+        var classifier = Classifier("NONE");
+        await using var host = Host(classifier);
+        host.Get<IMentorPageContext>().SetPageName("Orders").RegisterUIAction("highlight_order", "Highlights an order", _ => { });
+        host.Chat!.CallTool("highlight_order", new { parameter = 1 }).Say("Ho evidenziato l'ordine 1.");
+
+        await host.RunTurnAsync("evidenzia l'ordine 1");
+
+        classifier.Calls[0].Messages[1].Text.Should().EndWith("\nCalled: highlight_order");
+        Coordinator(host).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task A_turn_that_handed_the_request_to_a_team_is_not_checked()
+    {
+        // Another agent acted: what it did is not this turn's calls to compare the reply with.
+        var classifier = Classifier("CLAIMED");
+        await using var host = Host(classifier);
+        host.Chat!.Respond((messages, options) =>
+        {
+            var answered = messages.LastOrDefault()?.Contents.OfType<FunctionResultContent>().Any() == true;
+            if ((options?.Instructions ?? "").Contains("Your role in the team is", StringComparison.Ordinal))
+                return Reply(host, "Done. [TEAM:APPROVED]");
+            if (options?.Tools?.Any(t => t.Name == "business_analysis_team") == true)
+                return answered
+                    ? Reply(host, "Il team ha registrato l'analisi.")
+                    : new ChatResponse(new ChatMessage(ChatRole.Assistant,
+                        [new FunctionCallContent("team-1", "business_analysis_team",
+                            new Dictionary<string, object?> { ["task"] = "analizza il trimestre" })]))
+                    { ModelId = host.Chat!.ModelId };
+            return Reply(host, "SAFE");
+        });
+
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        (await host.RunTurnAsync("analizza il trimestre", deadline.Token)).Should().BeNull(host.Logs.WarningText);
+
+        classifier.CallCount.Should().Be(0, "the team acted, not the coordinator's calls");
+    }
+
+    private static ChatResponse Reply(MentorHostFixture host, string text)
+        => new(new ChatMessage(ChatRole.Assistant, text)) { ModelId = host.Chat!.ModelId };
+
+    [Fact]
+    public async Task The_calls_of_a_turn_are_not_carried_into_the_next()
+    {
+        var classifier = Classifier("NONE", "NONE");
+        await using var host = Host(classifier);
+        host.Chat!.CallTool("count_open_orders").Say("Ci sono 3 ordini aperti.").Say("Ciao.");
 
         await host.RunTurnAsync("quanti ordini sono aperti?");
-        classifier.CallCount.Should().Be(0, "something ran: the reply reports it");
+        await host.RunTurnAsync("ciao");
 
+        classifier.Calls[0].Messages[1].Text.Should().EndWith("\nCalled: count_open_orders");
+        classifier.Calls[1].Messages[0].Text.Should().Be(AnnouncedActionCheck.Question, "the next turn called nothing");
+        classifier.Calls[1].Messages[1].Text.Should().NotContain("Called:");
+    }
+
+    [Fact]
+    public async Task A_turn_that_waits_for_an_approval_is_not_checked()
+    {
+        // Native mode: the call asks the user first, and what follows depends on the answer, not on the reply's words.
+        var classifier = Classifier("CLAIMED");
+        await using var host = MentorHostFixture.Create(o =>
+        {
+            o.MemoryAutoCapture = false;
+            o.CheckAnnouncedActions = true;
+            o.ClassifierChatClient = classifier;
+            o.HitlMode = MentorHitlMode.Native;
+        });
+        host.Chat!.CallTool("issue_refund", new { orderId = 7 }).Say("Rimborso emesso.");
+        var state = host.Get<IMentorStateService>();
+        state.OnConfirmationRequired += req => _ = state.ConfirmAsync(req.ActionId);
+
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await host.RunTurnAsync("rimborsa l'ordine 7", deadline.Token);
+
+        host.Get<TestOrderService>().Invoked.Should().Equal(nameof(TestOrderService.IssueRefundAsync));
+        classifier.CallCount.Should().Be(0);
+    }
+
+    // ── Story 1694: no model reached ─────────────────────────────────────────────
+
+    /// <summary>What a bridge's chat client answers when it stops the call: no model, no usage, the key with the cause.</summary>
+    private static ChatResponse Stopped(string text, string cause = "ai_switch")
+        => new(new ChatMessage(ChatRole.Assistant, text))
+        {
+            AdditionalProperties = new() { [MentorChatKeys.ModelNotCalled] = cause },
+        };
+
+    [Fact]
+    public async Task A_turn_no_request_of_which_reached_a_model_is_not_checked_and_the_log_says_why()
+    {
+        var classifier = Classifier("CLAIMED");
+        await using var host = Host(classifier);
+        host.Chat!.Respond((_, _) => Stopped("L'assistente è spento: ho registrato la nota."));
+
+        (await host.RunTurnAsync("registra la nota")).Should().BeNull(host.Logs.WarningText);
+
+        classifier.CallCount.Should().Be(0, "no model wrote the reply, and the classifier would be stopped too");
+        host.Logs.Records.Should().Contain(r => r.Level == Microsoft.Extensions.Logging.LogLevel.Debug
+            && r.Message.Contains("Announced-action check skipped: no request of the turn reached a model (ai_switch)"));
+        host.Logs.Records.Should().NotContain(r => r.Message.Contains("Announced-action check: "));
+    }
+
+    [Fact]
+    public async Task A_reply_without_usage_and_without_the_key_is_checked_as_before()
+    {
+        // A model that does not report its usage is still a model: only the key says that none was called.
+        var classifier = Classifier("NONE");
+        await using var host = Host(classifier);
+        host.Chat!.Respond((_, _) => new ChatResponse(new ChatMessage(ChatRole.Assistant, "Ecco.")) { Usage = null });
+
+        await host.RunTurnAsync("ciao");
+
+        classifier.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_turn_one_request_of_which_reached_a_model_is_checked()
+    {
+        // The model called a tool; the request after it was stopped (a budget used up meanwhile): the turn reached a model.
+        var classifier = Classifier("NONE");
+        await using var host = Host(classifier);
+        host.Chat!.CallTool("count_open_orders");
+        host.Chat.Respond((_, _) => Stopped("Budget esaurito: ho segnato l'ordine.", "budget"));
+
+        await host.RunTurnAsync("conta gli ordini e segna il 7");
+
+        classifier.CallCount.Should().Be(1, "only a turn none of whose requests reached a model is skipped");
+    }
+
+    [Fact]
+    public async Task The_answers_of_a_turn_are_counted_for_that_turn_only()
+    {
+        // The first turn reached a model; the second was stopped: the second is skipped, whatever the first was.
+        var classifier = Classifier("NONE", "CLAIMED");
+        await using var host = Host(classifier);
+        host.Chat!.Say("Ecco.");
+        host.Chat.Respond((_, _) => Stopped("L'assistente è spento: ho registrato la nota."));
+
+        await host.RunTurnAsync("ciao");
         await host.RunTurnAsync("registra la nota");
-        classifier.CallCount.Should().Be(1, "the next turn, in which nothing ran, is checked");
+
+        classifier.CallCount.Should().Be(1, "the second turn reached no model");
     }
 
     [Fact]
@@ -508,13 +698,14 @@ public sealed class AnnouncedActionTests
     public async Task A_call_that_reached_the_gate_counts_even_when_the_gate_refused_it()
     {
         // export_ledger is the agent's, and the gate refuses it to a user who is not signed in: a decision was made.
-        var classifier = Classifier("CLAIMED");
+        var classifier = Classifier("NONE");
         await using var host = Host(classifier);
         host.Chat!.CallTool("export_ledger").Say("Non posso esportarlo senza accesso.");
 
         await host.RunTurnAsync("esporta il registro");
 
-        classifier.CallCount.Should().Be(0, "the call reached the gate: the turn acted");
+        classifier.CallCount.Should().Be(1, "story 1693: a turn that called a tool is asked about, with the call");
+        classifier.Calls[0].Messages[1].Text.Should().EndWith("\nCalled: export_ledger", "the call reached the gate: it counts");
         host.Logs.Records.Should().NotContain(r => r.Message.Contains("not among the tools of this turn"));
     }
 }

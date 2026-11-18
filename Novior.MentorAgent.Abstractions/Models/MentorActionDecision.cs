@@ -61,6 +61,26 @@ public sealed record MentorActionDecision
     /// <summary>Who asked for the action, or <see langword="null"/> when nobody is signed in.</summary>
     public ClaimsPrincipal? User { get; init; }
 
+    /// <summary>
+    /// The tenant of the call, as <c>IMentorTenant.Id</c> names it: the one the <c>IMentorTenantResolver</c> resolved for
+    /// the turn or, on the MCP server, for the request. <see langword="null"/> when the application registers no resolver
+    /// and serves a single tenant. With one, the same <see cref="User"/> in two tenants is told apart by this.
+    /// </summary>
+    public string? TenantId { get; init; }
+
+    /// <summary>
+    /// Whether the action is one of the application's (<see cref="MentorActionKind.Server"/>) or a UI action the page
+    /// declared (<see cref="MentorActionKind.UI"/>), as <see cref="MentorActionRequest.Kind"/> says.
+    /// </summary>
+    public MentorActionKind Kind { get; init; }
+
+    /// <summary>
+    /// The page the user is on, as the page named it with <c>IMentorPageContext.SetPageName</c>, read when the decision
+    /// was taken: for a <see cref="MentorActionKind.UI"/> action, the page that declared it. <see langword="null"/> when no
+    /// page set one, on the MCP server and in a task from another agent.
+    /// </summary>
+    public string? PageName { get; init; }
+
     /// <summary>The roles the action requires, any one of which is enough; empty when it requires none.</summary>
     public IReadOnlyList<string> RequiredRoles { get; init; } = [];
 

@@ -63,6 +63,13 @@ public sealed record MentorActionRequest
     public string? PageName { get; init; }
 
     /// <summary>
+    /// Whether the action is one of the application's (<see cref="MentorActionKind.Server"/>) or a UI action the page
+    /// declared (<see cref="MentorActionKind.UI"/>), which <see cref="PageName"/> then names. Two actions of one name, one
+    /// of each kind, are told apart by this.
+    /// </summary>
+    public MentorActionKind Kind { get; init; }
+
+    /// <summary>
     /// The roles the action requires, any one of which is enough; empty when it requires none. The
     /// <c>IMentorActionGovernor</c>'s when it gives them; a question to the governor itself carries the code's.
     /// </summary>

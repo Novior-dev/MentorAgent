@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Novior.MentorAgent.Abstractions.Interfaces;
 using Novior.MentorAgent.Core;
 using Novior.MentorAgent.Middleware;
 using Novior.MentorAgent.Tests.Fakes;
@@ -9,10 +10,10 @@ using Xunit;
 namespace Novior.MentorAgent.Tests.Pages;
 
 /// <summary>
-/// Streaming granularity through <see cref="UIActionsMiddleware"/> (BUG-052).
+/// Streaming granularity with the page's UI actions among the run's tools (BUG-052).
 ///
 /// <para>
-/// <c>UIActionToolTests</c> drives the same middleware 24 times and asserts on the text it
+/// <c>UIActionToolTests</c> drives the same run 24 times and asserts on the text it
 /// produces. That is why registering one UI action could switch token streaming off for the whole
 /// page without a single test noticing: the text was right, it simply all arrived at once. The
 /// property this file adds is <b>how many updates it arrived in</b>.
@@ -35,18 +36,27 @@ public sealed class UIActionStreamingTests
         internal RecordingStateService State { get; } = new();
         internal TestLogCollector Logs { get; } = new();
 
-        internal UIActionsMiddleware Middleware => new(
-            Inner, Page, State,
-            new TypedLogger<UIActionsMiddleware>(new TestLoggerProvider(Logs).CreateLogger("ui")));
+        /// <summary>
+        /// Story 1288 — the run as the agent makes it: the page's actions are tools of the request, called by a
+        /// function-invoking client over the middleware. Up to 1.3.0 the middleware ran them in a loop of its own.
+        /// </summary>
+        private (IChatClient Client, ChatOptions Options) Run()
+        {
+            var logger = new TypedLogger<UIActionsMiddleware>(new TestLoggerProvider(Logs).CreateLogger("ui"));
+            var tools = new UIActionTools(Page, State, logger);
+            return (new FunctionInvokingChatClient(new UIActionsMiddleware(Inner, Page, State, logger)),
+                    new ChatOptions { Tools = tools.Current(null) });
+        }
 
-        /// <summary>Streams one call and returns every update's text, in order.</summary>
+        /// <summary>Streams one request of the run and returns every update's text, in order.</summary>
         internal async Task<List<string>> StreamAsync()
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var updates = new List<string>();
+            var (client, options) = Run();
 
-            await foreach (var update in Middleware.GetStreamingResponseAsync(
-                               [new ChatMessage(ChatRole.User, "do the thing")], null, deadline.Token))
+            await foreach (var update in client.GetStreamingResponseAsync(
+                               [new ChatMessage(ChatRole.User, "do the thing")], options, deadline.Token))
                 updates.Add(update.Text);
 
             return updates;
@@ -68,7 +78,7 @@ public sealed class UIActionStreamingTests
         var updates = await rig.StreamAsync();
 
         updates.Count.Should().BeGreaterThan(5,
-            "with no UI actions the middleware is a pass-through and the provider's deltas reach the caller");
+            "with no UI actions nothing of the page is in the way and the provider's deltas reach the caller");
         string.Concat(updates).Should().Contain("catalogo");
     }
 
@@ -93,8 +103,8 @@ public sealed class UIActionStreamingTests
     [Fact]
     public async Task The_answer_after_a_UI_action_call_streams_too()
     {
-        // The loop's own path: the model calls the action, the middleware executes it internally,
-        // and the answer that follows must stream like any other.
+        // The model calls the action, the run executes it, and the answer that follows must stream
+        // like any other.
         var invoked = 0;
         var rig = new Rig();
         rig.Page.RegisterUIAction("highlight_order", "Evidenzia un ordine", _ => invoked++);
@@ -103,29 +113,28 @@ public sealed class UIActionStreamingTests
 
         var updates = await rig.StreamAsync();
 
-        invoked.Should().Be(1, "the middleware executes the action itself rather than offering it outward");
+        invoked.Should().Be(1, "the run's function-invoking client executes the action, once");
         updates.Count.Should().BeGreaterThan(5, "the reply after the action is an ordinary streamed reply");
         string.Concat(updates).Should().Contain("catalogo");
     }
 
     [Fact]
-    public async Task No_UI_action_call_ever_reaches_the_caller()
+    public async Task No_UI_action_call_ever_reaches_the_transports()
     {
-        // The guarantee the buffering existed to provide, kept. The outer pipeline has never heard
-        // of these tools, so a function call for one leaking out would be unresolvable — and on the
-        // server transports it would reach the browser as a tool call nobody can answer.
-        var rig = new Rig();
-        rig.Page.RegisterUIAction("highlight_order", "Evidenzia un ordine", _ => { });
-        rig.Inner.CallTool("highlight_order", new { parameter = 42 });
-        rig.Inner.Say(Reply);
+        // The guarantee the buffering existed to provide, kept where it matters. On the server
+        // transports a call reaching the browser would be a tool call nobody can answer. From story
+        // 1288 the call is a call of the run, like every other action, so the guarantee is the
+        // orchestrator's: the hub and SSE forward what reaches the state service — text, the action's
+        // started and finished, cards — and never a call.
+        await using var host = MentorHostFixture.Create(o => o.MemoryAutoCapture = false, withRecorder: true);
+        host.Get<IMentorPageContext>().RegisterUIAction("highlight_order", "Evidenzia un ordine", _ => { });
+        host.Chat!.CallTool("highlight_order", new { parameter = 42 }).Say(Reply);
 
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var leaked = new List<string>();
+        (await host.RunTurnAsync("do the thing")).Should().BeNull();
 
-        await foreach (var update in rig.Middleware.GetStreamingResponseAsync(
-                           [new ChatMessage(ChatRole.User, "do the thing")], null, deadline.Token))
-            leaked.AddRange(update.Contents.OfType<FunctionCallContent>().Select(f => f.Name));
-
-        leaked.Should().BeEmpty("UI-action calls are the middleware's own business");
+        host.Recorder!.Log.SelectMany(e => e.Args).OfType<FunctionCallContent>().Should().BeEmpty(
+            "no UI-action call reaches the state service, which is all the transports forward");
+        host.Recorder.StreamedText.Should().Contain("catalogo").And.NotContain("highlight_order");
+        host.Recorder.Sequence.Should().Contain(nameof(RecordingStateService.NotifyUIActionCompleted));
     }
 }

@@ -142,6 +142,18 @@ internal sealed class MentorPromptTexts
     public required string AnnouncedActionCall { get; init; }
 
     /// <summary>
+    /// The second pass of a turn that called tools, whose reply announced or reported an action none of them did (story
+    /// 1693): call the tool now, or say that it was not done. Not "no tool ran", which would be false.
+    /// </summary>
+    public required string AnnouncedActionNotDone { get; init; }
+
+    /// <summary>
+    /// As <see cref="AnnouncedActionNotDone"/>, when the classifier named the tool that does the action, the model was sent
+    /// it and did not call it in the turn. <c>{tool}</c> is its name.
+    /// </summary>
+    public required string AnnouncedActionNotDoneCall { get; init; }
+
+    /// <summary>
     /// The knowledge-base search of the turn kept no document (story 194, <c>RagNoResultsNotice</c>): a question the
     /// documents would cover is not answered from memory as if a document said it. The search runs on every message, so
     /// the text also says that one needing no document — a greeting, an action, a question the tools answer — is answered
@@ -248,6 +260,18 @@ internal sealed class MentorPromptTexts
             user asked for. Do not write that it cannot be done here or that signing in is needed, and do not write
             that it was done unless {tool} returns that it was.
             """,
+        AnnouncedActionNotDone = """
+            Your last reply announced or reported an action that no tool called in this turn did: that action was
+            not done. If one of your tools does it, call it now. Otherwise tell the user, in one short sentence, that
+            it was not done. Do not announce it again, and do not write that it was done unless a tool you call now
+            returns that it was.
+            """,
+        AnnouncedActionNotDoneCall = """
+            Your last reply announced or reported the action of the tool {tool}, but {tool} was not called in this
+            turn: that action was not done. {tool} is one of your tools and is available to you now: call it now,
+            with what the user asked for. Do not write that it cannot be done here or that signing in is needed, and
+            do not write that it was done unless {tool} returns that it was.
+            """,
         RagNothingFound = """
             The search of the knowledge base found no document for this message. If the user asks about
             something the documents would cover — a policy, a procedure, the details of a product or a service —
@@ -327,6 +351,19 @@ internal sealed class MentorPromptTexts
             fare o che serve l'accesso, e non scrivere che è stato fatto, a meno che {tool} non restituisca che lo
             è.
             """,
+        AnnouncedActionNotDone = """
+            La tua ultima risposta ha annunciato o riferito un'azione che nessuno strumento chiamato in questo
+            turno ha fatto: quell'azione non è stata fatta. Se uno dei tuoi strumenti la fa, chiamalo adesso.
+            Altrimenti di' all'utente, in una frase breve, che non è stata fatta. Non annunciarla di nuovo e non
+            scrivere che è stata fatta, a meno che uno strumento che chiami adesso non restituisca che lo è stata.
+            """,
+        AnnouncedActionNotDoneCall = """
+            La tua ultima risposta ha annunciato o riferito l'azione dello strumento {tool}, ma {tool} non è stato
+            chiamato in questo turno: quell'azione non è stata fatta. {tool} è uno dei tuoi strumenti ed è
+            disponibile adesso: chiamalo adesso, con quello che l'utente ha chiesto. Non scrivere che qui non si può
+            fare o che serve l'accesso, e non scrivere che è stata fatta, a meno che {tool} non restituisca che lo è
+            stata.
+            """,
         RagNothingFound = """
             La ricerca nella base di conoscenza non ha trovato nessun documento per questo messaggio. Se l'utente
             chiede qualcosa che i documenti tratterebbero — una regola, una procedura, i dettagli di un prodotto o
@@ -404,6 +441,19 @@ internal sealed class MentorPromptTexts
             pendant ce tour : rien n'a été fait. {tool} est l'un de tes outils et il est disponible maintenant :
             appelle-le maintenant, avec ce que l'utilisateur a demandé. N'écris pas que cela ne peut pas être fait
             ici ou qu'il faut se connecter, et n'écris pas que c'est fait, sauf si {tool} renvoie que c'est le cas.
+            """,
+        AnnouncedActionNotDone = """
+            Ta dernière réponse a annoncé ou rapporté une action qu'aucun outil appelé pendant ce tour n'a faite :
+            cette action n'a pas été faite. Si l'un de tes outils la fait, appelle-le maintenant. Sinon, dis à
+            l'utilisateur, en une courte phrase, qu'elle n'a pas été faite. Ne l'annonce pas de nouveau et n'écris pas
+            qu'elle a été faite, sauf si un outil que tu appelles maintenant renvoie qu'elle l'a été.
+            """,
+        AnnouncedActionNotDoneCall = """
+            Ta dernière réponse a annoncé ou rapporté l'action de l'outil {tool}, mais {tool} n'a pas été appelé
+            pendant ce tour : cette action n'a pas été faite. {tool} est l'un de tes outils et il est disponible
+            maintenant : appelle-le maintenant, avec ce que l'utilisateur a demandé. N'écris pas que cela ne peut pas
+            être fait ici ou qu'il faut se connecter, et n'écris pas qu'elle a été faite, sauf si {tool} renvoie
+            qu'elle l'a été.
             """,
         RagNothingFound = """
             La recherche dans la base de connaissances n'a trouvé aucun document pour ce message. Si l'utilisateur
@@ -485,6 +535,20 @@ internal sealed class MentorPromptTexts
             nicht möglich ist oder dass eine Anmeldung nötig ist, und schreibe nicht, dass es erledigt ist, es sei
             denn, {tool} meldet, dass es erledigt wurde.
             """,
+        AnnouncedActionNotDone = """
+            Deine letzte Antwort hat eine Aktion angekündigt oder gemeldet, die kein in dieser Runde aufgerufenes
+            Tool ausgeführt hat: Diese Aktion wurde nicht getan. Wenn eines deiner Tools sie ausführt, rufe es jetzt
+            auf. Andernfalls sage dem Benutzer in einem kurzen Satz, dass sie nicht getan wurde. Kündige sie nicht
+            erneut an und schreibe nicht, dass sie erledigt ist, es sei denn, ein Tool, das du jetzt aufrufst, meldet,
+            dass sie erledigt wurde.
+            """,
+        AnnouncedActionNotDoneCall = """
+            Deine letzte Antwort hat die Aktion des Tools {tool} angekündigt oder gemeldet, aber {tool} wurde in
+            dieser Runde nicht aufgerufen: Diese Aktion wurde nicht getan. {tool} ist eines deiner Tools und steht dir
+            jetzt zur Verfügung: Rufe es jetzt auf, mit dem, worum der Benutzer gebeten hat. Schreibe nicht, dass es
+            hier nicht möglich ist oder dass eine Anmeldung nötig ist, und schreibe nicht, dass sie erledigt ist, es
+            sei denn, {tool} meldet, dass sie erledigt wurde.
+            """,
         RagNothingFound = """
             Die Suche in der Wissensdatenbank hat für diese Nachricht kein Dokument gefunden. Wenn der Benutzer
             nach etwas fragt, das die Dokumente abdecken würden — eine Regel, ein Verfahren, die Einzelheiten eines
@@ -562,6 +626,18 @@ internal sealed class MentorPromptTexts
             ejecutó ninguna herramienta: no se hizo nada. {tool} es una de tus herramientas y está disponible ahora:
             llámala ahora, con lo que el usuario pidió. No escribas que aquí no se puede hacer o que hace falta
             iniciar sesión, y no escribas que se hizo, salvo que {tool} devuelva que se hizo.
+            """,
+        AnnouncedActionNotDone = """
+            Tu última respuesta anunció o informó de una acción que ninguna herramienta llamada en este turno
+            hizo: esa acción no se hizo. Si una de tus herramientas la hace, llámala ahora. Si no, dile al usuario,
+            en una frase breve, que no se hizo. No la vuelvas a anunciar y no escribas que se hizo, salvo que una
+            herramienta que llames ahora devuelva que se hizo.
+            """,
+        AnnouncedActionNotDoneCall = """
+            Tu última respuesta anunció o informó de la acción de la herramienta {tool}, pero {tool} no se llamó
+            en este turno: esa acción no se hizo. {tool} es una de tus herramientas y está disponible ahora: llámala
+            ahora, con lo que el usuario pidió. No escribas que aquí no se puede hacer o que hace falta iniciar
+            sesión, y no escribas que se hizo, salvo que {tool} devuelva que se hizo.
             """,
         RagNothingFound = """
             La búsqueda en la base de conocimiento no encontró ningún documento para este mensaje. Si el usuario
@@ -641,6 +717,18 @@ internal sealed class MentorPromptTexts
             chame-a agora, com o que o usuário pediu. Não escreva que isso não pode ser feito aqui ou que é preciso
             entrar na conta, e não escreva que foi feito, a menos que {tool} retorne que foi.
             """,
+        AnnouncedActionNotDone = """
+            Sua última resposta anunciou ou relatou uma ação que nenhuma ferramenta chamada neste turno fez: essa
+            ação não foi feita. Se uma das suas ferramentas a faz, chame-a agora. Caso contrário, diga ao usuário, em
+            uma frase curta, que ela não foi feita. Não a anuncie de novo e não escreva que foi feita, a menos que
+            uma ferramenta que você chamar agora retorne que foi.
+            """,
+        AnnouncedActionNotDoneCall = """
+            Sua última resposta anunciou ou relatou a ação da ferramenta {tool}, mas {tool} não foi chamada neste
+            turno: essa ação não foi feita. {tool} é uma das suas ferramentas e está disponível agora: chame-a agora,
+            com o que o usuário pediu. Não escreva que isso não pode ser feito aqui ou que é preciso entrar na conta,
+            e não escreva que foi feita, a menos que {tool} retorne que foi.
+            """,
         RagNothingFound = """
             A pesquisa na base de conhecimento não encontrou nenhum documento para esta mensagem. Se o usuário
             perguntar sobre algo que os documentos cobririam — uma regra, um procedimento, os detalhes de um
@@ -717,6 +805,18 @@ internal sealed class MentorPromptTexts
             Je laatste antwoord kondigde de actie van de tool {tool} aan of meldde die, maar in deze beurt is geen
             tool uitgevoerd: er is niets gedaan. {tool} is een van je tools en is nu voor je beschikbaar: roep die
             nu aan, met wat de gebruiker vroeg. Schrijf niet dat het hier niet kan of dat inloggen nodig is, en
+            schrijf niet dat het gedaan is, tenzij {tool} meldt dat het gedaan is.
+            """,
+        AnnouncedActionNotDone = """
+            Je laatste antwoord kondigde een actie aan of meldde er een die geen enkele in deze beurt aangeroepen
+            tool heeft gedaan: die actie is niet gedaan. Als een van je tools die doet, roep die nu aan. Zeg anders
+            tegen de gebruiker, in één korte zin, dat het niet is gedaan. Kondig het niet opnieuw aan en schrijf niet
+            dat het gedaan is, tenzij een tool die je nu aanroept meldt dat het gedaan is.
+            """,
+        AnnouncedActionNotDoneCall = """
+            Je laatste antwoord kondigde de actie van de tool {tool} aan of meldde die, maar {tool} is in deze beurt
+            niet aangeroepen: die actie is niet gedaan. {tool} is een van je tools en is nu voor je beschikbaar: roep
+            die nu aan, met wat de gebruiker vroeg. Schrijf niet dat het hier niet kan of dat inloggen nodig is, en
             schrijf niet dat het gedaan is, tenzij {tool} meldt dat het gedaan is.
             """,
         RagNothingFound = """
@@ -797,6 +897,19 @@ internal sealed class MentorPromptTexts
             teraz dostępne: wywołaj je teraz, z tym, o co prosił użytkownik. Nie pisz, że nie da się tego zrobić
             tutaj ani że trzeba się zalogować, i nie pisz, że zostało to zrobione, chyba że {tool} zwróci, że tak.
             """,
+        AnnouncedActionNotDone = """
+            Twoja ostatnia odpowiedź zapowiedziała lub zgłosiła akcję, której nie wykonało żadne narzędzie
+            wywołane w tej turze: ta akcja nie została zrobiona. Jeśli jedno z twoich narzędzi ją wykonuje, wywołaj je
+            teraz. W przeciwnym razie powiedz użytkownikowi jednym krótkim zdaniem, że nie została zrobiona. Nie
+            zapowiadaj jej ponownie i nie pisz, że została zrobiona, chyba że narzędzie, które teraz wywołasz, zwróci,
+            że tak.
+            """,
+        AnnouncedActionNotDoneCall = """
+            Twoja ostatnia odpowiedź zapowiedziała lub zgłosiła akcję narzędzia {tool}, ale {tool} nie zostało
+            wywołane w tej turze: ta akcja nie została zrobiona. {tool} jest jednym z twoich narzędzi i jest teraz
+            dostępne: wywołaj je teraz, z tym, o co prosił użytkownik. Nie pisz, że nie da się tego zrobić tutaj ani
+            że trzeba się zalogować, i nie pisz, że została zrobiona, chyba że {tool} zwróci, że tak.
+            """,
         RagNothingFound = """
             Wyszukiwanie w bazie wiedzy nie znalazło żadnego dokumentu dla tej wiadomości. Jeśli użytkownik pyta
             o coś, co obejmowałyby dokumenty — zasadę, procedurę, szczegóły produktu lub usługi — powiedz, że nie
@@ -856,6 +969,12 @@ internal sealed class MentorPromptTexts
         AnnouncedActionCall = """
             あなたの直前の返答はツール {tool} の操作を予告または報告しましたが、このターンではどのツールも実行されていません。つまり、何も行われていません。{tool} はあなたのツールの一つで、今使えます。ユーザーが求めた内容で、今それを呼び出してください。ここではできない、またはサインインが必要だとは書かないでください。また、{tool} が完了したと返さない限り、完了したとは書かないでください。
             """,
+        AnnouncedActionNotDone = """
+            あなたの直前の返答は操作を予告または報告しましたが、このターンで呼び出したどのツールもその操作を行っていません。つまり、その操作は行われていません。あなたのツールのどれかがそれを行えるなら、今それを呼び出してください。そうでなければ、行われていないことを、短い一文でユーザーに伝えてください。もう一度予告しないでください。また、今呼び出したツールが完了したと返さない限り、完了したとは書かないでください。
+            """,
+        AnnouncedActionNotDoneCall = """
+            あなたの直前の返答はツール {tool} の操作を予告または報告しましたが、このターンで {tool} は呼び出されていません。つまり、その操作は行われていません。{tool} はあなたのツールの一つで、今使えます。ユーザーが求めた内容で、今それを呼び出してください。ここではできない、またはサインインが必要だとは書かないでください。また、{tool} が完了したと返さない限り、完了したとは書かないでください。
+            """,
         RagNothingFound = """
             ナレッジベースの検索では、このメッセージに該当する文書は見つかりませんでした。ユーザーが文書で扱われるはずの内容
             （規則、手順、製品やサービスの詳細など）について尋ねている場合は、文書の中に見つからなかったと伝え、文書に
@@ -913,6 +1032,12 @@ internal sealed class MentorPromptTexts
             """,
         AnnouncedActionCall = """
             你上一条回复预告或报告了工具 {tool} 的操作，但本轮没有运行任何工具：什么都没有做。{tool} 是你的工具之一，现在就可以使用：现在就按用户的要求调用它。不要写这里无法完成或需要登录，也不要写已经完成，除非 {tool} 返回已完成。
+            """,
+        AnnouncedActionNotDone = """
+            你上一条回复预告或报告了一个操作，但本轮调用的工具都没有完成这个操作：这个操作没有完成。如果你的某个工具能完成它，现在就调用它。否则，用一句简短的话告诉用户这件事没有完成。不要再次预告，也不要写已经完成，除非你现在调用的工具返回已完成。
+            """,
+        AnnouncedActionNotDoneCall = """
+            你上一条回复预告或报告了工具 {tool} 的操作，但本轮没有调用 {tool}：这个操作没有完成。{tool} 是你的工具之一，现在就可以使用：现在就按用户的要求调用它。不要写这里无法完成或需要登录，也不要写已经完成，除非 {tool} 返回已完成。
             """,
         RagNothingFound = """
             知识库的搜索没有为这条消息找到任何文档。如果用户询问的是文档本应涵盖的内容（规则、流程、产品或服务的细节等），

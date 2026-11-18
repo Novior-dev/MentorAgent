@@ -48,4 +48,13 @@ public static class MentorAgentRejectionReasons
     /// file search, an MCP server — was taken away. The agent loads with the application's own tools.
     /// </summary>
     public const string HostedToolRemoved = "hosted-tool-removed";
+
+    /// <summary>
+    /// A team of an <see cref="IMentorTeamSource"/> whose tool name is already taken: by a team written in C#, an action,
+    /// one of MentorAgent's own tools, or a team another definition gave first. The code wins; the team is left out.
+    /// </summary>
+    public const string NameTaken = "name-taken";
+
+    /// <summary>A team of an <see cref="IMentorTeamSource"/> with no member: there is nobody to discuss. Left out.</summary>
+    public const string NoMembers = "no-members";
 }

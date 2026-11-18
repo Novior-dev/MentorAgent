@@ -202,17 +202,26 @@ internal sealed class GroupChatBuilder
         {
             try
             {
-                var instance = _sp.GetRequiredService(toolMethod.DeclaringType);
-                AITool tool = AIFunctionFactory.Create(
-                    method: toolMethod.Method,
-                    target: instance,
-                    name: toolMethod.ToolName,
-                    description: toolMethod.ToolDescription);
+                // Story 1570 — a source's member may name an endpoint's action: it runs the endpoint, as the
+                // coordinator's does, not its handler on an instance from the container.
+                AITool tool;
+                if (toolMethod.Endpoint is not null)
+                {
+                    if (_sp.GetService<IMentorEndpointActionRunner>() is not { } runner)
+                        throw new InvalidOperationException("No endpoint action runner.");
+                    tool = runner.Create(toolMethod, _sp);
+                }
+                else
+                {
+                    var instance = _sp.GetRequiredService(toolMethod.DeclaringType);
+                    tool = MentorActionFunctions.Create(toolMethod, instance, toolMethod.ToolDescription);
+                }
 
                 // Team members run inside the group-chat workflow, out of reach of the coordinator's
                 // middleware. Wrapping the function carries the gate (RequiredRoles,
-                // RequiresConfirmation, feedback, metrics) with it. Team tools are meant to be
-                // read-only, so this is usually a pass-through — but it is no longer a hole.
+                // RequiresConfirmation, feedback, metrics) with it, once: the function built here is a plain
+                // one. A member's tools are not limited to reads: a write keeps what it declares, its roles
+                // and its confirmation, and the gate applies them as it does for the coordinator.
                 tools.Add(Middleware.GatedAIFunction.Wrap(tool, _gate, MentorAgentKind.TeamMember, member.Attribute.Role));
             }
             catch (Exception ex)
@@ -232,7 +241,7 @@ internal sealed class GroupChatBuilder
         TeamDiscoveryInfo team,
         IReadOnlyList<ChatClientAgent> participants)
     {
-        if (team.TerminationMethod is not null)
+        if (team.TerminationMethod is not null && team.Type is not null)
         {
             return new DelegateTerminationManager(
                 participants,
@@ -241,6 +250,13 @@ internal sealed class GroupChatBuilder
                 team.Type,
                 _sp);
         }
+
+        // Story 1570 (team.approver) — a source's team names the member who decides, as a host's condition does.
+        if (team.Approver is { } approver)
+            return new ApproverTerminationManager(participants, approver)
+            {
+                MaximumIterationCount = team.Attribute.MaxIterations
+            };
 
         // No condition of the host's: the first verdict ends the discussion, so the message carrying it
         // is the final one the approval is read from (BUG-175). A host's condition chooses who decides,
@@ -376,6 +392,28 @@ internal sealed class VerdictTerminationManager : RoundRobinGroupChatManager
         // typed a token must not end the discussion before anyone has spoken.
         return history.LastOrDefault() is { Role: var role, Text: var text }
             && role == ChatRole.Assistant
+            && (text.Contains(TeamDiscussion.Approved, StringComparison.OrdinalIgnoreCase)
+                || text.Contains(TeamDiscussion.Rejected, StringComparison.OrdinalIgnoreCase));
+    }
+}
+
+/// <summary>
+/// Story 1570, <c>team.approver</c> — the round robin of a source's team with an approver: it stops at the approver's
+/// first message carrying <see cref="TeamDiscussion.Approved"/> or <see cref="TeamDiscussion.Rejected"/>, or at the
+/// iteration cap. What the README's <c>[TeamTerminationCondition]</c> example does for a team written in C#.
+/// </summary>
+internal sealed class ApproverTerminationManager(IReadOnlyList<AIAgent> agents, string approver) : RoundRobinGroupChatManager(agents)
+{
+    protected override async ValueTask<bool> ShouldTerminateAsync(
+        IReadOnlyList<ChatMessage> history,
+        CancellationToken ct = default)
+    {
+        if (await base.ShouldTerminateAsync(history, ct).ConfigureAwait(false))
+            return true;
+
+        return history.LastOrDefault() is { Role: var role, Text: var text, AuthorName: var author }
+            && role == ChatRole.Assistant
+            && string.Equals(author, approver, StringComparison.Ordinal)
             && (text.Contains(TeamDiscussion.Approved, StringComparison.OrdinalIgnoreCase)
                 || text.Contains(TeamDiscussion.Rejected, StringComparison.OrdinalIgnoreCase));
     }

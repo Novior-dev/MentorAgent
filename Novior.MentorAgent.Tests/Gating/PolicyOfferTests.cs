@@ -29,6 +29,7 @@ namespace Novior.MentorAgent.Tests.Gating;
 /// call: it is the README's example, which said no only to the offer.
 /// </para>
 /// </summary>
+[Trait("Rule", "policy.offered-to-agents")]
 public sealed class PolicyOfferTests
 {
     private const string Notice = "Some other actions of this application are NOT available to this user on this turn";

@@ -8,6 +8,13 @@ internal sealed class DiscoveryResult
     public List<PageDiscoveryInfo> Pages { get; } = [];
 
     /// <summary>
+    /// Story 1569 — the AutoMentor's candidates left out, each by the rule that left it out, for the trace
+    /// (<c>MentorActionRegistration.Rejected</c> of the class's registration). Only those the developer can fix: a
+    /// method excluded on purpose, or of the wrong shape, is not here.
+    /// </summary>
+    public List<CandidateRejection> CandidateRejections { get; } = [];
+
+    /// <summary>
     /// Every discovered method that carries <paramref name="toolName"/>: level 1, then the specialists',
     /// then the team members'.
     /// </summary>
@@ -34,6 +41,9 @@ internal sealed class DiscoveryResult
         => BuiltFrom(toolName, method) ?? Named(toolName).FirstOrDefault();
 }
 
+/// <summary>A method of <paramref name="Type"/> the AutoMentor did not take as a candidate, by <paramref name="Rule"/>.</summary>
+internal sealed record CandidateRejection(Type Type, string Name, string Rule);
+
 internal sealed record PageDiscoveryInfo(
     string Url,
     string Name,
@@ -55,9 +65,19 @@ internal sealed record MethodDiscoveryInfo(
     bool ReadOnly = false,
     bool IsMentorAction = false,
     bool ConfirmationDeclared = false,
-    bool EnabledByDefault = true
+    bool EnabledByDefault = true,
+    string Origin = MentorActionOrigins.Attribute,
+    Novior.MentorAgent.Core.IMentorEndpoint? Endpoint = null,
+    Novior.MentorAgent.Core.MentorMessageBinding? Message = null
 )
 {
+    // Message (story 1286) is the command or the query an action of origin "command" or "query" sends: the tool is built
+    // from its type (MentorActionFunctions.Create), and DeclaringType and Method are its handler's and its HandleAsync.
+    // Endpoint (story 1287) is the endpoint an action of origin "endpoint" runs, opaque here but for its name in the
+    // trace: the core has no HTTP of its own. Novior.MentorAgent.Server reads it, through IMentorEndpointActionRunner,
+    // when it builds the tool.
+    // DeclaringType and Method are then the handler's, for the schema and for the rules that read the method.
+    // Origin is how the application declares it (story 1285): a MentorActionOrigins code, the registration's first half.
     // EnabledByDefault is what the code says: [MentorAction(Enabled = false)], or an action MentorAgent registers off
     // (story 1549). An IMentorActionGovernor may turn it on; MentorActionGovernance decides.
     // RequiresConfirmation is the EFFECTIVE value: what the attribute declares, or — for a [MentorAction]
@@ -82,14 +102,15 @@ internal sealed record AgentDiscoveryInfo(
 );
 
 internal sealed record TeamDiscoveryInfo(
-    Type Type,
+    Type? Type,                     // the [MentorTeam] class; null for a team of an IMentorTeamSource
     MentorTeamAttribute Attribute,
     List<TeamMemberInfo> Members,
-    MethodInfo? TerminationMethod   // metodo [TeamTerminationCondition]
+    MethodInfo? TerminationMethod,  // metodo [TeamTerminationCondition]
+    string? Approver = null         // story 1570: the member whose verdict ends the discussion (a source's team)
 );
 
 internal sealed record TeamMemberInfo(
-    Type AgentType,
+    Type? AgentType,                // the [TeamMember] property's type; null for a source's member
     TeamMemberAttribute Attribute,
     List<MethodDiscoveryInfo> Tools       // read-only tools for this member
 );

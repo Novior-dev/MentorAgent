@@ -159,12 +159,24 @@ internal sealed class MentorSkillsBuilder
             }
 
             var context = contextAgent is null ? null : new AgentSkillsSourceContext(contextAgent, session: null);
+            var preferred = _options.SkillSources.Select(MentorNativeSkillSources.PreferredOf).OfType<MentorPreferredSkillsSource>().ToList();
             foreach (var native in composed is null || context is null
                          ? []
                          : await MentorNativeSkillSources
                              .LoadAsync(composed, context, BuildLog, ct).ConfigureAwait(false))
             {
-                if (!skills.TryAdd(native.Name, native))
+                if (skills.TryAdd(native.Name, native)) continue;
+
+                // Story 1570 slice C (skill.name-precedence): a source the application marked as preferred replaces
+                // the application's skill of the same name; any other source does not.
+                if (native.Native is { } skill && preferred.Any(p => p.Gave(skill)))
+                {
+                    skills[native.Name] = native;
+                    _logger.LogInformation(
+                        "[MentorAgent:Skills] '{Name}' from a preferred source (MentorPreferredSkillsSource) " +
+                        "replaces the application's skill of the same name.", native.Name);
+                }
+                else
                     _logger.LogWarning(
                         "[MentorAgent:Skills] A registered source offered '{Name}', which an " +
                         "application skill already defines. The application's skill is kept.",

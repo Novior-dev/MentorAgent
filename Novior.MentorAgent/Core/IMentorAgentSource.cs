@@ -45,9 +45,10 @@ public interface IMentorAgentSource
 /// What a <see cref="IMentorAgentSource"/> is given to build its agents.
 /// </summary>
 /// <param name="ChatClient">
-/// The same chat client the coordinator uses, already wrapped in MentorAgent's middleware pipeline
-/// (token counting, routing, observability). Build agents on this one, not on a fresh client, or
-/// their usage disappears from the metrics.
+/// <c>MentorOptions.ChatClient</c>, wrapped for the agents under the coordinator: each call of a response under an id
+/// of its own when MentorAgent keeps the history (BUG-225), the token meter and the metrics, and only the tools this
+/// turn's user may run offered to the model (BUG-205). It is not the coordinator's pipeline: no routing and no safety
+/// checks. Build agents on this one, not on a fresh client, or their usage disappears from the metrics.
 /// </param>
 /// <param name="Tools">
 /// Every Level-1 tool, <b>already wrapped in the gate</b>. An agent built from a declarative

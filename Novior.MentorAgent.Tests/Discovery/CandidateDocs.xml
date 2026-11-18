@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<!-- Story 1569, slice B: the documentation file the compiler would write for the services of CandidateShop.Guarded
+     (CandidateTests.cs). The test project does not generate one: this file is copied to the output as
+     Novior.MentorAgent.Tests.xml, next to the assembly, where MentorAgent looks for it. -->
+<doc>
+    <assembly>
+        <name>Novior.MentorAgent.Tests</name>
+    </assembly>
+    <members>
+        <member name="T:CandidateShop.Guarded.ApprovalService">
+            <summary>Approves the expenses.</summary>
+        </member>
+        <member name="M:CandidateShop.Guarded.ApprovalService.Approve(System.Int32)">
+            <summary>
+            Approves the expense <paramref name="expenseId"/> for the
+            <see cref="T:CandidateShop.Guarded.ApprovalService"/>, as <c>Manager</c>.
+            <para>Nothing is paid until the end of the month.</para>
+            </summary>
+            <param name="expenseId">The expense.</param>
+            <returns>What was approved.</returns>
+        </member>
+        <member name="M:CandidateShop.Guarded.ApprovalService.GrantRefund(System.Int32)">
+            <summary>
+            </summary>
+        </member>
+        <member name="M:CandidateShop.Guarded.ApprovalService.Total(System.Int32[])">
+            <summary><para>Totals the expenses <paramref name="ids"/>.</para><para>It only reads.</para></summary>
+        </member>
+        <member name="M:CandidateShop.Guarded.OpenService.Remind(System.Nullable{System.Int32},System.Collections.Generic.List{System.String})">
+            <summary>Reminds the people in <paramref name="to"/> of the expense, after <paramref name="days"/> days or <see langword="null"/>.</summary>
+        </member>
+    </members>
+</doc>

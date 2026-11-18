@@ -155,6 +155,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<MentorActionPolicies>();
         services.TryAddSingleton<MentorActionGovernance>();
         services.TryAddSingleton<IMentorActionCatalog, MentorActionCatalog>();
+        // Story 1288, slice C — the names of the UI actions every page of the process declared, for the catalogue.
+        services.TryAddSingleton<MentorPageActionTrace>();
 
         // Wave 5 #16 — single source of truth for "does this tool need approval, and what does the
         // banner say?", shared by the middleware (blocking flow), the orchestrator (native AF flow)
@@ -405,6 +407,21 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IMentorAgentSourceObserver, TObserver>());
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an <see cref="IMentorTeamSource"/>: every time a coordinator is built, it is asked for teams that are not
+    /// written in C#, which join the coordinator as teams with <c>[MentorTeam]</c> do. A singleton, resolved from the
+    /// application's root services; every source registered is asked, in the order of registration. Registering the same
+    /// type twice registers it once. Teams require <c>ChatClient</c>, as the ones written in C# do.
+    /// </summary>
+    /// <typeparam name="TSource">The source.</typeparam>
+    public static IServiceCollection AddMentorTeamSource<TSource>(this IServiceCollection services)
+        where TSource : class, IMentorTeamSource
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMentorTeamSource, TSource>());
         return services;
     }
 

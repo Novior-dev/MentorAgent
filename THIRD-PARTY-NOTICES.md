@@ -61,6 +61,13 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
+## YamlDotNet, a dependency of Novior.MentorAgent.Declarative
+
+Novior.MentorAgent.Declarative reads the team definition files (`*.team.yaml`) with YamlDotNet 18.1.0. YamlDotNet is
+not included in the package: NuGet installs it as a dependency, under its own license, the MIT License.
+
+YamlDotNet: Copyright (c) Antoine Aubry and contributors (https://github.com/aaubry/YamlDotNet)
+
 ## Fonts included in Novior.MentorAgent.Abstractions
 
 The Novior.MentorAgent.Abstractions package contains the Sora and JetBrains Mono fonts, which the widget's
