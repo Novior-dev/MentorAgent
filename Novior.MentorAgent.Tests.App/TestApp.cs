@@ -105,10 +105,23 @@ public sealed class TestOrderService
         return $"Order {orderId} archived.";
     }
 
+    /// <summary>
+    /// Set to keep <see cref="FailingActionAsync"/> running until the task it returns ends: an action still running
+    /// when the connection that asked for it closes.
+    /// </summary>
+    public Func<Task>? Hold { get; set; }
+
     [MentorAction(Description = "Always fails, for exception mapping", RequiresConfirmation = false)]
     public Task FailingActionAsync()
     {
         Invoked.Add(nameof(FailingActionAsync));
+        if (Hold is { } hold) return HeldAsync(hold);
+        throw NextFailure ?? new InvalidOperationException("test failure");
+    }
+
+    private async Task HeldAsync(Func<Task> hold)
+    {
+        await hold();
         throw NextFailure ?? new InvalidOperationException("test failure");
     }
 

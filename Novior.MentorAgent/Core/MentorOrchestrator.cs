@@ -1734,7 +1734,6 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             // (BUG-068), because the sentinel sat one statement too late.
             var announcement = _sp.GetRequiredService<CoordinatorAnnouncement>();
             _quietBuild   = !announcement.FirstBuild();
-            _mcpTools     = await _mcpToolsBuilder.BuildAsync(ct);
             _skills       = await _skillsBuilder.BuildAsync(ct);
             _skillsContextProvider = MentorSkillsBuilder.BuildContextProvider(_skills);
 
@@ -1770,6 +1769,9 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
             _discoveryResult = await AsThisSessionSeesItAsync(_discovery.Discover(), ct);
             // Story 1570 — the teams of the IMentorTeamSource(s), asked for this session, with the session's actions.
             _discoveryResult = await WithSourceTeamsAsync(_discoveryResult, ct);
+            // BUG-246 — the servers' tools once the session's actions and teams are known: a name one of them, or
+            // MentorAgent, already uses is never a server's.
+            _mcpTools = await _mcpToolsBuilder.BuildAsync(NamesTaken(_discoveryResult), ct);
             // #23 — resolved here rather than inside BuildAllTools because building an agent is
             // asynchronous (a definition may be read from disk) and BuildAllTools is not.
             _externalAgents = await ResolveExternalAgentsAsync(_discoveryResult, ct);
@@ -3563,7 +3565,15 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
     /// </summary>
     private void Fault(Exception ex, string message, bool error = false)
     {
-        var faults = _sp.GetService<TurnFaultLog>();
+        TurnFaultLog? faults;
+        try
+        {
+            faults = _sp.GetService<TurnFaultLog>();
+        }
+        catch (ObjectDisposedException)
+        {
+            faults = null;   // the scope closed under the turn (the connection or the circuit is gone): log the cause as it is
+        }
         if (faults is null)
         {
             if (error) _logger.LogError(ex, message); else _logger.LogWarning(ex, message);
@@ -4154,8 +4164,43 @@ internal sealed class MentorOrchestrator : IAsyncDisposable, Novior.MentorAgent.
 
     // -- Build All Tools (L1 + L2 + L3 + UI + nav + memory) ------------------
 
+    /// <summary>
+    /// BUG-246 — the names a tool of an MCP server may not have, ignoring case: MentorAgent's own tools, the teams', and
+    /// the application's actions, of the application and of this session.
+    /// </summary>
+    private HashSet<string> NamesTaken(DiscoveryResult session)
+    {
+        var all = _discovery.Discover();
+        var taken = new HashSet<string>(Middleware.MentorAgentUIMiddleware.LibraryTools, StringComparer.OrdinalIgnoreCase);
+        taken.UnionWith(all.Level1Methods.Concat(session.Level1Methods).Select(m => m.ToolName));
+        taken.UnionWith(all.Level3Teams.Concat(session.Level3Teams).Select(t => MentorUtils.ToSnakeCase(t.Attribute.Name)));
+        return taken;
+    }
+
+    /// <summary>
+    /// BUG-246 — an action of the application with the name of one of MentorAgent's tools, or of a team, is the one the
+    /// coordinator keeps (the first by name) and the policies decide it; the tool it hides is not offered. Said once, at
+    /// the build, with what to do.
+    /// </summary>
+    private void WarnOfHiddenTools(DiscoveryResult discovery)
+    {
+        var teams = discovery.Level3Teams.Select(t => MentorUtils.ToSnakeCase(t.Attribute.Name)).ToHashSet(StringComparer.Ordinal);
+        var hiding = discovery.Level1Methods
+            .Select(m => m.ToolName)
+            .Where(n => Middleware.MentorAgentUIMiddleware.LibraryTools.Contains(n) || teams.Contains(n))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (hiding.Count > 0)
+            BuildLog.LogWarning(
+                "[MentorAgent] {Count} action(s) of the application have the name of one of MentorAgent's tools or of a " +
+                "team, and hide it: {Names}. The application's action is offered, and the action policies decide it; the " +
+                "tool it hides is not. Rename the action.",
+                hiding.Count, string.Join(", ", hiding));
+    }
+
     private List<AITool> BuildAllTools(DiscoveryResult discovery)
     {
+        WarnOfHiddenTools(discovery);
         // Story 1693 — the tools that hand the request to another agent: a turn that called one is not checked.
         _delegations = WaysOut(discovery);
         // The metered client, not the raw one: the router, the L2 specialists and the L3 team

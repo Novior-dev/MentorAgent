@@ -24,6 +24,15 @@ internal sealed class GateCall
     /// <summary>Read once, at the first decision.</summary>
     internal string? DisplayName { get; set; }
 
+    /// <summary>
+    /// The page the user was on when the call reached the gate, read once while the scope is open: a decision made after
+    /// the connection or the circuit closed still names it, and never reads the closed scope.
+    /// </summary>
+    internal string? Page { get; set; }
+
+    /// <summary>Whether <see cref="Page"/> was read.</summary>
+    internal bool PageRead { get; set; }
+
     internal ClaimsPrincipal? User { get; set; }
     internal string[] Roles { get; set; } = [];
 

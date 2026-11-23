@@ -28,6 +28,40 @@ names of their time.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-23
+
+### Security
+
+- **Novior.MentorAgent:** a tool of an MCP server the application consumes (`McpServers`) could take the place of a
+  tool of the coordinator with the same name: one of MentorAgent's own tools (`navigate_to`, `remember`,
+  `route_to_specialist`, a team's…) or, for what is confirmed and what only reads, an action of the application
+  (BUG-246, S2), from 1.0.0. The coordinator kept the first tool of a name, and the servers' tools came before
+  MentorAgent's; the action policies (`IMentorActionPolicy`) are not asked about MentorAgent's own tools, recognised by
+  name, so such a server's tool ran without them. A team was recognised by its name in any casing. A server's tool
+  whose name MentorAgent or the application already uses, compared without regard to case, is now left out before
+  anything is registered for it, with a Warning that names the server and the tool; a team is its exact name (rule
+  `mcp.reserved-names` in ACTION-RULES.md). Until you upgrade, list the tools you use in each server's
+  `AllowedTools`.
+
+### Changed
+
+- **Novior.MentorAgent:** an action of the application with the name of one of MentorAgent's tools, or of a team,
+  hides that tool, as before, and is now decided by the action policies as every action of the application is; a
+  Warning at startup names it. Rename it.
+
+### Fixed
+
+- **BUG-239 (S1, present from 1.0.0):** a method of a scanned class, or a property of a `[MentorTeam]`, with an
+  attribute whose type, or its assembly, does not load stopped the application when it started: the scan's reads of
+  `[MentorAction]`, `[Description]`, `[TeamMember]` and `[TeamTerminationCondition]` resolve every attribute of the
+  member, and threw. That member is now skipped, with a warning that names the class and the member, and the rest of
+  the class is read (`scan.attributes-not-created`).
+- **BUG-237 (S1, present from 1.4.0):** when the hub connection of a client (Blazor WebAssembly, React, Angular, .NET)
+  closed while one of its actions ran, the action's last decision (`Stopped`/`session-ended`, `Executed` or `Failed`)
+  never reached the `IMentorActionObserver`s: it read the page from the connection's scope, closed by then, and the
+  action stayed `Allowed`, with no outcome. The page of a call is now read when the call reaches the gate, and the
+  turn's error is logged as it is when the scope has closed.
+
 ## [1.4.0] - 2026-11-18
 
 ### Added
@@ -2023,6 +2057,7 @@ names of their time.
 - **MentorAgent:** `MentorRemoteAgent.RequiredRoles` is not enforced: any user can reach a remote agent.
 
 [Unreleased]: https://www.nuget.org/packages/Novior.MentorAgent
+[1.4.1]: https://www.nuget.org/packages/Novior.MentorAgent/1.4.1
 [1.4.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.4.0
 [1.3.1]: https://www.nuget.org/packages/Novior.MentorAgent/1.3.1
 [1.3.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.3.0

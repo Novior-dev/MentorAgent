@@ -426,6 +426,7 @@ internal sealed class MentorAgentUIMiddleware
             DisplayName = pageAction ? description : null,
         };
         call.Span = toolActivity;
+        PageOf(call);   // now, while the scope is open: the last decision may come after the connection closed
 
         // A call the governor refused (stories 1549, 1546): its last decision, and what the model reads.
         object? Refuse(OffCall refusal)
@@ -796,11 +797,17 @@ internal sealed class MentorAgentUIMiddleware
     internal bool IsApplicationAction(string toolName, MentorAgentKind? agentKind)
     {
         if (agentKind != MentorAgentKind.Coordinator) return true;
+
+        // BUG-246 — who has the name, not the name alone: an action of the application with the name of one of
+        // MentorAgent's tools is the tool the coordinator keeps, and the policies decide it. A team is its exact name:
+        // another casing is another tool.
+        _discoveryCache ??= _discovery.Discover();
+        if (_discoveryCache.Level1Methods.Any(m => string.Equals(m.ToolName, toolName, StringComparison.Ordinal)))
+            return true;
         if (LibraryTools.Contains(toolName)) return false;
 
-        _discoveryCache ??= _discovery.Discover();
         return !_discoveryCache.Level3Teams.Any(t =>
-            string.Equals(MentorUtils.ToSnakeCase(t.Attribute.Name), toolName, StringComparison.OrdinalIgnoreCase));
+            string.Equals(MentorUtils.ToSnakeCase(t.Attribute.Name), toolName, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -823,7 +830,7 @@ internal sealed class MentorAgentUIMiddleware
             SessionId            = Session?.Id,
             TurnId               = Turn?.TurnId,
             CallId               = call.CallId,
-            PageName             = PageName(),
+            PageName             = PageOf(call),
             Kind                 = call.PageAction ? MentorActionKind.UI : MentorActionKind.Server,
             RequiredRoles        = call.Roles,
             RequiresConfirmation = requiresConfirmation,
@@ -1021,6 +1028,20 @@ internal sealed class MentorAgentUIMiddleware
     private MethodDiscoveryInfo? Discovered(GateCall call)
         => call.PageAction ? null : (_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method);
 
+    /// <summary>
+    /// The page of a call, read the first time it is asked for, when the call reaches the gate, then kept: the scope that
+    /// knows the page closes with the connection, and the call's last decision can come after that.
+    /// </summary>
+    internal string? PageOf(GateCall call)
+    {
+        if (!call.PageRead)
+        {
+            call.Page = PageName();
+            call.PageRead = true;
+        }
+        return call.Page;
+    }
+
     /// <summary>The page the user is on, for the policies; none in a task from another agent.</summary>
     internal string? PageName()
         => Origin?.FromAnotherAgent == true ? null : _services?.GetService<IMentorPageContext>()?.PageName;
@@ -1153,7 +1174,7 @@ internal sealed class MentorAgentUIMiddleware
             TenantId       = MentorTenantContext.Ambient,
             // Story 1501 — the kind, and the page read now, as the tenant.
             Kind           = call.PageAction ? MentorActionKind.UI : MentorActionKind.Server,
-            PageName       = PageName(),
+            PageName       = PageOf(call),
             RequiredRoles  = call.Roles,
             RolesFromOutside = call.RolesFromOutside,
             ConfirmationFromOutside = call.ConfirmationFromOutside,

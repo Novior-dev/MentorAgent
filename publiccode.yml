@@ -4,8 +4,8 @@ publiccodeYmlVersion: "0.7"
 name: Novior.MentorAgent
 url: "https://github.com/Novior-dev/MentorAgent"
 landingURL: "https://mentoragent.net/"
-softwareVersion: "1.4.0"
-releaseDate: "2026-11-18"
+softwareVersion: "1.4.1"
+releaseDate: "2026-11-23"
 
 platforms:
   - web

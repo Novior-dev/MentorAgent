@@ -69,7 +69,16 @@ internal sealed class McpToolsBuilder : IAsyncDisposable
     /// Fires <see cref="IMentorStateService.NotifyMcpServerStatusChanged"/> for
     /// each server (connected = <c>true</c> on success, <c>false</c> on failure).
     /// </summary>
-    public async Task<List<AITool>> BuildAsync(CancellationToken ct = default)
+    public Task<List<AITool>> BuildAsync(CancellationToken ct = default) => BuildAsync(reserved: null, ct);
+
+    /// <summary>
+    /// BUG-246 — the tools of the configured servers, less those with a name <paramref name="reserved"/> holds, compared
+    /// ignoring case: one of MentorAgent's own tools, a team's, an action of the application. A server's tool with such a
+    /// name took the place of the coordinator's own tool, whose calls then reached the server without the application's
+    /// policies, or marked that name as asking for a confirmation, or as only reading. It is left out before anything is
+    /// registered for it, and a Warning names the server and the tool.
+    /// </summary>
+    public async Task<List<AITool>> BuildAsync(IReadOnlySet<string>? reserved, CancellationToken ct = default)
     {
         var tools = new List<AITool>();
         _readOnly.Clear();
@@ -109,6 +118,17 @@ internal sealed class McpToolsBuilder : IAsyncDisposable
                     if (server.AllowedTools is { Length: > 0 } &&
                         !server.AllowedTools.Contains(tool.Name, StringComparer.OrdinalIgnoreCase))
                         continue;
+
+                    // BUG-246 — before any registration below: a name already taken is never the server's.
+                    if (reserved is not null && reserved.Contains(tool.Name))
+                    {
+                        _logger.LogWarning(
+                            "[MentorAgent:MCP] Server '{Name}' offers a tool named '{Tool}', a name MentorAgent or the " +
+                            "application already uses: the server's tool is left out. Rename it on the server, or leave it " +
+                            "out with the server's AllowedTools.",
+                            server.Name, tool.Name);
+                        continue;
+                    }
 
                     // Roadmap #16 — MCP tools live outside the discovery cache, so a server marked
                     // RequiresConfirmation registers its tool names with the shared confirmation

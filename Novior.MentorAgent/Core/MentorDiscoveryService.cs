@@ -365,7 +365,7 @@ internal sealed partial class MentorDiscoveryService
         if (teamAttr is not null)
         {
             var memberProps = type.GetProperties()
-                .Select(p => (Prop: p, Attr: p.GetCustomAttribute<TeamMemberAttribute>()))
+                .Select(p => (Prop: p, Attr: ReadOrWarn<TeamMemberAttribute>(type, p)))
                 .Where(x => x.Attr is not null)
                 .Select(x =>
                 {
@@ -380,7 +380,7 @@ internal sealed partial class MentorDiscoveryService
                 .ToList();
 
             var terminationMethod = type.GetMethods()
-                .FirstOrDefault(m => m.GetCustomAttribute<TeamTerminationConditionAttribute>() is not null);
+                .FirstOrDefault(m => ReadOrWarn<TeamTerminationConditionAttribute>(type, m) is not null);
 
             if (memberProps.Count == 0)
             {
@@ -446,8 +446,22 @@ internal sealed partial class MentorDiscoveryService
         foreach (var method in type.GetMethods(
             BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
         {
+            // The typed reads resolve the type of every attribute of the method: one whose type, or its assembly, does not
+            // load would stop the scan, and the application with it. The method is skipped; the rest of the class stays.
+            MentorActionAttribute? mentorAttr;
+            DescriptionAttribute? descAttr;
+            try
+            {
+                mentorAttr = method.GetCustomAttribute<MentorActionAttribute>();
+                descAttr = mentorAttr is null ? method.GetCustomAttribute<DescriptionAttribute>() : null;
+            }
+            catch (Exception ex) when (IsLoadFailure(ex))
+            {
+                WarnUnreadable(type, method);
+                continue;
+            }
+
             // [MentorAction] — MentorAgent attribute with extended metadata
-            var mentorAttr = method.GetCustomAttribute<MentorActionAttribute>();
             if (mentorAttr is not null)
             {
                 list.Add(new MethodDiscoveryInfo(
@@ -469,7 +483,6 @@ internal sealed partial class MentorDiscoveryService
             }
 
             // [Description] — native .NET attribute, no extra dependencies
-            var descAttr = method.GetCustomAttribute<DescriptionAttribute>();
             if (descAttr is not null && !string.IsNullOrWhiteSpace(descAttr.Description))
             {
                 list.Add(new MethodDiscoveryInfo(
@@ -487,6 +500,29 @@ internal sealed partial class MentorDiscoveryService
         }
 
         return list;
+    }
+
+    /// <summary>
+    /// A member of <paramref name="type"/> whose attributes name a type, or an assembly, that does not load: skipped with
+    /// a warning that names the class and the member, never the attributes' values.
+    /// </summary>
+    private void WarnUnreadable(Type type, MemberInfo member)
+        => _logger.LogWarning(
+            "[MentorAgent] The attributes of {Type}.{Member} could not be read: a type they name does not load. The {Kind} is skipped.",
+            type.FullName, member.Name, member is PropertyInfo ? "property" : "method");
+
+    /// <summary>The typed read of <paramref name="member"/>'s attribute, or <see langword="null"/> with a warning when its attributes do not load.</summary>
+    private T? ReadOrWarn<T>(Type type, MemberInfo member) where T : Attribute
+    {
+        try
+        {
+            return member.GetCustomAttribute<T>();
+        }
+        catch (Exception ex) when (IsLoadFailure(ex))
+        {
+            WarnUnreadable(type, member);
+            return null;
+        }
     }
 
 }

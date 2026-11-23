@@ -268,7 +268,7 @@ In `MainLayout.razor` (or `App.razor`):
 <ChatWidget />
 ```
 
-That's it. The widget injects its own CSS and JS automatically — no changes to `App.razor` or `_Host.cshtml` are required. Only `ChatWidget` does this: a surface composed from the package's components without `ChatWidget` must add the `<link>` to `_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.4.0` and the `<script>` for `_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.4.0` itself, or it renders unstyled and voice, paste and drag-and-drop stay off. The `?v=` is the version of the package you install: change it when you upgrade.
+That's it. The widget injects its own CSS and JS automatically — no changes to `App.razor` or `_Host.cshtml` are required. Only `ChatWidget` does this: a surface composed from the package's components without `ChatWidget` must add the `<link>` to `_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.4.1` and the `<script>` for `_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.4.1` itself, or it renders unstyled and voice, paste and drag-and-drop stay off. The `?v=` is the version of the package you install: change it when you upgrade.
 
 > **The widget must be interactive.** In a Blazor Web App make the app interactive as a whole — `<Routes @rendermode="InteractiveServer" />` in `App.razor` (the template's *Interactivity location: Global*). In a layout that renders statically, `<ChatWidget />` shows its button and nothing happens when it is clicked. A page rendered statically has no circuit either, so it cannot register `IMentorPageContext` data or UI actions. For Auto / WebAssembly apps see [Blazor Server vs Blazor WASM](#blazor-server-vs-blazor-wasm).
 
@@ -1630,6 +1630,8 @@ options.ShowMcpStatus = true; // default: false — recommended for development
 | `AllowedTools` | Whitelist of tool names to expose, compared without regard to case. `null` or an empty list = expose all |
 | `RequiresConfirmation` | If `true`, every call to a tool from this server shows a confirmation banner |
 
+**Names a server's tool cannot have.** A tool of a server whose name MentorAgent or your application already uses — one of MentorAgent's own tools (`navigate_to`, `invoke_ui_action`, `remember`, `forget_all`, `load_skill`, `read_skill_resource`, `route_to_specialist`), a team's, one of your actions — compared without regard to case, is left out, with a Warning that names the server and the tool: it is not offered, it asks for no confirmation and it is not counted as only reading. Rename it on the server, or leave it out with `AllowedTools` (BUG-246, fixed in 1.4.1). One of your actions with the name of one of MentorAgent's tools hides that tool and is decided by your action policies like any other of your actions; a Warning at startup names it: rename it.
+
 ---
 
 ### MCP Server — exposing MentorAgent as an MCP server
@@ -2232,7 +2234,7 @@ builder.Services.AddMentorAgentBlazor(options =>
 ```
 
 > ⚠️ **Three WASM-only setup steps** not required in Blazor Server:
-> 1. **CSS/JS links** — in a standalone WASM app the static `index.html` is served before the .NET runtime starts, so the widget cannot inject its own assets. A Blazor Web App has no `index.html`: prerendered, the widget writes the tags itself; without prerendering they go in `App.razor`. Where you add them, add `<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.4.0" rel="stylesheet" />` and `<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.4.0"></script>` manually — **set the `?v=` to the version of the package you install and change it on every upgrade**, because nothing fingerprints these two and a cached older `MentorAgent.js` silently costs you the onboarding tour and streaming voice.
+> 1. **CSS/JS links** — in a standalone WASM app the static `index.html` is served before the .NET runtime starts, so the widget cannot inject its own assets. A Blazor Web App has no `index.html`: prerendered, the widget writes the tags itself; without prerendering they go in `App.razor`. Where you add them, add `<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.4.1" rel="stylesheet" />` and `<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.4.1"></script>` manually — **set the `?v=` to the version of the package you install and change it on every upgrade**, because nothing fingerprints these two and a cached older `MentorAgent.js` silently costs you the onboarding tour and streaming voice.
 > 2. **CORS + absolute `HubUrl`** when the WASM app and the server are on different origins (different ports). Confirmations and Stop (`POST /mentor/approve`, `/mentor/cancel`) then go to the hub's origin with the `AccessTokenProvider` token, through the `HttpClient` the client registers (step 3). See the [Novior.MentorAgent.Server](https://www.nuget.org/packages/Novior.MentorAgent.Server) and [Novior.MentorAgent.Blazor](https://www.nuget.org/packages/Novior.MentorAgent.Blazor) READMEs.
 > 3. **An `HttpClient` in the client project** — the widget sends Stop and confirmations through it, and `AddMentorAgentBlazor()` does not register one. The standalone WebAssembly template does; the client project of a Blazor Web App does not, and without it the WebAssembly runtime does not start (`CannotResolveService … HttpClient`). Add `builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) });` to its `Program.cs`, as in the snippet above.
 
@@ -2263,7 +2265,7 @@ with `NU1605`: `Microsoft.Extensions.Hosting` came in with the same server depen
 
 ```xml
 <!-- in the <ItemGroup> the MAUI template generated -->
-<PackageReference Include="Novior.MentorAgent" Version="1.4.0" />
+<PackageReference Include="Novior.MentorAgent" Version="1.4.1" />
 ```
 
 **2 · Reference the widget's static assets.** A MAUI app serves `wwwroot/index.html` itself, and the
