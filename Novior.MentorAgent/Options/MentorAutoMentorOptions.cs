@@ -30,4 +30,21 @@ public sealed class MentorAutoMentorOptions
     /// gives no candidate, and a warning in the log says so when <see cref="Enabled"/> is on.
     /// </summary>
     public string[] Namespaces { get; set; } = [];
+
+    /// <summary>
+    /// The assemblies the pages are read from besides the usual ones. With <see cref="Enabled"/> on, MentorAgent reads
+    /// the pages of the application once, from the components that carry <c>@page</c>: those of the entry assembly and
+    /// of the assemblies it references that use the components, such as the client project of an Auto application or a
+    /// Razor class library given to <c>AddAdditionalAssemblies</c>. Add here an assembly with pages the entry assembly
+    /// does not reference. Empty by default.
+    /// </summary>
+    public Assembly[] PageAssemblies { get; set; } = [];
+
+    /// <summary>
+    /// Whether the widget observes the pages the users open, with <see cref="Enabled"/> on: on by default. It sends the
+    /// structure of what each page shows, dialogs, tabs and panels included, never a value, never the text of a
+    /// structure that repeats, and an element reaches the pages only once more than one user saw it the same. The
+    /// observed elements are kept in memory. Off: nothing is observed (<c>page.observe-off</c>).
+    /// </summary>
+    public bool ObservePages { get; set; } = true;
 }

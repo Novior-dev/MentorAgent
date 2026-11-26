@@ -16,7 +16,7 @@ namespace Novior.MentorAgent.Tests.Pages;
 /// tools of the run.
 ///
 /// <para>
-/// Up to 1.3.0 <see cref="UIActionsMiddleware"/> added them below the agent and ran their calls in a loop
+/// Up to 1.3.1 <see cref="UIActionsMiddleware"/> added them below the agent and ran their calls in a loop
 /// of its own. From story 1288 they are tools of the run, called by the agent's function-invoking client
 /// through the gate, and brought up to the page after every call. Every step is still a place where a
 /// call can be executed twice, executed against the wrong page, or silently dropped.
@@ -282,7 +282,9 @@ public sealed class UIActionToolTests
 
         response.Text.Should().Be("I could not highlight it.");
         rig.Logs.HasWarning("threw an exception").Should().BeTrue(rig.Logs.WarningText);
-        ToolResultsOf(rig).Should().Contain("error");
+        // BUG-241: the action throws to the gate, which decides it failed (UIActionGateTests); here, with no gate, the
+        // function-invoking client answers the failure.
+        ToolResultsOf(rig).Should().Contain("Function failed");
         rig.State.Sequence.Should().NotContain(nameof(RecordingStateService.NotifyUIActionCompleted),
             "an action that threw did not complete");
     }
@@ -386,7 +388,7 @@ public sealed class UIActionToolTests
     public async Task A_call_to_a_business_tool_runs_the_business_tool_and_no_page_action()
     {
         // Story 1288: one client runs both now, so the page's actions must not catch a call that is
-        // not theirs. Up to 1.3.0 the middleware handed such a call back to the outer loop untouched.
+        // not theirs. Up to 1.3.1 the middleware handed such a call back to the outer loop untouched.
         var rig = new Rig();
         var highlighted = false;
         var cancelled = 0;
@@ -468,7 +470,7 @@ public sealed class UIActionToolTests
     public async Task A_model_that_keeps_calling_the_same_action_is_stopped()
     {
         // Without a cap a model stuck in a loop would drive UI actions against the page forever, one
-        // paid call at a time. Up to 1.3.0 the page's own loop stopped at ten. From story 1288 the
+        // paid call at a time. Up to 1.3.1 the page's own loop stopped at ten. From story 1288 the
         // actions are tools of the run, and the cap is the run's, the same as for every other action:
         // MaximumIterationsPerRequest of the agent's function-invoking client, which MentorAgent does
         // not set — Microsoft.Extensions.AI's default of 40, then a last request with no tool.

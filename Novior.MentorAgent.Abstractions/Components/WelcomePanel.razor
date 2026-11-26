@@ -10,7 +10,7 @@
                 ? "_content/Novior.MentorAgent.Abstractions/IconMA.png"
                 : Options.Value.AvatarUrl;
         }
-        <img src="@avatarUrl" alt="@BotName" class="bm-avatar-img" />
+        <img src="@avatarUrl" alt="" class="bm-avatar-img" />
     </div>
     <h3 class="bm-welcome__title">@BotName</h3>
     <p class="bm-welcome__subtitle">
@@ -25,13 +25,19 @@
     </p>
     @if (EnableSuggestions && OnChipClick.HasDelegate)
     {
-        var chipWhat  = L.Get("welcome.chip.what");
-        var chipStart = L.Get("welcome.chip.start");
-        var chipHow   = L.Get("welcome.chip.how");
         <div class="bm-welcome__chips">
-            <button class="bm-chip" type="button" @onclick="() => OnChipClick.InvokeAsync(chipWhat)">@chipWhat</button>
-            <button class="bm-chip" type="button" @onclick="() => OnChipClick.InvokeAsync(chipStart)">@chipStart</button>
-            <button class="bm-chip" type="button" @onclick="() => OnChipClick.InvokeAsync(chipHow)">@chipHow</button>
+            @foreach (var key in ChipKeys)
+            {
+                @* The icon is decoration: a screen reader names the button by its words, and the words are what it sends. *@
+                var (icon, text) = SplitIcon(L.Get(key));
+                <button class="bm-chip" type="button" @onclick="() => OnChipClick.InvokeAsync(text)">
+                    @if (icon is not null)
+                    {
+                        <span class="bm-chip__icon" aria-hidden="true">@icon</span>
+                    }
+                    <span class="bm-chip__label">@text</span>
+                </button>
+            }
         </div>
     }
 </div>
@@ -45,4 +51,23 @@
     [Parameter] public string? WelcomeMessage { get; set; }
     [Parameter] public bool EnableSuggestions { get; set; } = true;
     [Parameter] public EventCallback<string> OnChipClick { get; set; }
+
+    private static readonly string[] ChipKeys = ["welcome.chip.what", "welcome.chip.start", "welcome.chip.how"];
+
+    /// <summary>
+    /// Splits a suggestion into its leading icon and its words: the first word when it has no letter and no digit
+    /// (an emoji, a symbol), so that a screen reader names the button by its words alone (BUG-257).
+    /// </summary>
+    internal static (string? Icon, string Text) SplitIcon(string label)
+    {
+        var trimmed = label.Trim();
+        var space = trimmed.IndexOfAny([' ', '\u00A0', '\u3000']);
+        if (space <= 0) return (null, trimmed);
+        var first = trimmed[..space];
+        var rest  = trimmed[(space + 1)..].Trim();
+        if (rest.Length == 0) return (null, trimmed);
+        foreach (var c in first)
+            if (char.IsLetterOrDigit(c)) return (null, trimmed);
+        return (first, rest);
+    }
 }

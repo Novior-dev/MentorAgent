@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+
+    <!-- Story 1637: a .NET tool, novior-mentor. Version, Authors, License, Symbols inherited from Directory.Build.props -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>novior-mentor</ToolCommandName>
+    <PackageId>Novior.MentorAgent.Cli</PackageId>
+    <Title>Novior.MentorAgent.Cli</Title>
+    <Description>The command line of Novior.MentorAgent: novior-mentor scan reads the pages of a running Blazor application, a test environment or a WebAssembly app's development server, in the Edge or Chrome installed on the machine that runs it, and writes the AutoMentor's mentor-ui-manifest.json. For a CI pipeline.</Description>
+    <PackageTags>ai-agents;blazor;blazor-wasm;automentor;ui-manifest;scanner;cli;dotnet-tool;ci;dotnet;csharp</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>IconMA.png</PackageIcon>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <!-- New in 1.5.0: no published version to compare with yet. -->
+    <PackageValidationBaselineVersion></PackageValidationBaselineVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="\" />
+    <None Include="..\Novior.MentorAgent\IconMA.png" Pack="true" PackagePath="IconMA.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Novior.MentorAgent.Scanner\Novior.MentorAgent.Scanner.csproj" />
+  </ItemGroup>
+
+</Project>

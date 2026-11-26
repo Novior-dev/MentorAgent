@@ -95,6 +95,8 @@ The template is not a NuGet package yet: install it from a clone.
 - **Help and contributions:** [SUPPORT.md](SUPPORT.md), [CONTRIBUTING.md](CONTRIBUTING.md),
   [CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md)
 - **Vulnerabilities:** [SECURITY.md](SECURITY.md) — privately, never in a public issue
+- **Accessibility:** [ACCESSIBILITY.md](ACCESSIBILITY.md) — what the widget meets, how it was tested, its limits, and
+  where to report a barrier
 - **Action rules:** [ACTION-RULES.md](ACTION-RULES.md) — which methods become actions, and how roles
   and confirmations add up
 - **What changed:** [CHANGELOG.md](CHANGELOG.md)

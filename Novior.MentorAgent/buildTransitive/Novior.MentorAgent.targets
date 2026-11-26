@@ -1,0 +1,17 @@
+<Project>
+  <!--
+    Novior.MentorAgent — the AutoMentor's manifest of the pages (mentor-ui-manifest.json), written by a scan.
+    When the project has the file, the build embeds it in the application, where MentorAgent reads it with the pages
+    (options.AutoMentor.Enabled). It is not published as a file beside the application. Another path:
+    <MentorUiManifest>path\to\mentor-ui-manifest.json</MentorUiManifest>.
+  -->
+  <PropertyGroup>
+    <MentorUiManifest Condition="'$(MentorUiManifest)' == ''">$(MSBuildProjectDirectory)\mentor-ui-manifest.json</MentorUiManifest>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(MentorUiManifest)')">
+    <Content Remove="$(MentorUiManifest)" />
+    <None Remove="$(MentorUiManifest)" />
+    <EmbeddedResource Include="$(MentorUiManifest)" LogicalName="Novior.MentorAgent.UiManifest.json" />
+  </ItemGroup>
+</Project>

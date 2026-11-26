@@ -1,6 +1,8 @@
 @using Novior.MentorAgent.Abstractions.Core
 @using Novior.MentorAgent.Abstractions.Models
 @inject MentorLocalizer ApplicationL
+@using Microsoft.JSInterop
+@inject IJSRuntime JS
 
 @*
     Guided first-run tour (roadmap #18).
@@ -16,12 +18,16 @@
 
 @if (Steps.Count == 0) { return; }
 
-<div class="bm-tour" role="dialog" aria-modal="true" aria-label="@Current.Title">
+<div class="bm-tour" role="dialog" aria-modal="true" aria-label="@Current.Title" tabindex="-1" @ref="_root">
 
     <div class="bm-tour__head">
         <span class="bm-tour__count">@string.Format(L.Get("tour.step"), _index + 1, Steps.Count)</span>
         <button class="bm-tour__skip" @onclick="Finish" type="button">@L.Get("tour.skip")</button>
     </div>
+
+    @* BUG-263: the focus stays on Next or Back as the step changes, and a screen reader said nothing of the new step.
+       Written only when the step changes, never as the tour opens: then the dialog takes the focus and is read whole. *@
+    <p class="bm-sr-only" aria-live="polite" aria-atomic="true">@_announced</p>
 
     <div class="bm-tour__body">
         <p class="bm-tour__title">@Current.Title</p>
@@ -58,13 +64,40 @@
         <button class="bm-btn bm-btn--ghost" type="button" disabled="@(_index == 0)" @onclick="Back">
             @L.Get("tour.back")
         </button>
-        <button class="bm-btn bm-btn--primary" type="button" @onclick="Next">
+        <button class="bm-btn bm-btn--primary" type="button" @onclick="Next" @ref="_next">
             @(IsLast ? L.Get("tour.done") : L.Get("tour.next"))
         </button>
     </div>
 </div>
 
 @code {
+    // Story 750, A11: the tour takes the focus when it opens with the panel.
+    private ElementReference _root;
+
+    /// <summary>Puts the focus on the tour, as it opens with the panel.</summary>
+    internal ValueTask FocusAsync() => _root.FocusAsync();
+
+    // BUG-262: a modal dialog keeps the focus. Tab after its last button goes to its first, Shift+Tab before its first
+    // to its last; the rest of the panel is inert meanwhile. Once per element: the dialog stays the same between steps.
+    private bool _trapped;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusNext)
+        {
+            _focusNext = false;
+            try { await _next.FocusAsync(); }
+            catch (Exception ex) when (ex is Microsoft.JSInterop.JSException or InvalidOperationException or TaskCanceledException) { }
+        }
+        if (_trapped || Steps.Count == 0) return;
+        try
+        {
+            await JS.InvokeVoidAsync("MentorAgent.trapFocus", _root);
+            _trapped = true;
+        }
+        catch (Exception ex) when (ex is Microsoft.JSInterop.JSException or InvalidOperationException or TaskCanceledException) { }
+    }
+
     // The localizer of the ChatWidget around this component, in the widget's Language (story 536); the application's
     // when there is none, or when the component is used on its own.
     [CascadingParameter(Name = ChatWidget.LocalizerCascade)] private MentorLocalizer? WidgetL { get; set; }
@@ -107,10 +140,28 @@
     private MentorTourStep Current => Steps[Math.Clamp(_index, 0, Steps.Count - 1)];
     private bool IsLast => _index >= Steps.Count - 1;
 
+    // BUG-263: what a screen reader announces of the step the user moved to; empty until a step changes.
+    private string _announced = string.Empty;
+    private ElementReference _next;
+    private bool _focusNext;
+
+    private void Announce()
+        => _announced = $"{Sentence(string.Format(L.Get("tour.step"), _index + 1, Steps.Count))} {Sentence(Current.Title)} {Current.Body}";
+
+    /// <summary>The text with a full stop, unless it already ends a sentence: "Welcome!" is not read "Welcome!.".</summary>
+    private static string Sentence(string text)
+    {
+        var t = text.TrimEnd();
+        return t.Length > 0 && ".!?\u2026\u3002\uFF01\uFF1F".Contains(t[^1]) ? t : t + ".";
+    }
+
     private Task Back()
     {
         if (_index == 0) return Task.CompletedTask;
         _index--;
+        Announce();
+        // Back is disabled on the first step: the focus it had would be lost, so it goes to Next.
+        _focusNext = _index == 0;
         return OnIndexChanged.InvokeAsync(_index);
     }
 
@@ -118,6 +169,7 @@
     {
         if (IsLast) { await Finish(); return; }
         _index++;
+        Announce();
         await OnIndexChanged.InvokeAsync(_index);
     }
 

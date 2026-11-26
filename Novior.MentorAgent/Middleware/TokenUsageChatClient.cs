@@ -30,15 +30,21 @@ internal sealed class TokenUsageChatClient : DelegatingChatClient
     /// <summary>The inner client's own deployment, read once, for responses that name no model.</summary>
     private string? _deploymentId;
 
+    /// <summary>Story 1289 — who the calls are attributed to, and the observers they go to; none outside a session.</summary>
+    private readonly ModelCallReporter? _reporter;
+    private readonly ModelCallAttribution? _attribution;
+
     public TokenUsageChatClient(
         IChatClient innerClient, MentorTokenUsage usage, MentorMetrics metrics, ILogger logger,
-        MentorSessionTokenUsage? session = null)
+        MentorSessionTokenUsage? session = null, ModelCallReporter? reporter = null, ModelCallAttribution? attribution = null)
         : base(innerClient)
     {
         _usage = usage;
         _metrics = metrics;
         _logger = logger;
         _session = session;
+        _reporter = attribution is null ? null : reporter;
+        _attribution = attribution;
     }
 
     public override async Task<ChatResponse> GetResponseAsync(
@@ -46,13 +52,27 @@ internal sealed class TokenUsageChatClient : DelegatingChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        var start = _reporter is null ? null : await _reporter.BeginAsync(_attribution!, cancellationToken);
         var sw = Stopwatch.StartNew();
-        var response = await base.GetResponseAsync(messages, options, cancellationToken);
+        ChatResponse response;
+        try
+        {
+            response = await base.GetResponseAsync(messages, options, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Not for the dashboard, which counts what was served: for the observers, the call and how it ended.
+            Report(start, ex is OperationCanceledException ? MentorModelCallOutcome.Cancelled : MentorModelCallOutcome.Failed,
+                null, 0, 0, null, null, usageMeasured: false, sw.Elapsed);
+            throw;
+        }
         sw.Stop();
 
         var inTok  = response.Usage?.InputTokenCount  ?? 0;
         var outTok = response.Usage?.OutputTokenCount ?? 0;
-        Record(response.ModelId, inTok, outTok, sw.Elapsed.TotalMilliseconds, ttfbMs: null);
+        var modelId = Record(response.ModelId, inTok, outTok, sw.Elapsed.TotalMilliseconds, ttfbMs: null);
+        Report(start, MentorModelCallOutcome.Completed, modelId, inTok, outTok,
+            response.Usage?.CachedInputTokenCount, response.Usage?.ReasoningTokenCount, usageMeasured: true, sw.Elapsed);
         return response;
     }
 
@@ -61,12 +81,16 @@ internal sealed class TokenUsageChatClient : DelegatingChatClient
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var start = _reporter is null ? null : await _reporter.BeginAsync(_attribution!, cancellationToken);
         var sw = Stopwatch.StartNew();
         double? ttfb = null;
         long inTok = 0, outTok = 0;
+        long? cached = null, reasoning = null;
         string? modelId = null;
         var sawUsage = false;
         var started = false;
+        // A reader that stops reading leaves this as it is: the call was stopped.
+        var outcome = MentorModelCallOutcome.Cancelled;
 
         // try/finally rather than a plain trailing call: the user pressing Stop cancels the token,
         // which throws out of the enumerator, and a consumer can also simply stop enumerating. Both
@@ -75,8 +99,26 @@ internal sealed class TokenUsageChatClient : DelegatingChatClient
         // input prompt and all (BUG-032).
         try
         {
-            await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken))
+            await using var updates = base.GetStreamingResponseAsync(messages, options, cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            while (true)
             {
+                // The next update in a try of its own, with no yield in it: how the call ended is known here.
+                try
+                {
+                    if (!await updates.MoveNextAsync())
+                    {
+                        outcome = MentorModelCallOutcome.Completed;
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    outcome = ex is OperationCanceledException ? MentorModelCallOutcome.Cancelled : MentorModelCallOutcome.Failed;
+                    throw;
+                }
+
+                var update = updates.Current;
                 started = true;
                 ttfb ??= sw.Elapsed.TotalMilliseconds; // first update = time to first byte
                 // First NON-EMPTY id, not first non-null: Azure's opening chunk carries "" and `??=`
@@ -90,6 +132,8 @@ internal sealed class TokenUsageChatClient : DelegatingChatClient
                         sawUsage = true;
                         inTok  = uc.Details.InputTokenCount  ?? inTok;
                         outTok = uc.Details.OutputTokenCount ?? outTok;
+                        cached = uc.Details.CachedInputTokenCount ?? cached;
+                        reasoning = uc.Details.ReasoningTokenCount ?? reasoning;
                     }
 
                 yield return update;
@@ -106,13 +150,36 @@ internal sealed class TokenUsageChatClient : DelegatingChatClient
                 // No usage chunk means the counts are unknown, not zero. They are deliberately left
                 // out of the totals and the call is disclosed as unmeasured instead; guessing would
                 // understate every per-request average, which is the failure this was found by.
-                Record(modelId, sawUsage ? inTok : 0, sawUsage ? outTok : 0,
+                modelId = Record(modelId, sawUsage ? inTok : 0, sawUsage ? outTok : 0,
                        sw.Elapsed.TotalMilliseconds, ttfb, usageMeasured: sawUsage);
             }
+
+            // The observers hear of a call that failed before its first update too; one cancelled before it, never served,
+            // is no call.
+            if (started || outcome == MentorModelCallOutcome.Failed)
+                Report(start, outcome, modelId, inTok, outTok, cached, reasoning, usageMeasured: sawUsage, sw.Elapsed);
         }
     }
 
-    private void Record(
+    private void Report(ModelCallReporter.Start? start, MentorModelCallOutcome outcome, string? modelId, long inTok, long outTok,
+        long? cached, long? reasoning, bool usageMeasured, TimeSpan duration)
+    {
+        if (start is null || _reporter is null || _attribution is null) return;
+        try
+        {
+            _reporter.Publish(start, _attribution, outcome,
+                string.IsNullOrWhiteSpace(modelId) ? _deploymentId ??= InnerClient.GetService<ChatClientMetadata>()?.DefaultModelId : modelId,
+                inTok, outTok, cached, reasoning, usageMeasured, duration);
+        }
+        catch (Exception ex)
+        {
+            // Never into the call: the record is for the observers, and the reply is the user's.
+            _logger.LogDebug("[MentorAgent] A model call could not be handed to the observers: {Type}.", ex.GetType().Name);
+        }
+    }
+
+    /// <returns>The model id recorded.</returns>
+    private string? Record(
         string? modelId, long inTok, long outTok, double latencyMs, double? ttfbMs,
         bool usageMeasured = true)
     {
@@ -132,5 +199,6 @@ internal sealed class TokenUsageChatClient : DelegatingChatClient
             "session: {SessIn}+{SessOut}={SessTotal} over {Reqs} call(s)",
             modelId ?? "?", inTok, outTok, inTok + outTok, latencyMs,
             _usage.TotalInputTokens, _usage.TotalOutputTokens, _usage.TotalTokens, _usage.RequestCount);
+        return modelId;
     }
 }

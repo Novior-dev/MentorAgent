@@ -146,7 +146,12 @@ internal sealed class MentorActionPolicies
     }
 
     private static string What(MentorActionRequest request)
-        => request.Stage == MentorActionStage.Offer ? "the action is not offered" : "the call is not run";
+        => request.Stage switch
+        {
+            MentorActionStage.Call => "the call is not run",
+            MentorActionStage.Card => "the action is not on the A2A agent card",
+            _ => "the action is not offered",
+        };
 
     private static string Name(IMentorActionPolicy policy) => policy.GetType().FullName ?? policy.GetType().Name;
 }

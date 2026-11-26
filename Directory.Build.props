@@ -1,7 +1,7 @@
 ﻿<Project>
   <PropertyGroup>
     <!-- Single version source for all MentorAgent packages -->
-    <Version>1.4.1</Version>
+    <Version>1.5.0</Version>
 
     <!-- Common metadata. Copyright matches NOTICE, which every package ships beside LICENSE.
          RepositoryUrl names the GitHub repository the source is published to. -->
@@ -73,5 +73,12 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- A nullable warning (CS8600-CS8634, CS8714 and the like) fails a Release build too: the gate and the release
+       pipeline build in Release and look at tests, not at warnings, so one reached a commit unseen (CS8602 in
+       DeclarativeYaml, 1.5.0). Debug keeps it a warning, so local work is not stopped. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <WarningsAsErrors>$(WarningsAsErrors);nullable</WarningsAsErrors>
   </PropertyGroup>
 </Project>

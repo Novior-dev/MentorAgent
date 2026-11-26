@@ -28,7 +28,7 @@
   <ItemGroup>
     <!-- On the same 1.27 line as Microsoft.Agents.AI in the core package: a version of another line
          would drag the whole library onto a different Agent Framework version. -->
-    <PackageReference Include="Microsoft.Agents.AI.Declarative" Version="1.27.0-rc1" />
+    <PackageReference Include="Microsoft.Agents.AI.Declarative" Version="1.28.0-rc1" />
     <!-- Story 1570, slice B: the teams' YAML (*.team.yaml), read with its node model only, never its reflection
          deserializer. MIT; in THIRD-PARTY-NOTICES.md. -->
     <PackageReference Include="YamlDotNet" Version="18.1.0" />

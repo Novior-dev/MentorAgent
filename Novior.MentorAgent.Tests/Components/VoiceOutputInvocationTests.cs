@@ -106,6 +106,57 @@ public sealed class VoiceOutputInvocationTests : ComponentTestBase
         SpeechCalls().Should().BeEmpty();
     }
 
+    // ── BUG-260: the visitor's choice is remembered ──────────────────────────────
+    // The voice started on at every visit: someone with a screen reader, which reads the reply too, heard both voices
+    // at once and had to turn the widget's off each time.
+
+    private const string VoiceKey = "mentoragent.voice.output";
+
+    private IReadOnlyList<string?> SavedChoices()
+        => [.. JSInterop.Invocations.Where(i => i.Identifier == "MentorAgent.valueSet" && Equals(i.Arguments[0], VoiceKey))
+            .Select(i => i.Arguments[1]?.ToString())];
+
+    [Fact]
+    public void Turned_off_and_on_again_the_voice_is_remembered_in_the_browser_each_time()
+    {
+        var cut = OpenWidgetWithSpeech();
+        var toggle = () => cut.Find(".bm-header__actions .bm-icon-btn");
+
+        toggle().Click();
+        toggle().Click();
+
+        SavedChoices().Should().Equal(["0", "1"]);
+    }
+
+    [Fact]
+    public void A_visitor_who_turned_the_voice_off_finds_it_off_on_the_next_visit()
+    {
+        JSInterop.Setup<string?>("MentorAgent.valueGet", VoiceKey).SetResult("0");
+        var cut = OpenWidgetWithSpeech();
+
+        cut.Find(".bm-header__actions .bm-icon-btn").ClassList.Should().NotContain("bm-icon-btn--active");
+        _state.NotifyStreamingChunk("otto prodotti");
+        _state.NotifyStreamingCompleted();
+
+        SpeechCalls().Should().BeEmpty("the visitor turned the widget's voice off, and it stays off");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("1")]
+    [InlineData("something else")]
+    public void With_no_choice_or_the_voice_on_it_starts_on_as_before(string? saved)
+    {
+        JSInterop.Setup<string?>("MentorAgent.valueGet", VoiceKey).SetResult(saved);
+        var cut = OpenWidgetWithSpeech();
+
+        cut.Find(".bm-header__actions .bm-icon-btn").ClassList.Should().Contain("bm-icon-btn--active");
+        _state.NotifyStreamingChunk("otto prodotti");
+        _state.NotifyStreamingCompleted();
+
+        SpeechCalls().Should().Contain("MentorAgent.speak");
+    }
+
     /// <summary>Does nothing; this file is about interop, not turns.</summary>
     private sealed class StubOrchestrator : IMentorOrchestrator
     {

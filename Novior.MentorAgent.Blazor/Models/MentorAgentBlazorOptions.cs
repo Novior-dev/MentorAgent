@@ -168,4 +168,12 @@ public sealed class MentorAgentBlazorOptions
     /// </code>
     /// </summary>
     public Action<HttpConnectionOptions>? ConfigureConnection { get; set; }
+
+    /// <summary>
+    /// The assemblies the client's pages are read from besides the usual ones. Once a connection opens, the client
+    /// sends the server its pages, read from the components that carry <c>@page</c> in the entry assembly and in the
+    /// assemblies it references that use the components, so a server with the AutoMentor on knows them (it ignores
+    /// them otherwise). Add here an assembly with pages the entry assembly does not reference. Empty by default.
+    /// </summary>
+    public System.Reflection.Assembly[] PageAssemblies { get; set; } = [];
 }

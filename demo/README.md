@@ -90,9 +90,9 @@ The demo references the library's projects, so it always runs the code of this r
 application, reference the package instead, together with the SDK of the provider you use:
 
 ```xml
-<PackageReference Include="Novior.MentorAgent" Version="1.4.1" />
+<PackageReference Include="Novior.MentorAgent" Version="1.5.0" />
 <PackageReference Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
-<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
+<PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="11.0.0" />
 ```
 
 Then follow the [main README](../Novior.MentorAgent/README.md).

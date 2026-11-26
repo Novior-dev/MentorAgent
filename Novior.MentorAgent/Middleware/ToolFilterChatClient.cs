@@ -534,7 +534,13 @@ internal sealed class ToolFilterChatClient : DelegatingChatClient
                     ? null
                     : alwaysKeep.FirstOrDefault(t => string.Equals(t.Name, _navigationTool, StringComparison.OrdinalIgnoreCase));
 
-                var shape = new Core.RequestShape(reads.Count > 0, offered, navigation is not null);
+                // BUG-247: the page's own actions are shown with a record question, so that a request for one of them
+                // is not forced onto the application's reads, which leave them out; BUG-251: and with the actions a
+                // complete request could be required to call, which leave them out too.
+                var shape = new Core.RequestShape(reads.Count > 0, offered, navigation is not null)
+                {
+                    PageActions = reads.Count > 0 || offered.Count > 0 ? Core.RequestClassifier.PageActions(alwaysKeep) : [],
+                };
 
                 if (!shape.IsEmpty)
                 {

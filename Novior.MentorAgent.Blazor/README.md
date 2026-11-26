@@ -369,11 +369,11 @@ Unlike Blazor Server (where the widget injects CSS automatically via `<HeadConte
 ```html
 <head>
     ...
-    <link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.4.1" rel="stylesheet" />
+    <link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.5.0" rel="stylesheet" />
 </head>
 <body>
     ...
-    <script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.4.1"></script>
+    <script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.5.0"></script>
 </body>
 ```
 
@@ -403,6 +403,10 @@ options.Position     = ChatPosition.BottomRight; // BottomRight | BottomLeft | T
 options.AvatarUrl    = "/my-avatar.png";
 options.BotName      = "ShopFlow Assistant";
 ```
+
+The panel is nearly opaque, so that its text keeps its contrast on any page (WCAG 2.1 AA in what we tested, from 1.5.0). For the glass of
+1.4, set `--bm-bg-panel` back to a translucent color in your stylesheet: the contrast is then your page's to keep. The
+whole list of variables, and what the widget does for accessibility, is in the Novior.MentorAgent README.
 
 ### Welcome message and input
 
@@ -639,6 +643,50 @@ PageContext.RegisterUIActionAsync<OrderModel>(
     parameterHint: "JSON: { orderId, amount, status }");
 ```
 
+### A form as a UI action — `RegisterForm<TModel>`
+
+```razor
+@inject IMentorPageContext PageContext
+@inject IJSRuntime JS
+
+<EditForm Model="_ticket" OnValidSubmit="SaveAsync">
+    <InputText data-mentor-id="ticket.title" @bind-Value="_ticket.Title" />
+    <InputCheckbox data-mentor-id="ticket.urgent" @bind-Value="_ticket.Urgent" />
+    <button type="submit">Save</button>
+</EditForm>
+
+@code {
+    protected override void OnInitialized()
+    {
+        PageContext.SetPageName("New ticket")
+            .RegisterForm<Ticket>("ticket", "The form of a new support ticket", JS);
+        PageContext.SignalReady();
+    }
+}
+```
+
+The model gets one action, `fill_<form>`, whose parameter is the fields to fill: each field is found by its `data-mentor-id`, `"<form>.<field>"`. It **fills and never submits** the form: sending it stays an action of your own. Sensitive fields (passwords, secrets, tokens, PINs, cards, IBANs, one-time codes) are left out unless you let them in, and a password field of the page is never written. The fill runs in the browser, in the page; the server is not told whether it succeeded, as for every UI action of a WebAssembly client. The whole reference, with the options, is in the Novior.MentorAgent README, «A page's form as a UI action».
+
+### A grid as UI actions — `RegisterGrid<TRow>`
+
+```razor
+<tr data-mentor-id="tickets.row">
+    <td data-mentor-id="tickets.cell.id">@t.Id</td>
+    <td><button data-mentor-id="tickets.open" @onclick="@(() => Open(t))">Open</button></td>
+</tr>
+
+@code {
+    protected override void OnInitialized()
+    {
+        PageContext.SetPageName("Tickets")
+            .RegisterGrid<Ticket>("tickets", "The open tickets", JS, t => t.Id);
+        PageContext.SignalReady();
+    }
+}
+```
+
+The model gets `open_<grid>_row({ key })`, and `sort_<grid>({ column, descending? })` and `filter_<grid>(text)` when the grid sorts and filters: each part is found by its `data-mentor-id`, `"<grid>.row"`, `"<grid>.cell.<key>"`, `"<grid>.open"`, `"<grid>.sort.<column>"` and `"<grid>.filter"`. A sort reads the header's `aria-sort`. Nothing of the rows goes back to the model, and a sensitive column is never the key. A `QuickGrid` is given its selectors with `MentorGridOptions.Selector`. The whole reference is in the Novior.MentorAgent README, «A page's grid as UI actions».
+
 ### Remove an action
 
 ```csharp
@@ -700,12 +748,14 @@ For typed overloads, `parameterHint` is auto-generated from the type when omitte
 
 | `TParam` | Auto-generated hint |
 |---|---|
-| `int`, `long` | `"integer"` |
+| `int`, `long`, and the other integers, unsigned too | `"integer"` |
 | `float`, `double`, `decimal` | `"number"` |
 | `bool` | `"boolean"` |
 | `string` | `"string"` |
 | `Guid` | `"string (GUID)"` |
-| `DateTime` | `"string (ISO 8601 date)"` |
+| `DateTime`, `DateTimeOffset`, `DateOnly` | `"string (ISO 8601 date)"` |
+| `TimeOnly`, `TimeSpan` | `"string (time, HH:mm:ss)"`, `"string (duration, d.hh:mm:ss)"` |
+| `char`, `Uri` | `"string (one character)"`, `"string (URI)"` |
 | `Status` *(enum)* | `"string (Active\|Inactive\|Pending)"` |
 | `List<int>` | `"array<integer>"` |
 | `OrderFormModel` *(class)* | `"{ customerId: integer, productName: string, ... }"` |
@@ -741,6 +791,7 @@ Override only when extra clarity is needed:
 | `HubUrl` | `string` | `"/mentor-hub"` | URL of the Novior.MentorAgent.Server SignalR hub. A relative value is resolved against the page's base address. When absolute (`http(s)`), its origin is also where Stop (`/mentor/cancel`) and confirmation answers (`/mentor/approve`) are posted |
 | `AccessTokenProvider` | `Func<Task<string?>>?` | `null` | Bearer token for the hub, read on connect and on every reconnect, and sent as `Authorization: Bearer` on every Stop and confirmation request. **Without it every user is anonymous**: `RequiredRoles` blocked; memory and rate limit are per connection (server default `AnonymousIdentity = PerSession`) or one shared bucket (`Shared`) |
 | `ConfigureConnection` | `Action<HttpConnectionOptions>?` | `null` | Escape hatch on the hub's connection options — headers, transports, cookies. Runs after `AccessTokenProvider` |
+| `PageAssemblies` | `Assembly[]` | `[]` | Assemblies with pages (`@page`) the entry assembly does not reference. At every connection the client sends the server its pages, for a server with `AutoMentor.Enabled` (Novior.MentorAgent README, «Pages from your routes») |
 | `BotName` | `string` | `"Mentor AI"` | Bot name in the widget header |
 | `WelcomeMessage` | `string?` | `null` | Welcome message (HTML supported) |
 | `ShowAiDisclosure` | `bool` | `true` | Shows the notice that tells people they are talking to an AI, under the widget's header for the whole conversation. `false` hides it; the replies' marker stays |
@@ -792,7 +843,8 @@ Override only when extra clarity is needed:
   ChatWidget renders response
 ```
 
-- **Page context** (page name, data, UI action descriptions) is sent to the server before every message via `UpdatePageContext`.
+- **Page context** (page name, data, UI action descriptions, and the path of the page shown without its query or fragment) is sent to the server before every message via `UpdatePageContext`.
+- **Recipes of the page** that the server asks to run arrive as `RecipeRequested`: the client runs them in the page with the runner of Novior.MentorAgent.Abstractions and answers with `POST /mentor/recipe-result` (HTTP, for the same reason as Stop below), to the hub's origin with the hub's bearer token. The model waits for that answer.
 - **UI action invocations** arrive from the server as `UIActionRequested` and are executed locally in the browser by `WasmMentorStateService`.
 - **Confirmation dialogs** (HITL) are shown inline by `ChatWidget`. The response is sent via `POST /mentor/approve?actionId=...&approved=true|false` (HTTP) — **not** via a hub method. SignalR processes hub messages sequentially per connection, so calling `RespondToApproval` via hub while `SendMessage` is awaiting would deadlock. `WasmMentorStateService` sends it to the hub's origin with the hub's bearer token — see [Stop and confirmations](#stop-and-confirmations--plain-http-to-the-hubs-server).
 - **Stop** (cancelling an in-flight turn) is sent via `POST /mentor/cancel?connectionId=...` (HTTP) — **not** via the `CancelRequest` hub method, for the same sequential-dispatch reason: while `SendMessage` is streaming, SignalR cannot dispatch another hub invocation on that connection, so the hub call would only run *after* the turn it was meant to abort. `WasmMentorOrchestrator` sends it the same way as the approval: to the hub's origin, with the hub's bearer token.

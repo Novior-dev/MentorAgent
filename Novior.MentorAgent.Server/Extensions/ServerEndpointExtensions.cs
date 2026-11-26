@@ -31,6 +31,7 @@ public static class ServerEndpointExtensions
     ///   <item><c>POST /mentor/chat</c> — SSE streaming with image attachments (roadmap #13)</item>
     ///   <item><c>POST /mentor/approve</c> — human-in-the-loop approve/deny (roadmap #16)</item>
     ///   <item><c>POST /mentor/cancel</c> — stop the in-flight turn of a SignalR connection</item>
+    ///   <item><c>POST /mentor/recipe-result</c> — what a WebAssembly client answers to a recipe the hub asked it to run</item>
     ///   <item><c>GET /mentor/session</c> and <c>POST /mentor/session</c> — save and restore the
     ///   conversation of a SignalR connection, as a protected snapshot bound to its owner</item>
     ///   <item><c>GET /mentor/admin/metrics</c> — token &amp; cost snapshot, role-gated (roadmap #9)</item>
@@ -86,6 +87,10 @@ public static class ServerEndpointExtensions
         // the endpoint is built, which is at application start — the right moment for a warning.
         ssePost.Add(builder => WarnIfPubliclyShared(endpoints, builder));
 
+        // GET /mentor/agent.js — story 1641: the recipes' runner for a front end that is not Blazor (React, Angular),
+        // loaded with <script type="module">. With the hub's CORS only, never its authorization (recipe.front-end-cors).
+        MentorClientScript.Map(endpoints, configureTransports);
+
         // POST /mentor/approve?actionId=GUID&approved=true|false
         //
         // Resolves a pending HITL confirmation via HTTP instead of via the SignalR hub.
@@ -113,13 +118,19 @@ public static class ServerEndpointExtensions
             {
                 // The connection that raised it is gone, and its turn with it: the scope's end cancels
                 // the wait. Answered before that cancellation landed, the approval would still run.
-                if (scopes.TryGet(connectionId) is not { } ownerScope)
+                // Inside the scope for the check only (BUG-254): closing, the connection waits for it, and
+                // held over the answer it would hold back the cancellation the close brings.
+                IResult? denied;
+                using (var ownerScope = scopes.TryEnter(connectionId))
                 {
-                    owners.Forget(actionId);
-                    return Results.NotFound();
+                    if (ownerScope is null)
+                    {
+                        owners.Forget(actionId);
+                        return Results.NotFound();
+                    }
+                    denied = OwnershipCheck(ownerScope.Services, http);
                 }
-
-                if (OwnershipCheck(ownerScope, http) is { } denied)
+                if (denied is not null)
                     return denied;
             }
 
@@ -143,11 +154,37 @@ public static class ServerEndpointExtensions
         // make the rule "some endpoints, sometimes" — which is how the next one gets forgotten.
         endpoints.MapPost("/mentor/cancel", (string connectionId, MentorHubScopes scopes, HttpContext http) =>
         {
-            var sp = scopes.TryGet(connectionId);
-            if (sp is null) return Results.NotFound();
+            using var connection = scopes.TryEnter(connectionId);   // BUG-254: not disposed under the request
+            if (connection is null) return Results.NotFound();
+            var sp = connection.Services;
             if (OwnershipCheck(sp, http) is { } denied) return denied;
             sp.GetRequiredService<IMentorOrchestrator>().CancelCurrentRequest();
             return Results.Ok();
+        });
+
+        // POST /mentor/recipe-result?connectionId=…&runId=…&done=true|false&step=N&reason=…
+        //
+        // Story 1638, slice C — what a WebAssembly client answers to RecipeRequested: the recipe done, or the step that
+        // could not be done and why. HTTP for the reason of approve and cancel: the turn that waits for the answer is the
+        // connection's hub call. Ownership-checked like them (BUG-058): someone else's answer would decide another user's
+        // recipe. The reason is one of the runner's words, and it reaches the observers: anything else is refused, as is
+        // a step the run does not have. The run id is the server's and is answered once; any other is 404.
+        // Done, step and reason, and nothing else: no value of the page.
+        endpoints.MapPost("/mentor/recipe-result", (string connectionId, Guid runId, bool done, int step, string? reason,
+            MentorHubScopes scopes, HttpContext http) =>
+        {
+            if (step is < 0 or > Novior.MentorAgent.Core.MentorRecipe.MaxSteps || (!done && !IsRecipeReason(reason)))
+                return Results.BadRequest();
+            using var connection = scopes.TryEnter(connectionId);   // BUG-254: not disposed under the request
+            if (connection is null) return Results.NotFound();
+            var sp = connection.Services;
+            if (OwnershipCheck(sp, http) is { } denied) return denied;
+            return sp.GetService<HubRecipeRunner>()?.Complete(runId, new(done, step, done ? null : reason)) switch
+            {
+                HubRecipeRunner.Answered.Taken => Results.Ok(),
+                HubRecipeRunner.Answered.Refused => Results.BadRequest(),
+                _ => Results.NotFound(),
+            };
         });
 
         // GET  /mentor/session?connectionId=<SignalR connection id>  → the conversation snapshot
@@ -171,8 +208,9 @@ public static class ServerEndpointExtensions
         endpoints.MapGet("/mentor/session", async (
             string connectionId, MentorHubScopes scopes, HttpContext http, CancellationToken ct) =>
         {
-            var sp = scopes.TryGet(connectionId);
-            if (sp is null) return Results.NotFound();
+            using var connection = scopes.TryEnter(connectionId);   // BUG-254: not disposed under the request
+            if (connection is null) return Results.NotFound();
+            var sp = connection.Services;
             if (OwnershipCheck(sp, http) is { } denied) return denied;
 
             var snapshot = await sp.GetRequiredService<IMentorOrchestrator>().SerializeSessionAsync(ct);
@@ -190,13 +228,14 @@ public static class ServerEndpointExtensions
         endpoints.MapPost("/mentor/session", async (
             string connectionId, MentorHubScopes scopes, HttpContext http, CancellationToken ct) =>
         {
-            var sp = scopes.TryGet(connectionId);
-            if (sp is null) return Results.NotFound();
-
             // The owner is checked BEFORE the body is read (BUG-110): a JsonElement handler parameter
             // was bound by the framework first, so a stranger's malformed body got a 400 the ownership
             // check never saw.
-            if (OwnershipCheck(sp, http) is { } denied) return denied;
+            using (var checking = scopes.TryEnter(connectionId))
+            {
+                if (checking is null) return Results.NotFound();
+                if (OwnershipCheck(checking.Services, http) is { } denied) return denied;
+            }
 
             if (!http.Request.HasJsonContentType())
                 return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
@@ -210,6 +249,12 @@ public static class ServerEndpointExtensions
             {
                 return Results.BadRequest(new { error = "The body is not JSON." });
             }
+
+            // BUG-254: outside the scope while the body comes, so that a slow client does not hold a closing
+            // connection open; entered again for the restore, and a connection closed meanwhile is a 404.
+            using var connection = scopes.TryEnter(connectionId);
+            if (connection is null) return Results.NotFound();
+            var sp = connection.Services;
 
             // Unprotected with the OWNER's purpose: a snapshot saved for another user, edited, or issued
             // by another application does not open, and all of them get the same answer.
@@ -387,6 +432,10 @@ public static class ServerEndpointExtensions
     /// the only notion of "whose" such an application has.
     /// </para>
     /// </summary>
+    /// <summary>A reason of the recipes' runner: a short word of lowercase letters and hyphens ("no-row").</summary>
+    private static bool IsRecipeReason(string? reason)
+        => reason is { Length: > 0 and <= 32 } && reason.All(c => c is (>= 'a' and <= 'z') or '-');
+
     private static IResult? OwnershipCheck(IServiceProvider connectionScope, HttpContext http)
     {
         var owner = OwnerOf(connectionScope);

@@ -29,6 +29,13 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
+  <!-- Story 1641 — /mentor/agent.js: the recipes' runner of Novior.MentorAgent.Abstractions (one source for the Blazor
+       widget and for the front ends), then the part that ties it to a front end's hub connection. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\Novior.MentorAgent.Abstractions\wwwroot\js\MentorRecipeRunner.js" Link="Client\MentorRecipeRunner.js" LogicalName="Novior.MentorAgent.Server.MentorRecipeRunner.js" />
+    <EmbeddedResource Include="Client\MentorAgentClient.js" LogicalName="Novior.MentorAgent.Server.MentorAgentClient.js" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="Novior.MentorAgent.Tests" />
   </ItemGroup>
@@ -39,7 +46,7 @@
          compiling. A2A.AspNetCore, not Microsoft.Agents.AI.Hosting.A2A.AspNetCore which the core used to
          reference: the endpoints only call the A2A SDK's own AddA2AAgent / MapA2A / MapWellKnownAgentCard,
          and the Agent Framework hosting packages would add nothing but preview dependencies. -->
-    <PackageReference Include="A2A.AspNetCore" Version="1.0.0-preview3" />
+    <PackageReference Include="A2A.AspNetCore" Version="1.0.0-preview4" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.3.0" />
   </ItemGroup>
 

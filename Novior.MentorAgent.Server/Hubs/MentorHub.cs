@@ -17,12 +17,13 @@ namespace Novior.MentorAgent.Server.Hubs;
 /// <c>AgentSession</c> persists across messages.
 ///
 /// Protocol:
-///   Client → Server: UpdatePageContext, SendMessage, CancelRequest, ResetSession, RespondToApproval
+///   Client → Server: UpdatePageContext, ReportPages, ReportObservedPage, GetAssistantStatus, SendMessage,
+///                    CancelRequest, ResetSession, RespondToApproval
 ///   Server → Client: StreamingChunk, StreamingCompleted, BusyChanged, Error, ActionExecuting,
 ///                    ActionCompleted, ActionFailed, ConfirmationRequired, NavigationRequested,
 ///                    RagSourcesReady, TeamMemberSpeaking, UIActionExecuting, UIActionCompleted,
 ///                    UIActionRequested, McpServerStatusChanged, GeneratedImages, HostedToolsDeclared,
-///                    Cards
+///                    Cards, AssistantStatus (to every connection, only when the assistant is turned off or on)
 ///   Over HTTP, beside the hub: POST /mentor/approve, POST /mentor/cancel, GET and POST /mentor/session
 ///   (a hub call would queue behind the turn it is meant to reach)
 /// </summary>
@@ -86,6 +87,7 @@ public class MentorHub : Hub
 
         var decorator = sp.GetRequiredService<HubStateServiceDecorator>();
         decorator.SetConnectionId(Context.ConnectionId);
+        sp.GetService<HubRecipeRunner>()?.Bind(Context.ConnectionId);   // story 1638: before the orchestrator reads it
         sp.GetRequiredService<MentorServerUserContext>().User = Context.User;
         sp.GetRequiredService<MentorTransportUser>().User = Context.User;   // read before the host's provider (BUG-131)
         sp.GetRequiredService<MentorTurnContext>().Surface = MentorActionSurface.Hub;   // story 180
@@ -111,6 +113,51 @@ public class MentorHub : Hub
     }
 
     /// <summary>
+    /// Story 1635 — the pages of a WebAssembly client, as its router knows them, sent once a connection opens: the
+    /// server cannot read the client's code. Listed for the AutoMentor when it is on; ignored otherwise. Structure
+    /// only, and checked like everything the browser sends (<c>page.route-shape</c>, <c>page.route-limit</c>).
+    /// </summary>
+    public Task ReportPages(List<PageRouteInfo>? pages)
+    {
+        _scopes.GetOrCreate(Context.ConnectionId).GetService<MentorPageDirectory>()?.Report(pages);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Whether the application's assistant is on (<see cref="IMentorAssistantStatus"/>), for a client that has just
+    /// connected: the changes come after as <c>AssistantStatus</c>. <see langword="true"/> when the application
+    /// registers none.
+    /// </summary>
+    public Task<bool> GetAssistantStatus()
+        => Task.FromResult(_scopes.GetOrCreate(Context.ConnectionId).GetService<IMentorAssistantStatus>()?.IsOn ?? true);
+
+    private const string ObserverKey = "Novior.MentorAgent.ObservedPages";
+
+    /// <summary>
+    /// Story 1640 — what the widget of a WebAssembly client observed of the page at <paramref name="path"/>
+    /// (<c>page.observe</c>): kept as the application keeps its own observation, checked like everything the browser
+    /// sends. The user is the connection's signed-in user, as a hash, or the connection itself; a connection sends at
+    /// most <c>MaxObservedReports</c> messages. Answers whether to go on: false when the observation is off
+    /// (<c>page.observe-off</c>) or past a limit (<c>page.observe-limit</c>).
+    /// </summary>
+    public Task<bool> ReportObservedPage(string? path, List<PageObservedElement?>? elements, string? limit)
+    {
+        if (_scopes.GetOrCreate(Context.ConnectionId).GetService<MentorPageDirectory>() is not { } directory)
+            return Task.FromResult(false);
+
+        if (Context.Items.TryGetValue(ObserverKey, out var kept) is false || kept is not ObservedBy observer)
+            Context.Items[ObserverKey] = observer = new ObservedBy(MentorPageDirectory.ViewerOf(Context.User) ?? MentorPageDirectory.NewViewer());
+        return Task.FromResult(directory.Observe(path, elements, observer.Viewer, ++observer.Reports, limit));
+    }
+
+    /// <summary>A connection's user for the observation, as a hash or a random number, and how many messages it sent.</summary>
+    private sealed class ObservedBy(long viewer)
+    {
+        public long Viewer { get; } = viewer;
+        public int Reports { get; set; }
+    }
+
+    /// <summary>
     /// Sends a user message to the AI orchestrator.
     ///
     /// <para>
@@ -132,12 +179,21 @@ public class MentorHub : Hub
     public async Task SendMessage(string text, IReadOnlyList<MentorAttachment>? attachments = null)
     {
         var (orchestrator, decorator) = BindScope();
+        ApplyPage(decorator);
+        await orchestrator.SendMessageAsync(text, attachments);
+    }
 
+    /// <summary>
+    /// The page context the client sent last, applied before the turn; the path of its page to the recipes' runner
+    /// (story 1638), which offers the recipes of that page. No path, no recipes: a client that does not send one cannot
+    /// run them.
+    /// </summary>
+    private void ApplyPage(HubStateServiceDecorator decorator)
+    {
         var snapshot = _pageContextStore.Get(Context.ConnectionId);
         if (snapshot is not null)
             decorator.ApplySnapshot(snapshot);
-
-        await orchestrator.SendMessageAsync(text, attachments);
+        _scopes.GetOrCreate(Context.ConnectionId).GetService<HubRecipeRunner>()?.Show(snapshot?.Path);
     }
 
     /// <summary>
@@ -150,11 +206,7 @@ public class MentorHub : Hub
     {
         ArgumentNullException.ThrowIfNull(message);
         var (orchestrator, decorator) = BindScope();
-
-        var snapshot = _pageContextStore.Get(Context.ConnectionId);
-        if (snapshot is not null)
-            decorator.ApplySnapshot(snapshot);
-
+        ApplyPage(decorator);
         await orchestrator.SendMessageAsync(message);
     }
 

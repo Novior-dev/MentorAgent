@@ -10,9 +10,48 @@ internal sealed class MentorActionCatalog(
     MentorDiscoveryService discovery,
     IOptions<MentorOptions> options,
     IServiceProvider services,
-    MentorPageActionTrace? pageTrace = null) : IMentorActionCatalog
+    MentorPageActionTrace? pageTrace = null,
+    MentorPageDirectory? pageDirectory = null) : IMentorActionCatalog
 {
+    /// <summary>
+    /// Story 1635 — the pages the AutoMentor knows (<see cref="MentorPageDirectory"/>), with what the manifest says of
+    /// each, as the public records. Story 1640 — and what the widget observed that the scan did not read, marked
+    /// <see cref="MentorPageCoverage.Observed"/>, with no label and no form: what a user saw stays in the process
+    /// (<c>page.observe-private</c>), whoever reads the catalogue and wherever they send it.
+    /// </summary>
+    public IReadOnlyList<MentorPageInfo> GetPages()
+        => pageDirectory is null ? [] : [.. pageDirectory.Pages().Select(p => new MentorPageInfo
+        {
+            Route     = p.Route,
+            Component = p.Component,
+            Coverage  = p.Scan is not null ? MentorPageCoverage.Scanned
+                      : p.Observed.Count > 0 ? MentorPageCoverage.Observed
+                      : MentorPageCoverage.ToScan,
+            ScannedAt = p.Scan?.ScannedAt,
+            Elements  = [.. (p.Scan?.Elements ?? []).Select(e => Element(e, MentorPageCoverage.Scanned)),
+                         .. p.Observed.Select(e => Element(e with { Label = null, Form = null }, MentorPageCoverage.Observed))],
+        })];
+
+    private static MentorPageElement Element(MentorUiManifest.Element e, MentorPageCoverage coverage) => new()
+    {
+        Element  = e.Tag,
+        Role     = e.Role,
+        Label    = e.Label,
+        Type     = e.Type,
+        Options  = [.. e.Options],
+        Form     = e.Form,
+        Selector = e.Selector,
+        Roles    = [.. e.Roles],
+        Coverage = coverage,
+    };
+
     private readonly MentorOptions _options = options.Value;
+
+    /// <summary>
+    /// Story 1773 — the schema of each action's arguments, built once: discovery keeps its actions, and building a tool
+    /// reads the method by reflection.
+    /// </summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<MethodDiscoveryInfo, System.Runtime.CompilerServices.StrongBox<System.Text.Json.JsonElement?>> _schemas = new();
 
     /// <summary>
     /// The ids of the skills on the A2A card, set by <c>MapMentorAgentA2A</c> when it builds the card; null when the
@@ -121,7 +160,27 @@ internal sealed class MentorActionCatalog(
             Origin               = method.Origin,
             RegistrationId       = RegistrationId(method),
             Method               = MethodOf(method),
+            ParametersSchema     = _schemas.GetValue(method, m => new(SchemaOf(m))).Value,
         };
+    }
+
+    /// <summary>
+    /// Story 1773 (<c>describe.parameters-schema</c>) — the schema of the arguments of the tool the model is given for
+    /// <paramref name="method"/>, from the code that builds it: <see cref="MentorActionFunctions.Schema"/>, or, for an
+    /// endpoint, <see cref="IMentorEndpointActionRunner.Schema"/>, which only Novior.MentorAgent.Server registers.
+    /// </summary>
+    private System.Text.Json.JsonElement? SchemaOf(MethodDiscoveryInfo method)
+    {
+        if (method.Endpoint is null)
+            return MentorActionFunctions.Schema(method, method.ToolDescription);
+        try
+        {
+            return services.GetService<IMentorEndpointActionRunner>()?.Schema(method);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

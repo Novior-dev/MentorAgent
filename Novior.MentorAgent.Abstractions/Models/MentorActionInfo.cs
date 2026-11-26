@@ -48,8 +48,10 @@ public sealed record MentorActionInfo
     public required MentorMcpExposure McpExposure { get; init; }
 
     /// <summary>
-    /// Whether the A2A agent card lists it as a skill. The card is built once, when the host maps the A2A endpoint,
-    /// from the code: an action the code ships off is never on it, even when a governor turns it on.
+    /// Whether the A2A agent card lists it as a skill, by the code: decided when the host maps the A2A endpoint, and an
+    /// action the code ships off is never on it, even when a governor turns it on. An action policy that does not allow
+    /// it at <see cref="MentorActionStage.Card"/> takes it off the card when the card is read, from 1.5.0, and not off
+    /// this value, which does not depend on whether, or when, the card was read.
     /// <see langword="false"/> when the host does not serve A2A.
     /// </summary>
     public bool OnAgentCard { get; init; }
@@ -75,4 +77,14 @@ public sealed record MentorActionInfo
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public System.Reflection.MethodInfo? Method { get; init; }
+
+    /// <summary>
+    /// The JSON schema of the action's arguments, the one the assistant's model reads in the action's tool: for an
+    /// endpoint declared as an action (<see cref="MentorActionOrigins.Endpoint"/>) the route's, the query's and the
+    /// body's; for a command or a query its type's properties; for the others the method's parameters. Services and
+    /// the request's own parameters are not in it, as the model does not give them. <see langword="null"/> when there is
+    /// no tool to read it from: an endpoint in a host without <c>Novior.MentorAgent.Server</c>, a method that cannot be
+    /// described, and a catalogue that has none.
+    /// </summary>
+    public System.Text.Json.JsonElement? ParametersSchema { get; init; }
 }

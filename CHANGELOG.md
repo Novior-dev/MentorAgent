@@ -28,6 +28,331 @@ names of their time.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-26
+
+### Added
+
+- The AutoMentor knows the pages of a Blazor application from its routes, with no attribute: with
+  `options.AutoMentor.Enabled`, the components that carry `@page` in the entry assembly, in the assemblies it
+  references that use the components, and in the new `AutoMentor.PageAssemblies`, read once. The WebAssembly client of
+  Novior.MentorAgent.Blazor sends its own pages to the server at every connection, with the new hub method
+  `ReportPages` (`PageRouteInfo`); `MentorAgentBlazorOptions.PageAssemblies` adds an assembly. Structure only: a route
+  and the component that serves it. New rules in ACTION-RULES.md: `page.from-routes`, `page.client-routes`,
+  `page.route-shape`, `page.route-limit`, `page.read`. README: «Pages from your routes».
+- The AutoMentor reads the manifest of the pages a scan writes, `mentor-ui-manifest.json` in the project: the targets
+  of Novior.MentorAgent, in `buildTransitive`, embed it in the application, also one that references only
+  Novior.MentorAgent.Server, and the host reads it once with the pages. A page it has is scanned, with the elements
+  the scan read; the others are to scan. It is read as untrusted: a password field, card data (`autocomplete="cc-*"`),
+  a hidden, disabled or `data-mentor-exclude` element never comes out, and a value has no place in it. New rules in
+  ACTION-RULES.md: `page.manifest`, `page.manifest-read`, `page.manifest-version`, `page.manifest-excluded`,
+  `page.manifest-shape`.
+- `IMentorActionCatalog.GetPages()` lists the pages the AutoMentor knows, each a `MentorPageInfo` with its route, its
+  component, its `MentorPageCoverage` (`ToScan` or `Scanned`), when the scan read it and its elements
+  (`MentorPageElement`: tag, role, label, type, option labels, form, a stable selector, the roles it was seen with).
+  A catalogue written before the member lists none. New rule in ACTION-RULES.md: `page.catalog`.
+- **Novior.MentorAgent:** the package now carries `buildTransitive/Novior.MentorAgent.targets`. When the project has
+  `mentor-ui-manifest.json` (or the file its `MentorUiManifest` property names), it embeds the file in the application
+  and takes it out of `Content` and `None`; without the file it does nothing. It holds no target and no check, so it
+  cannot stop a build.
+- `MentorActionInfo.ParametersSchema`: the JSON schema of an action's arguments, the one the model reads in the
+  action's tool, for every origin. An endpoint declared as an action has the schema of its route, its query and its
+  body; a command or a query, its type's properties. `null` when there is no tool to read it from, such as an endpoint
+  in a host without Novior.MentorAgent.Server. New rule in ACTION-RULES.md: `describe.parameters-schema`.
+- **Novior.MentorAgent.Scanner**, a new package for development: `AddMentorUiScanner()` scans the pages of a Blazor
+  application once it has started, in `Development` only, with the Edge or Chrome already installed (it downloads
+  none), and writes `mentor-ui-manifest.json` in the project for the AutoMentor. Structure only, never a value.
+  Reference it in Debug only. With `MentorAgent:Scanner:Roles` it also reads the pages as a user of its own with each
+  role, signed in with a one-time token, in `Development` and from this machine only; it clicks only what opens a tab,
+  a menu or a collapsed section, never a submit or a delete. MentorAgent's own chat widget, and what the page does not
+  show, stay out of the manifest; the rows of a table are read once per column, with the column's header. Its browser closes with the application, on Windows also
+  when the application is killed; elsewhere the next scan closes it. A page with route parameters is opened with the
+  values of `MentorAgent:Scanner:RouteParameters`. A scan reads again only the pages whose code, or whose layout's,
+  changed (`MentorAgent:Scanner:Full` reads them all), and writes the manifest only when it changes. In a .NET MAUI
+  Blazor Hybrid app on Windows, `StartMentorUiScan()` reads the pages in the app's own WebView2, in a Debug build only,
+  as the app's user. New rules in ACTION-RULES.md: `page.scan`, `page.scan-development`, `page.scan-browser`,
+  `page.scan-user`, `page.scan-clicks`, `page.scan-parameters`, `page.scan-changed`, `page.scan-webview`.
+- **Novior.MentorAgent.Cli**, a new .NET tool: `novior-mentor scan` runs the same scan from outside the app, for a CI
+  pipeline or a WebAssembly standalone app. The pages come from the app's built dll, the app runs at `--url`, and the
+  browser runs on the machine that runs the command. `--account <role>=<variable>` reads as an account of the team,
+  its session cookie taken from an environment variable and never logged; `--fail-on-change` writes nothing and exits
+  with 3 when the manifest would change. New rules in ACTION-RULES.md: `page.scan-tool`, `page.scan-ci`.
+- **Observation of the pages in production** (`MentorAutoMentorOptions.ObservePages`, on by default, with the
+  AutoMentor, which is off by default): the widget reads what the users open, dialogs, tabs and panels included, with
+  the scan's own reader, and sends the structure, never a value, no option of a select, no text of a row, a list or a
+  card. An observed element's selector is its `data-mentor-id`, or a path of tags and positions from the nearest
+  ancestor with one, or from the body: never an id, a class, a name or a `data-testid`, which may be a record's; give
+  the elements a `data-mentor-id` for stable selectors. An element reaches `IMentorActionCatalog.GetPages()` only once two users saw it the same (one is enough in a
+  MAUI Hybrid app, on the user's own device), marked with the new `MentorPageElement.Coverage` (`Observed`), and with
+  no label and no form: what a user saw stays in the application's process. A page only observed has the new
+  coverage `MentorPageCoverage.Observed`. Kept in memory, within limits, never in the log. A WebAssembly client of
+  **Novior.MentorAgent.Blazor** sends it to the hub's new `ReportObservedPage` (**Novior.MentorAgent.Server**), with
+  the new `PageObservedElement`, once the widget connects to the hub, usually at the first message; until then it
+  waits in the browser, at most 200 messages. New rules in
+  ACTION-RULES.md: `page.observe`, `page.observe-private`, `page.observe-values`, `page.observe-repeated`,
+  `page.observe-shared`, `page.observe-route`, `page.observe-limit`, `page.observe-off`.
+- **Recipes of the pages, from a source**: a recipe is a sequence of steps on one page that the widget runs in the
+  user's browser, with the new `MentorRecipeRunner.js` of **Novior.MentorAgent.Abstractions**, offered to the model as
+  one of the page's UI actions with its own roles and its own confirmation. An application gets its recipes from an
+  `IMentorRecipeSource` (`AddMentorRecipeSource<T>()`), typically the bridge of a console where they are approved:
+  asked once for a session, which keeps them, it gives `MentorRecipeDefinition`s, known by their route and their name.
+  A recipe that breaks a rule (`MentorRecipeLimits`) is left out with a code of the closed list
+  `MentorRecipeRejectionReasons`, reported to the new `IMentorAgentSourceObserver.OnRecipesLoaded` (with a default
+  body), and is never a tool. A recipe is governed as a UI action of its page: the policies answer for it by page and
+  name when it is offered and when it is called. With the name of a UI action the page registers in code, the source
+  says who wins (`MentorRecipeSourceResult.Precedence`: `MentorRecipePrecedence.Code`, the default, or `Source`); any
+  other tool always wins over a recipe. A recipe turned off stays off in its version: a new version is on. A step whose element is gone, hidden, disabled or excluded stops
+  the recipe and turns it off. New reason code of `Failed`: `MentorActionReasons.ElementMissing` (`element-missing`).
+  A row step finds the row of a table or a grid by the text of a key cell, compared in the browser, with the page's
+  filter or scrolling, a virtualized `QuickGrid` included, and clicks an action in it; after writing the page's
+  filter it waits for the page's answer, up to 5 seconds, so that a server slower than a quiet while (Blazor Server
+  under load) is not read before it answered, and a render that leaves the rows as they were, as Blazor Server makes
+  at the first await of the event's handler, is not taken for the answer; nothing inside
+  `data-mentor-exclude` is read, rows, key cells or filters. The steps of a run weigh at most 16 KB. On a WebAssembly
+  client the hub asks the client to run the recipe (`RecipeRequested`, with a run id of the server's, answered once),
+  and the client answers with the new `POST /mentor/recipe-result` of **Novior.MentorAgent.Server**, owner-checked
+  like `/mentor/cancel`, with done, the step and the reason only; **Novior.MentorAgent.Blazor** sends the path of the
+  page shown, without its query or fragment, with the page context. New rules in ACTION-RULES.md:
+  `recipe.shape`, `recipe.offer`, `recipe.gated`, `recipe.run`, `recipe.row`, `recipe.row-excluded`,
+  `recipe.element-missing`, `recipe.from-source`, `recipe.precedence`, `recipe.session`, `recipe.rejected-with-reason`, `recipe.governed`,
+  `recipe.hub`, `recipe.hub-result`.
+- **Recipes in React, Angular and other front ends**: **Novior.MentorAgent.Server** serves `/mentor/agent.js`, a
+  JavaScript module with the recipes' runner that a front end that is not Blazor loads with `<script type="module">`
+  and ties to its own `@microsoft/signalr` connection with `attach(connection, options)`: the recipes the hub asks for
+  run in the page, the answer goes back with `POST /mentor/recipe-result`, and the front end's routes reach the server,
+  from `options.routes` (`/orders/:id`) or from the links of the page. A field is written so that React's controlled
+  fields keep the value in their state and Angular's forms read it, and is then left (`blur`), as `updateOn: 'blur'`
+  needs. The script has the hub's CORS, never its authorization, and is cached for a year at the address with the
+  package's version (`?v=`). React and Angular do not observe the pages yet. New rules in ACTION-RULES.md:
+  `recipe.front-end`, `recipe.front-end-cors`, `page.front-end-routes`. README of Novior.MentorAgent.Server: «Recipes
+  in React, Angular and other front ends».
+- **Angular's own routes for `/mentor/agent.js`**: `attach`'s `routes` also takes the router's configuration, Angular's
+  `Routes` or React Router's route objects, with their `children`; a redirect is not a page, and a class component is
+  named by its route. A recipe is tested on an Angular 22 reactive form, built ahead of time and zoneless: the values
+  stay in the form, `updateOn: 'blur'` included, and the Send it enables is clicked.
+- **The scan of a React or Angular front end**: in the .NET backend, **Novior.MentorAgent.Scanner** reads the pages of
+  a front end it does not serve, at the new `MentorUiScannerOptions.FrontEndUrl` (the development server of Vite or of
+  the Angular CLI): the routes of the new `FrontEndRoutes` (`/orders/:id`, with the values of `RouteParameters`), or the
+  pages its links reach from its first page. With no user, each page at every scan. New rule in ACTION-RULES.md:
+  `page.scan-front-end`.
+- **Novior.MentorAgent.Abstractions:** `IMentorAssistantStatus`, for an application that turns its assistant off from
+  somewhere else, a switch of its own or a console. While its `IsOn` is false, the chat widget disables the input and
+  the send button, offers no suggestion to send, shows *off* in its header where it shows *online*, and says, right
+  above the input and before anyone writes, that the assistant was turned off by the administrator, in the ten
+  languages of the widget. `Changed` may come on a
+  background thread. Without a service registered nothing changes. README: «Showing that the assistant is off».
+- **Novior.MentorAgent.Server, Novior.MentorAgent.Blazor:** the assistant turned off reaches the hub's clients. The hub
+  method `GetAssistantStatus` answers whether it is on, and the event `AssistantStatus(bool)` goes to every connection
+  when it is turned off or on, only with an `IMentorAssistantStatus` registered in the server. The WebAssembly widget
+  reads it when it connects and follows each change, as the widget in the server does; its client now opens the hub
+  connection when the widget is created, not at the first message, and sends no message while the assistant is off.
+  Two openings at once now make one connection: the second waits for the first. `/mentor/agent.js` gives a
+  React or Angular page `assistantIsOn()` and `onAssistantStatus(callback)`.
+- **Novior.MentorAgent.Abstractions:** the cost per agent and per user. `IMentorActionObserver.OnModelCallAsync`
+  receives a `MentorModelCall` for each call to a model: its tokens (cached and reasoning ones included, when the
+  provider says so), the model, how it ended, the agent that made it, and the session, the turn, the user and the
+  tenant, never the text. Each agent has its calls: the coordinator, the router of the handoff (`MentorAgentKind.Router`,
+  new), the specialists, the team members and the agents of an `IMentorAgentSource`. MentorAgent's own calls come
+  too, with no agent and what they were for (`MentorModelCallPurpose`): the input, output and scope checks, the
+  request and announced-action checks, the refusal and grounding checks, the memory's extraction, the routing
+  classifier and the warm-up, the one call outside any session. It has a default that does nothing, so an existing
+  observer is unchanged and is not called for them. The calls come on a queue of their own: a full one drops calls,
+  never a decision, and the order between a call and a decision is not kept. README: «The calls to the models».
+- **A page's form as a UI action** (**Novior.MentorAgent.Abstractions**): `IMentorPageContext.RegisterForm<TModel>(name,
+  description, js, configure)` registers the form whose model is `TModel` as one UI action, `fill_<name>`, whose
+  parameter is the fields to fill. The fields are the model's simple properties with a setter, found in the page by
+  their `data-mentor-id` (`"<name>.<field>"`), or by a selector of the application's (`MentorFormOptions`); each value
+  is checked against its field's type, and the fields are written in the browser with the recipes' runner, through the
+  page's `IJSRuntime`, on Blazor Server, WebAssembly and MAUI Hybrid. The action fills and never submits the form:
+  sending it stays an action of the application's, with its confirmation if it writes. It goes through the gate as any
+  UI action. Sensitive fields (passwords, secrets, tokens, PINs, cards, IBANs, one-time codes) are never offered unless
+  the application lets them in (`IncludeSensitive`), and the runner never writes a password field, for a form or a
+  recipe, unless its field was let in. New rules in ACTION-RULES.md: `form.fill`, `form.sensitive`.
+- **A page's grid as UI actions** (**Novior.MentorAgent.Abstractions**): `IMentorPageContext.RegisterGrid<TRow>(name,
+  description, js, key, configure)` registers a table of rows, written by hand or a `QuickGrid`, as
+  `open_<name>_row({ key })`, `sort_<name>({ column, descending? })` and `filter_<name>(text)`, each offered only when
+  the grid can do it (`MentorGridOptions`: `Filter`, `Sortable`). The parts are found by their `data-mentor-id`, or by
+  selectors of the application's, which a `QuickGrid` needs. A row is found by its key, after the grid's filter or
+  scrolling, and opened; a sort clicks the header until its `aria-sort` reads the order asked. Nothing of the rows
+  goes back to the model. A sensitive column is not sorted by unless the application lets it in, and is never the
+  key. The steps run with the recipes' runner through the page's `IJSRuntime`, and the actions go through the gate as
+  any UI action. New rules in ACTION-RULES.md: `grid.open`, `grid.filter`, `grid.sort`, `grid.sensitive`.
+- **Novior.MentorAgent.Abstractions:** `MentorActionRequest` and `MentorActionDecision` say who provides the tool, with `Provenance`
+  (`MentorActionProvenance`: `Application`, `McpServer`, `Library`) and `ProvenanceName`, the MCP server's `Name`. A
+  policy can be stricter with the tools of an MCP server the application consumes. `Unknown`, the default of a
+  request built by hand, is never what MentorAgent sends: treat it as not trusted. New rule in ACTION-RULES.md:
+  `policy.provenance`.
+
+### Changed
+
+- **The widget meets WCAG 2.1 A and AA in what we tested**: axe-core finds no violation in any state and theme, the
+  keyboard and the focus are checked against EN 301 549, and it was used with Narrator on Windows; `ACCESSIBILITY.md`
+  says what was tested and what was not (**Novior.MentorAgent.Abstractions**):
+  - the panel is nearly opaque by default, `--bm-bg-panel: rgba(10,14,26,.96)`, so that the contrast of its text no
+    longer depends on the page behind it; it was glass at 55%, which that variable brings back, the contrast then
+    being the page's to keep. `MentorTheme.Dark` is at 96% too;
+  - `--bm-text-muted` is lighter (`#7d8bb3`; `#5b6b82` in `Minimal`), and the primary button white on the darker accent,
+    4.5:1 or more on every surface. `Minimal` sets a darker `--bm-accent-bright` (`#1d4ed8`) and the new
+    `--bm-status-online` (`#047857`): its status, links and connecting pills were pale blue and green on white;
+  - the conversation is a log a screen reader announces (`role="log"`, `aria-live`), busy while a reply streams so
+    that it is read once whole, and the keyboard reaches it;
+  - Esc closes the tour, the image URL's field or a detail first, then the panel, and never answers a confirmation:
+    the banner is there again when the panel opens; opened by the user, the focus is in the field, and closed, back
+    on the button;
+  - the launcher says whether the panel is open (`aria-expanded`); a confirmation is an alert dialog that takes the
+    focus itself, never on its Confirm button, whose name says the action, also when the panel opens again with it
+    waiting; after a reply, or a confirmation answered, the focus is back in the field; the tour takes the focus when
+    it opens; the message field has a name of its own, not only a placeholder; the image button is reached with the
+    keyboard; the widget says its language (`lang`), also on a page in another;
+  - a visitor who asks for less motion (`prefers-reduced-motion`) gets none.
+- **Behavior change — Novior.MentorAgent.Declarative:** a declarative agent whose file lists a tool the Agent
+  Framework's factory did not make is no longer loaded without it (BUG-244). Up to 1.4.0 an entry of `tools` without
+  `kind`, in a list at its key's indentation, was dropped without a word and the agent started without the tool; from
+  1.5.0 that agent is not loaded, `invalid-definition`, and the reason names the entry, its number and its name, and
+  says it has no `kind`. What to do: write `kind: function` in every entry of `tools`.
+- **Behavior change — Novior.MentorAgent:** with `EnableObservability`, the model calls of the agents under the
+  coordinator — the router of the handoff, the specialists, the team members, the agents of an `IMentorAgentSource` —
+  have their own spans, as the coordinator's do. A delegated turn or a team emits more spans than before, and the
+  GenAI token metrics (`gen_ai.client.token.usage`) now count those calls, which they missed: a threshold or a chart
+  on them sees a jump. Each call is counted once, and the dashboard's totals do not change. The span of each call
+  carries `gen_ai.agent.name`, `mentoragent.agent.kind` and `mentoragent.model.purpose`, never the user.
+- **Behavior change — Novior.MentorAgent:** with `EnableObservability`, MentorAgent's own calls around a reply — the
+  checks on `ClassifierChatClient`, the routing classifier, the warm-up — have their spans too, each with its
+  `mentoragent.model.purpose`, so a turn emits more spans than before. A client the host already traces (one with
+  `UseOpenTelemetry()` in its chain, as the README told hosts to do) is not traced again: its span stays the host's,
+  one for each call, and nothing needs to change on the host's side.
+- **Behavior change — Novior.MentorAgent:** with `WarmUpChatModel`, the warm-up request is counted on the dashboard
+  under its model, in no session: one request per client more on each start, which the provider bills.
+- The family moves onto the Microsoft Agent Framework 1.28.0 line (`Microsoft.Agents.AI` and
+  `Microsoft.Agents.AI.Workflows` 1.28.0). **Novior.MentorAgent.Declarative:** `Microsoft.Agents.AI.Declarative` moves
+  to 1.28.0-rc1, on the same line. The breaking changes of Agent Framework 1.28 are in parts MentorAgent does not
+  use: its own A2A hosting and `A2AAgent` (MentorAgent uses the A2A SDK directly), the HTTP and MCP handlers and the
+  Foundry provider of its declarative workflows, CodeAct and GitHub Copilot. One is visible to a host that collects
+  Agent Framework's telemetry: its workflow spans are renamed.
+
+- The family moves onto Microsoft.Extensions.AI 11.0.0 (`Novior.MentorAgent.Abstractions` and `Novior.MentorAgent`).
+  It declares no breaking change to the AI API, but it requires the 11.0.0 packages of
+  `Microsoft.Extensions.DependencyInjection.Abstractions`, `Microsoft.Extensions.Logging.Abstractions`,
+  `Microsoft.Extensions.Caching.Abstractions`, `Microsoft.Extensions.Primitives`, `System.Diagnostics.DiagnosticSource`
+  and `System.Numerics.Tensors`, so a .NET 10 application that uses MentorAgent now gets those at 11.0.0, above the
+  ones of the shared framework. Agent Framework 1.28, built on Microsoft.Extensions.AI 10.11, runs on 11.0.0.
+  `Microsoft.Extensions.AI.OpenAI` 11.0.0 requires `OpenAI` 2.14.0 or later.
+  The README's hold for Azure OpenAI with the Responses API (`Microsoft.Extensions.AI.OpenAI` `[10.6.0]`, which keeps
+  `OpenAI` at 2.10) still works on 11.0.0: verified with turns on the Responses API, with and without a tool.
+- The A2A SDK moves to 1.0.0-preview4: `A2A` in Novior.MentorAgent and `A2A.AspNetCore` in
+  **Novior.MentorAgent.Server**. MentorAgent's own API does not change, and its A2A agent and client behave as before.
+- **Breaking — Novior.MentorAgent, .Server:** an application that implements the A2A SDK's `IA2ARequestHandler`
+  itself, or calls the handler's methods of `A2AServer` directly, no longer compiles: with this version it gets
+  A2A 1.0.0-preview4, where each of the eleven operations takes an `A2ARequestContext?` before the cancellation
+  token. Add the argument, and hand it on to an inner handler as it came (null when the request negotiated no
+  extension). `IAgentHandler` and `IA2AClient` do not change.
+
+### Fixed
+
+- **BUG-265 (S3, present from 1.3.0):** over A2A, a turn that got the second request of `CheckAnnouncedActions`
+  returned its two replies joined in one text. The caller now gets the second reply alone, or the first when the second
+  fails or writes nothing (**Novior.MentorAgent**).
+- **BUG-263 (S3, present from 1.0.0):** in the onboarding tour, a screen reader said nothing of the step Next or Back
+  moved to, as the focus stays on the button. The tour now announces the new step, its number, title and text; back
+  to the first step, the focus goes to Next (**Novior.MentorAgent.Abstractions**).
+- **BUG-262 (S3, present from 1.0.0):** Tab could leave the onboarding tour, a modal dialog, for controls of the panel
+  a screen reader no longer showed. While the tour is open the rest of the panel is now inert, and Tab and Shift+Tab
+  go round the tour's buttons (**Novior.MentorAgent.Abstractions**).
+- **BUG-261 (S3, present from 1.0.0):** on a page rendered without a prerender, the widget's voice output and its
+  `PrimaryColor` could stay off for the whole visit: the widget asked its script for them before the browser had run
+  it, and said nothing. The widget now waits for its script, for 10 seconds at most, and then logs a Warning that says
+  what to check (**Novior.MentorAgent.Abstractions**).
+- **BUG-260 (S3, present from 1.0.0):** with `EnableVoiceOutput`, the widget's voice started on at every visit, also
+  for a visitor who had turned it off: someone with a screen reader, which reads the reply too, heard both at once
+  and had to turn it off each time. The visitor's choice is now remembered in their browser; with none, the voice
+  starts on as before (**Novior.MentorAgent.Abstractions**).
+- **BUG-257 (S3, present from 1.0.0):** a screen reader read the widget's decorative images and icons: the
+  assistant's avatar, named beside the name written on the launcher, in the header, in the welcome and before every
+  reply; the welcome suggestions' emoji; icons not hidden from it. The avatars now have an empty `alt`, every icon is
+  `aria-hidden`, a suggestion is named by its words and sends them without its icon, and each message in the
+  conversation starts with who speaks, in the widget's language, for a screen reader only. The close buttons of the
+  MCP and A2A details are named in the widget's language; they said "Chiudi" in every one
+  (**Novior.MentorAgent.Abstractions**).
+- **BUG-254 (S4, present from 1.0.0):** a request to `/mentor/approve`, `/mentor/cancel` or `/mentor/session` that met
+  the close of its connection could answer 500 instead of 404; nothing ran. The request now keeps the connection's
+  scope for the work it does, and once the connection is closing the answer is a 404.
+- **BUG-253 (S3, present from 1.0.0):** on a screen narrower than 480 px the widget's panel kept its place and its
+  height cap instead of taking the whole screen, as the rule of its position won. The panel now takes the whole screen
+  there, and the launcher is hidden while it is open.
+- **The closed panel's controls could be reached with Tab and were read by a screen reader**, invisible (present from
+  1.0.0). The closed panel is now `inert`.
+- **BUG-251 (S2, present from 1.0.0):** with `RequireActionForChangeRequests` on and semantic tool filtering, a request
+  for what one of the page's own actions does could be taken for a complete request for one of the application's
+  confirmation-gated actions, and the first call of the turn was then required to be that action: the user was asked
+  to confirm an action they had not asked for. The request classifier is now shown the page's actions with the actions
+  too, and a request for one of them is not forced; a complete request for one of the actions still is, page or not.
+- **BUG-250 (S3, present from 1.2.0):** the A2A agent card listed an action an action policy turns off for every
+  caller: it was built once, at startup, without asking the policies. **Novior.MentorAgent.Abstractions:** a new stage,
+  `MentorActionStage.Card`: the card asks `IsAllowedAsync` with nobody and leaves out what a policy does not allow; a
+  policy answers no there only for an action off for every caller. The card is built again when it is older than 30
+  seconds, so a rule changed at run time reaches it. New rule in ACTION-RULES.md: `policy.card`.
+- **BUG-248 (S3, present from 1.2.0):** a call an action policy did not allow was refused with the words of a refusal of
+  the user's own ("you are not allowed to use this action"), where the application has a rule. It now says that a rule
+  of the application does not offer the action here, in the application's language; a `Stop` keeps its reason.
+- **BUG-249 (S4, present from 1.2.0):** on the MCP server, the refusal of a call a policy wanted confirmed, which nobody
+  can confirm there, was in English. It now follows the application's language, as the other refusals of a policy.
+- **BUG-247 (S2, present from 1.0.0):** with `RequireLookupForRecordQuestions` on, a request for what one of the
+  page's own actions does (a UI action or a recipe) could be taken for a question about the records, and the first
+  call of the turn was then required to be one of the application's reads, which the page's actions cannot satisfy:
+  the reply missed what was asked. The request classifier is now shown the page's actions offered on the turn, and a
+  request for one of them is not forced; a question about a value the records hold still is, page or not. Without page
+  actions nothing changes.
+- **BUG-238 (S3, present from 1.3.0):** `CheckAnnouncedActions` did nothing with `UseServiceManagedHistory`, which the
+  Responses client requires: a reply that announced an action, or reported one as done, when no tool ran was not
+  checked. The second request is now sent from the response the turn started from, with the user's message again and
+  the instruction in its instructions, so nothing of the check is stored; the conversation goes on from its answer,
+  and the first reply stays on the service, on a branch nobody follows. Only a turn of one request is checked there.
+  The Warning at startup now says the check is not made only with an `IMentorSessionManager` of the application.
+- **BUG-245 (S3, present from 1.3.0):** with routing on, the second request of the announced-action check was routed
+  again, on MentorAgent's instruction instead of the user's message, and could go to the other model in the middle of
+  the turn. It is now served by the turn's model.
+- **BUG-244 (S3, present from 1.0.0):** a declarative agent whose `tools` list, at its key's indentation, had an entry
+  without `kind` loaded without that tool, and nothing said so; an entry with `kind` after `name` was refused. The
+  definition is now given to the Agent Framework's factory again rewritten, `kind` first, and an agent the factory
+  still makes with fewer tools than its file lists is not loaded: `invalid-definition`, with the reason.
+- **BUG-243 (S3, present from 1.0.0):** a declarative agent (`Novior.MentorAgent.Declarative`) written in valid YAML the
+  Agent Framework's reader refuses was not loaded, `invalid-definition`, with an error naming the end of the file: a
+  list at its key's indentation (the form YamlDotNet writes by default), an explicit end of the document (`...`), or a
+  folded scalar (`>`). A definition the reader refuses is now given to it again rewritten, lists indented, no end
+  marker, folded scalars literal with the same value; one it takes is never rewritten, and the error of one that fails
+  both ways is the one of the text as written.
+- **BUG-242 (S4, present from 1.0.0):** the parameter hint a typed UI action generates told the model to send a
+  `DateOnly`, a `TimeOnly`, a `TimeSpan` or a `Uri` as an object of its properties, which the handler could not read,
+  and named `uint`, `ulong`, `ushort`, `sbyte` and `char` by their .NET names. Each is now described by the text or the
+  number JSON writes it as: `string (ISO 8601 date)`, `string (time, HH:mm:ss)`, `string (duration, d.hh:mm:ss)`,
+  `string (URI)`, `integer`, `string (one character)`.
+- **BUG-241 (S3, present from 1.4.0):** a UI action of the page whose handler threw, or `invoke_ui_action` on Path B,
+  reached the `IMentorActionObserver`s as `Executed`, while the model was told it had failed. It is now `Failed`, with
+  the type of the handler's exception, and the model gets the message of `OnException` when the application set it,
+  as for any other action.
+  With `OnException` set, the model now gets the application's message for a UI action too, where it got the
+  exception's.
+- **BUG-240 (S3, present from 1.0.0):** with `RoutingStrategy` `Classifier` or `Cascade`, the routing classifier's
+  call — one a turn: a turn streams, so `Cascade` asks the same question before the answer — was billed by the
+  provider and counted nowhere: not on the dashboard, not in `MentorTokenUsage`, not on the session's counter, while
+  the README said so. It is now counted, under the classifier's model, once, and with `EnableObservability` it has its
+  span.
+- **BUG-235:** a call of the model of a specialist, a team member or an agent of an `IMentorAgentSource` to an action
+  of the application its agent does not hold (one an `IMentorActionGovernor` or `EnabledByDefault = false` left out,
+  or another agent's) ran nothing, but had no decision, so an audit of the actions did not see it. It now has one,
+  `Denied`, `not-offered`, with the agent's `AgentKind` and `AgentName`, as the coordinator's has. Nothing more starts.
+  New rule in ACTION-RULES.md: `agent.not-offered-call`.
+- The scan of the pages (Novior.MentorAgent.Scanner, new in this release) read the label of a field from a `<label>`
+  that holds the field with all its text: a select's options, or what a text area held, went into the label in the
+  manifest. A label is now read without the fields it holds, in the scan and in the observation.
+
+### Known issues
+
+- **Novior.MentorAgent:** BUG-264 (S3, present from 1.4.0). With `RequireLookupForRecordQuestions`, when
+  `CheckAnnouncedActions` takes the reply to a record question for a reported action, its second request is required
+  again to call a read, with only the reads among its tools; the README says that request keeps the tool mode it had.
+  The reply the user gets is right, as the second request reads again. It is fixed in a later version, together with
+  the check's judgement of a reply that only states what a read returned.
+
 ## [1.4.1] - 2026-11-23
 
 ### Security
@@ -189,13 +514,13 @@ names of their time.
   Novior.MentorAgent 1.4.0.
 - On Path A the coordinator calls a page's UI actions through the gate, like every other action: the action policies
   and their before-action hook are asked about them, `IMentorActionObserver` receives their decisions (with the
-  action's description as `DisplayName`), they get a span and Stop reaches them. Up to 1.3.0 they ran in a loop of
+  action's description as `DisplayName`), they get a span and Stop reaches them. Up to 1.3.1 they ran in a loop of
   their own below the agent, which none of these saw. A UI action still asks for no confirmation and needs no role of
   its own, and the widget shows its start and end as before; a policy that decides about every tool now decides about
   UI actions too. After `navigate_to` the next request of the same turn offers the actions of the page now shown. A
   model that keeps calling UI actions is stopped by the run's cap, as for the application's own actions: 40 calls in a
   turn, the default `MaximumIterationsPerRequest` of the agent's function-invoking client, which MentorAgent does not
-  change and offers no option for; up to 1.3.0 the loop of the UI actions stopped at 10.
+  change and offers no option for; up to 1.3.1 the loop of the UI actions stopped at 10.
 - `MentorActionRequest.Kind` and `MentorActionDecision.Kind` (`MentorActionKind.Server` or `UI`), and
   `MentorActionDecision.PageName`: a policy and an observer tell a UI action from an action of the application, and
   know the page. A UI action with the name of an action of the application that is off is the page's: that action's
@@ -2057,6 +2382,7 @@ names of their time.
 - **MentorAgent:** `MentorRemoteAgent.RequiredRoles` is not enforced: any user can reach a remote agent.
 
 [Unreleased]: https://www.nuget.org/packages/Novior.MentorAgent
+[1.5.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.5.0
 [1.4.1]: https://www.nuget.org/packages/Novior.MentorAgent/1.4.1
 [1.4.0]: https://www.nuget.org/packages/Novior.MentorAgent/1.4.0
 [1.3.1]: https://www.nuget.org/packages/Novior.MentorAgent/1.3.1

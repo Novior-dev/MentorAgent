@@ -180,7 +180,8 @@ internal sealed class MentorHostFixture : IAsyncDisposable
         Action<IServiceCollection>? configureServices = null,
         bool withEmbeddings = false,
         bool withChatClient = true,
-        bool withRecorder = false)
+        bool withRecorder = false,
+        Action<IServiceCollection>? afterMentorAgent = null)
     {
         var services = new ServiceCollection();
 
@@ -244,6 +245,9 @@ internal sealed class MentorHostFixture : IAsyncDisposable
         var recorder = withRecorder ? new RecordingStateService() : null;
         if (recorder is not null)
             services.AddSingleton<IMentorStateService>(recorder);
+
+        // What a host registers after AddMentorAgent to replace one of its services (BUG-238: a session manager).
+        afterMentorAgent?.Invoke(services);
 
         var root = services.BuildServiceProvider();
         var scope = root.CreateScope();

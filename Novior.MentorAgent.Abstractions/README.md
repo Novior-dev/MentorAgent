@@ -673,8 +673,8 @@ and the package version as the `?v=` (`ChatWidget` adds the commit; a link you w
 version), in `App.razor` (Blazor Server / Web App) or `index.html`:
 
 ```html
-<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.4.1" rel="stylesheet" />
-<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.4.1"></script>
+<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.5.0" rel="stylesheet" />
+<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.5.0"></script>
 ```
 
 The script can safely load a second time on a page where `ChatWidget` also renders: the later tag
@@ -788,7 +788,7 @@ package — the WASM build will not fail at compile time, it will fail at runtim
 - .NET 10.0 or later
 - `Microsoft.AspNetCore.Components.Web` 10.0.3
 - `Microsoft.AspNetCore.Components.Authorization` 10.0.3
-- `Microsoft.Extensions.AI` 10.11.0
+- `Microsoft.Extensions.AI` 11.0.0
 
 No AI provider, no server packages, no JavaScript dependencies beyond the browser's own Speech and
 File APIs.

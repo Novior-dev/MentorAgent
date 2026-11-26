@@ -453,6 +453,281 @@ public sealed class ChatWidgetTests : ComponentTestBase
         cut.WaitForAssertion(() => ResetButton(cut).HasAttribute("disabled").Should().BeFalse());
     }
 
+    /// <summary>The focus moves of the widget so far: the element reference each went to.</summary>
+    private IReadOnlyList<string> FocusMoves()
+        => [.. JSInterop.Invocations.Where(i => i.Identifier == "Blazor._internal.domWrapper.focus")
+            .Select(i => ((Microsoft.AspNetCore.Components.ElementReference)i.Arguments[0]!).Id)];
+
+    [Fact]
+    public void After_a_turn_sent_with_Enter_the_focus_is_back_in_the_field_also_when_the_send_renders_before_the_turn_is_busy()
+    {
+        // Story 750, A5, as on WebAssembly: the render right after the send comes before the server reports the turn
+        // busy, a round trip later. A focus then is lost when the field is disabled, and was the only one: the focus
+        // ended on the page's body. It goes back to the field once the turn is over.
+        var send = new TaskCompletionSource();
+        _orchestrator.PendingSend = send;
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        var field = FocusMoves().Should().ContainSingle("opened, the focus goes to the field").Subject;
+        cut.Find("textarea").Input("quanti ordini sono aperti?");
+        var before = FocusMoves().Count;
+
+        cut.Find("textarea").KeyDown(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" });
+        FocusMoves().Count.Should().Be(before, "the turn is not over, and the field is about to be disabled");
+
+        _state.NotifyBusyChanged(true);
+        CompleteAReply("tre");
+        _state.NotifyBusyChanged(false);
+        send.SetResult();
+
+        cut.WaitForAssertion(() => FocusMoves().Skip(before).Should().Equal([field],
+            "once the turn is over the focus is back in the field it was sent from"));
+    }
+
+    [Fact]
+    public void With_the_widgets_voice_on_the_focus_is_back_in_the_field_after_the_turn_and_not_spent_while_the_voice_stops()
+    {
+        // BUG-258: with the voice on, the send first stops what is playing, and the render of that await came before
+        // the turn was marked begun. It spent the focus on the field, which the turn then disabled: at the end of the
+        // reply the focus was on the page's body. Seen live on WebAssembly; here the browser's stop is held pending.
+        Widget.EnableVoiceOutput = true;
+        JSInterop.Setup<bool>("MentorAgent.isSpeechSynthesisSupported").SetResult(true);
+        var stop = JSInterop.SetupVoid("MentorAgent.stopSpeaking");
+        var send = new TaskCompletionSource();
+        _orchestrator.PendingSend = send;
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        var field = FocusMoves().Should().ContainSingle("opened, the focus goes to the field").Subject;
+        cut.Find("textarea").Input("quanti ordini sono aperti?");
+        var before = FocusMoves().Count;
+
+        cut.Find("textarea").KeyDown(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" });
+        FocusMoves().Count.Should().Be(before, "the voice is stopping and the turn has begun: the field is about to be disabled");
+        stop.SetVoidResult();
+
+        _state.NotifyBusyChanged(true);
+        CompleteAReply("tre");
+        _state.NotifyBusyChanged(false);
+        send.SetResult();
+
+        cut.WaitForAssertion(() => FocusMoves().Skip(before).Should().Equal([field],
+            "once the turn is over the focus is back in the field it was sent from"));
+    }
+
+    [Fact]
+    public void The_tour_is_beside_the_conversation_and_not_in_its_log_which_is_hidden_while_the_tour_is_open()
+    {
+        // BUG-259: in the log, the tour's text and every step were announced as messages, and a modal dialog sat in a
+        // live region.
+        Services.AddSingleton<IMentorTour>(new OneStepTour());
+        Widget.EnableOnboardingTour = true;
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        cut.WaitForAssertion(() => cut.FindAll(".bm-tour").Should().ContainSingle());
+
+        cut.Find(".bm-tour").Closest("[role=log]").Should().BeNull("the tour is not a message of the conversation");
+        cut.Find("[role=log]").HasAttribute("hidden").Should().BeTrue("the conversation is not shown, nor read, under the tour");
+
+        cut.Find(".bm-tour__skip").Click();
+        cut.WaitForAssertion(() => cut.FindAll(".bm-tour").Should().BeEmpty());
+        cut.Find("[role=log]").HasAttribute("hidden").Should().BeFalse("closed the tour, the conversation is back");
+    }
+
+    [Fact]
+    public async Task A_turn_that_ends_while_the_tour_is_open_leaves_the_focus_in_the_tour_and_its_close_gives_it_to_the_field()
+    {
+        // BUG-259: the tour is a modal dialog; the end of a turn put the focus back in the field, outside it.
+        Services.AddSingleton<IMentorTour>(new OneStepTour());
+        Widget.EnableOnboardingTour = true;
+        JSInterop.Setup<bool>("MentorAgent.flagGet", "mentoragent.tour.seen").SetResult(true);
+        var send = new TaskCompletionSource();
+        _orchestrator.PendingSend = send;
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        var field = FocusMoves().Should().ContainSingle("opened, the focus goes to the field").Subject;
+        cut.Find("textarea").Input("quanti ordini sono aperti?");
+        cut.Find("textarea").KeyDown(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" });
+        _state.NotifyBusyChanged(true);
+
+        await cut.InvokeAsync(() => cut.Instance.ReplayTour());
+        cut.WaitForAssertion(() => cut.FindAll(".bm-tour").Should().ContainSingle());
+        var tour = FocusMoves()[^1];
+        tour.Should().NotBe(field, "the tour takes the focus when it opens (A11)");
+        var before = FocusMoves().Count;
+
+        CompleteAReply("tre");
+        _state.NotifyBusyChanged(false);
+        send.SetResult();
+        // The send is over once nothing in the header waits for it: the reset button is enabled again.
+        cut.WaitForState(() => cut.FindAll(".bm-header__actions button[disabled]").Count == 0);
+        FocusMoves().Count.Should().Be(before, "the turn is over, but the focus stays in the open tour");
+
+        cut.Find(".bm-tour__skip").Click();
+        // The close and the turn's pending focus both name the field: focusing it twice is the same as once.
+        cut.WaitForAssertion(() => FocusMoves().Skip(before).Should().NotBeEmpty().And.OnlyContain(id => id == field,
+            "closed, the tour gives the focus to the field"));
+    }
+
+    [Fact]
+    public void While_the_tour_is_open_the_rest_of_the_panel_is_inert_and_once_it_closes_no_longer()
+    {
+        // BUG-262: the tour is a modal dialog, and Tab went out of it to the header and the message field, which a screen
+        // reader no longer saw. Every part of the panel but the tour is inert while it is open; the log is hidden.
+        Services.AddSingleton<IMentorTour>(new OneStepTour());
+        Widget.EnableOnboardingTour = true;
+        Widget.ShowAiDisclosure     = true;
+        Widget.ShowMcpStatus        = true;
+        Widget.HasMcpServers        = true;
+        Widget.McpServerNames       = ["filesystem"];
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        cut.WaitForAssertion(() => cut.FindAll(".bm-tour").Should().ContainSingle());
+
+        var parts = cut.FindAll(".bm-panel > *").Where(e => !e.ClassList.Contains("bm-tour-area")).ToList();
+        parts.SelectMany(e => e.ClassList).Should().Contain(["bm-header", "bm-ai-disclosure", "bm-messages", "bm-input-area"]);
+        parts.Where(e => !e.HasAttribute("inert") && !e.HasAttribute("hidden")).Select(e => e.ClassName)
+            .Should().BeEmpty("outside the open tour nothing is reached with Tab nor read");
+        cut.Find(".bm-tour").Closest("[inert]").Should().BeNull("the tour itself is not");
+
+        cut.Find(".bm-tour__skip").Click();
+        cut.WaitForAssertion(() => cut.FindAll(".bm-tour").Should().BeEmpty());
+        cut.FindAll(".bm-panel [inert]").Should().BeEmpty("closed the tour, the panel is the user's again");
+    }
+
+    [Fact]
+    public void The_tour_keeps_the_focus_inside_it_with_the_browsers_help_once_per_dialog()
+    {
+        // BUG-262: Tab after the tour's last button goes to its first, Shift+Tab before the first to the last.
+        Services.AddSingleton<IMentorTour>(new TwoStepTour());
+        Widget.EnableOnboardingTour = true;
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        cut.WaitForAssertion(() => cut.FindAll(".bm-tour").Should().ContainSingle());
+        cut.Find(".bm-tour__actions .bm-btn--primary").Click();   // the next step: the same dialog
+
+        var traps = JSInterop.Invocations.Where(i => i.Identifier == "MentorAgent.trapFocus").ToList();
+        traps.Should().ContainSingle("the dialog stays the same between steps");
+        traps[0].Arguments[0].Should().BeOfType<Microsoft.AspNetCore.Components.ElementReference>();
+    }
+
+    [Fact]
+    public void A_confirmation_that_comes_while_the_tour_is_open_takes_the_focus_when_the_tour_closes()
+    {
+        // BUG-262: the banner is inert under the open tour; it takes the focus once the tour is closed, not before.
+        Services.AddSingleton<IMentorTour>(new OneStepTour());
+        Widget.EnableOnboardingTour = true;
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        cut.WaitForAssertion(() => cut.FindAll(".bm-tour").Should().ContainSingle());
+        var tour = FocusMoves()[^1];
+
+        _state.NotifyBusyChanged(true);
+        _state.NotifyConfirmationRequired(new ConfirmationRequest
+        {
+            ActionId = Guid.NewGuid(), ToolName = "cancel_order", Message = "Annullo l'ordine #1005",
+        });
+        FocusMoves()[^1].Should().Be(tour, "the banner is inert while the tour is open");
+        var before = FocusMoves().Count;
+
+        cut.Find(".bm-tour__skip").Click();
+
+        cut.Find(".bm-confirm").HasAttribute("inert").Should().BeFalse();
+        var banner = ((Microsoft.AspNetCore.Components.ElementReference)typeof(ChatWidget)
+            .GetField("_confirmEl", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cut.Instance)!).Id;
+        cut.WaitForAssertion(() => FocusMoves().Skip(before).Should().Equal([banner],
+            "closed the tour, the focus goes to the waiting banner, not to the disabled field"));
+    }
+
+    [Fact]
+    public async Task The_tour_replayed_over_a_waiting_confirmation_gives_the_focus_back_to_its_banner_when_it_closes()
+    {
+        // BUG-262: the banner had the focus, the tour took it; closed, the tour gave it to the field, disabled while the
+        // confirmation waits, and the focus was lost.
+        Services.AddSingleton<IMentorTour>(new OneStepTour());
+        Widget.EnableOnboardingTour = true;
+        JSInterop.Setup<bool>("MentorAgent.flagGet", "mentoragent.tour.seen").SetResult(true);
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        _state.NotifyBusyChanged(true);
+        _state.NotifyConfirmationRequired(new ConfirmationRequest
+        {
+            ActionId = Guid.NewGuid(), ToolName = "cancel_order", Message = "Annullo l'ordine #1005",
+        });
+        var banner = FocusMoves()[^1];
+
+        await cut.InvokeAsync(() => cut.Instance.ReplayTour());
+        cut.WaitForAssertion(() => cut.FindAll(".bm-tour").Should().ContainSingle());
+        FocusMoves()[^1].Should().NotBe(banner, "the tour takes the focus when it opens (A11)");
+        var before = FocusMoves().Count;
+
+        cut.Find(".bm-tour__skip").Click();
+
+        cut.WaitForAssertion(() => FocusMoves().Skip(before).Should().Equal([banner],
+            "closed the tour, the focus goes back to the waiting banner, not to the disabled field"));
+    }
+
+    /// <summary>Two steps: the dialog stays while the step changes.</summary>
+    private sealed class TwoStepTour : IMentorTour
+    {
+        public Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(CancellationToken ct = default) => GetStepsAsync(null, ct);
+
+        public Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(MentorLanguage? language, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<MentorTourStep>>([new MentorTourStep("Uno", "Primo."), new MentorTourStep("Due", "Secondo.")]);
+    }
+
+    /// <summary>One step: the tour opens in the widget the first time.</summary>
+    private sealed class OneStepTour : IMentorTour
+    {
+        public Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(CancellationToken ct = default) => GetStepsAsync(null, ct);
+
+        public Task<IReadOnlyList<MentorTourStep>> GetStepsAsync(MentorLanguage? language, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<MentorTourStep>>([new MentorTourStep("Benvenuto", "Ciao.")]);
+    }
+
+    [Fact]
+    public void A_confirmation_answered_gives_the_focus_back_to_the_field_once_the_turn_is_over()
+    {
+        // Story 750: the banner's buttons go away with the answer, and the focus with them.
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        var field = FocusMoves().Should().ContainSingle("opened, the focus goes to the field").Subject;
+        _state.NotifyBusyChanged(true);
+        _state.NotifyConfirmationRequired(new ConfirmationRequest
+        {
+            ActionId = Guid.NewGuid(), ToolName = "cancel_order", Message = "Annullo l'ordine #1005",
+        });
+        FocusMoves().Should().HaveCount(2, "the banner takes the focus when it comes (A6)");
+        FocusMoves()[1].Should().NotBe(field);
+        var before = FocusMoves().Count;
+
+        cut.Find(".bm-confirm .bm-btn--ghost").Click();
+        FocusMoves().Count.Should().Be(before, "the turn goes on, and the field is disabled");
+        _state.NotifyBusyChanged(false);
+
+        cut.WaitForAssertion(() => FocusMoves().Skip(before).Should().Equal([field], "its buttons gone, the focus is back in the field"));
+    }
+
+    [Fact]
+    public void Opened_again_with_a_confirmation_waiting_the_focus_goes_to_its_banner_and_not_to_the_disabled_field()
+    {
+        var cut = RenderWidget();
+        cut.Find(".bm-fab").Click();
+        _state.NotifyBusyChanged(true);
+        _state.NotifyConfirmationRequired(new ConfirmationRequest
+        {
+            ActionId = Guid.NewGuid(), ToolName = "cancel_order", Message = "Annullo l'ordine #1005",
+        });
+        var banner = FocusMoves()[^1];
+        cut.Find(".bm-panel").KeyDown(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Escape" });
+        (cut.Find(".bm-root").GetAttribute("class") ?? "").Should().NotContain("bm-open");
+        var before = FocusMoves().Count;
+
+        cut.Find(".bm-fab").Click();
+
+        cut.WaitForAssertion(() => FocusMoves().Skip(before).Should().Equal([banner],
+            "the confirmation still waits, and the field is disabled (A6)"));
+    }
+
     [Fact]
     public void A_send_that_fails_shows_a_plain_message_and_not_the_exceptions_text()
     {

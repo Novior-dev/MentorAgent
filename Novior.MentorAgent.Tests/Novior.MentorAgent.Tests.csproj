@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <!-- Story 1638: the tests host an interactive Blazor Server page, which needs _framework/blazor.web.js. Since .NET 9
+         that file ships in Microsoft.AspNetCore.App.Internal.Assets, which the SDK adds by itself to a Web project,
+         at the version of the runtime; this asks the SDK for it in this test project, which is not one. -->
+    <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,13 +33,22 @@
          wire — its tools, its tool_choice, where ChatOptions.Instructions lands among the messages — is the
          provider client's mapping, which no fake IChatClient can show (story 526). Same version as
          Microsoft.Extensions.AI in the library. Test-project only. -->
-    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="11.0.0" />
+    <!-- Story 1638, slice B: a recipe reaches a row of a virtualized QuickGrid in the interactive test page. Test-project
+         only: the library does not reference it. GeneratePathProperty: the host of the tests serves its JS module. -->
+    <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.0.3" GeneratePathProperty="true" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Story 1569, slice B: the documentation file of the AutoMentor's candidate services in CandidateTests, next to the
          assembly as the compiler would write it. The test project does not generate one. -->
     <None Include="Discovery\CandidateDocs.xml" Link="Novior.MentorAgent.Tests.xml" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Story 1638: served by the interactive host of RecipeBrowserTests. The property comes from the package's targets. -->
+    <None Include="$(BlazorFrameworkStaticWebAssetRoot)\blazor.web.js" Link="Interactive\blazor.web.js" CopyToOutputDirectory="PreserveNewest"
+          Condition="'$(BlazorFrameworkStaticWebAssetRoot)' != ''" />
+    <!-- Story 1638, slice B: QuickGrid's own module, which the grid imports, served by the same host. -->
+    <None Include="$(PkgMicrosoft_AspNetCore_Components_QuickGrid)\staticwebassets\QuickGrid.razor.js" Link="Interactive\QuickGrid.razor.js"
+          CopyToOutputDirectory="PreserveNewest" Condition="'$(PkgMicrosoft_AspNetCore_Components_QuickGrid)' != ''" />
   </ItemGroup>
 
   <ItemGroup>
@@ -45,6 +58,14 @@
     <ProjectReference Include="..\Novior.MentorAgent.Tests.Rules\Novior.MentorAgent.Tests.Rules.csproj" />
     <ProjectReference Include="..\Novior.MentorAgent.Server\Novior.MentorAgent.Server.csproj" />
     <ProjectReference Include="..\Novior.MentorAgent.Blazor\Novior.MentorAgent.Blazor.csproj" />
+    <ProjectReference Include="..\Novior.MentorAgent.Scanner\Novior.MentorAgent.Scanner.csproj" />
   </ItemGroup>
+
+  <!-- Story 1635, slice B: the package's own targets embed a manifest of the pages in this assembly, as they do in an
+       application that references the package; ManifestTests reads it. -->
+  <PropertyGroup>
+    <MentorUiManifest>$(MSBuildThisFileDirectory)Pages\mentor-ui-manifest.test.json</MentorUiManifest>
+  </PropertyGroup>
+  <Import Project="..\Novior.MentorAgent\buildTransitive\Novior.MentorAgent.targets" />
 
 </Project>

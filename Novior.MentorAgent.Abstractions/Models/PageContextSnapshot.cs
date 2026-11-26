@@ -15,6 +15,14 @@ public sealed class PageContextSnapshot
 
     /// <summary>UI actions registered by the page (name + description only — handlers stay on client).</summary>
     public List<UIActionInfo> UIActions { get; set; } = [];
+
+    /// <summary>
+    /// Story 1638 — the path of the page shown, without its query or fragment ("/orders/42"): the server offers the
+    /// recipes of that page. Sent only by a client that can run them; internal until the recipes' format is public.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonInclude]
+    [System.Text.Json.Serialization.JsonPropertyName("path")]
+    internal string? Path { get; set; }
 }
 
 /// <summary>

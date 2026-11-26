@@ -42,6 +42,14 @@ internal sealed class McpToolsBuilder : IAsyncDisposable
     /// </summary>
     internal IReadOnlySet<string> NotReadOnlyToolNames => _notReadOnly;
 
+    private readonly Dictionary<string, string> _serverOf = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Story 1877 — the server of each tool of the last build, by the tool's name: the first server that offers a name,
+    /// as the coordinator keeps the first tool of a name.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string> ServerOfTool => _serverOf;
+
     public McpToolsBuilder(
         IOptions<MentorOptions> options,
         IMentorStateService stateService,
@@ -83,6 +91,7 @@ internal sealed class McpToolsBuilder : IAsyncDisposable
         var tools = new List<AITool>();
         _readOnly.Clear();
         _notReadOnly.Clear();
+        _serverOf.Clear();
 
         if (_options.McpServers is not { Length: > 0 })
             return tools;
@@ -138,6 +147,7 @@ internal sealed class McpToolsBuilder : IAsyncDisposable
                         _confirmations.RegisterApprovalRequired(tool.Name);
 
                     tools.Add(tool);
+                    _serverOf.TryAdd(tool.Name, server.Name);
                     addedCount++;
 
                     if (!server.RequiresConfirmation && session.ReadOnlyToolNames.Contains(tool.Name))

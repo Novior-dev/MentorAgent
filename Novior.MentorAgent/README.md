@@ -18,6 +18,8 @@ or SSE; AI assistants and other agents reach the same tools over MCP and A2A.
 | [Novior.MentorAgent.Blazor](https://www.nuget.org/packages/Novior.MentorAgent.Blazor) | Blazor WASM / Blazor Auto **client** project |
 | [Novior.MentorAgent.Abstractions](https://www.nuget.org/packages/Novior.MentorAgent.Abstractions) | **Never install directly** — transitive dependency included automatically |
 | [Novior.MentorAgent.Declarative](https://www.nuget.org/packages/Novior.MentorAgent.Declarative) | **Optional** — define Level-2 specialist agents in YAML instead of C# |
+| [Novior.MentorAgent.Scanner](https://www.nuget.org/packages/Novior.MentorAgent.Scanner) | **Development only** — scans the pages of your Blazor app for the AutoMentor; reference it in Debug |
+| [Novior.MentorAgent.Cli](https://www.nuget.org/packages/Novior.MentorAgent.Cli) | **A .NET tool** — `novior-mentor scan`, the same scan from a CI pipeline or for a WebAssembly standalone app |
 
 The chat widget serves Blazor (Server, WebAssembly and Auto) and .NET MAUI Blazor Hybrid apps; any other front end,
 or a headless backend, connects through `Novior.MentorAgent.Server`, which also serves MCP and A2A. Multi-agent
@@ -268,7 +270,7 @@ In `MainLayout.razor` (or `App.razor`):
 <ChatWidget />
 ```
 
-That's it. The widget injects its own CSS and JS automatically — no changes to `App.razor` or `_Host.cshtml` are required. Only `ChatWidget` does this: a surface composed from the package's components without `ChatWidget` must add the `<link>` to `_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.4.1` and the `<script>` for `_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.4.1` itself, or it renders unstyled and voice, paste and drag-and-drop stay off. The `?v=` is the version of the package you install: change it when you upgrade.
+That's it. The widget injects its own CSS and JS automatically — no changes to `App.razor` or `_Host.cshtml` are required. Only `ChatWidget` does this: a surface composed from the package's components without `ChatWidget` must add the `<link>` to `_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.5.0` and the `<script>` for `_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.5.0` itself, or it renders unstyled and voice, paste and drag-and-drop stay off. The `?v=` is the version of the package you install: change it when you upgrade.
 
 > **The widget must be interactive.** In a Blazor Web App make the app interactive as a whole — `<Routes @rendermode="InteractiveServer" />` in `App.razor` (the template's *Interactivity location: Global*). In a layout that renders statically, `<ChatWidget />` shows its button and nothing happens when it is clicked. A page rendered statically has no circuit either, so it cannot register `IMentorPageContext` data or UI actions. For Auto / WebAssembly apps see [Blazor Server vs Blazor WASM](#blazor-server-vs-blazor-wasm).
 
@@ -814,7 +816,7 @@ Each registered UI action becomes its **own named AI tool**, handed to every run
 - Skips, with a warning, an action whose name matches a tool the coordinator already has (an L1 action, an MCP tool, `navigate_to`…) — give UI actions names of their own
 - Enables reliable multi-action chains
 
-From 1.4.0 the coordinator calls a UI action through the **gate**, like every other action: the action policies and their before-action hook are asked about it, the observers receive its decisions, it gets a span, and Stop reaches it. Nothing else changes: a UI action asks for no confirmation and needs no role of its own — a policy can still stop it or ask the user to confirm it — and the widget shows its start and end as before. The text of its decisions is its description. The policies also decide whether it is offered, as for the application's actions: one their `IsAllowedAsync` does not allow at `Offer` — asked with `Kind` `UI` and the page's name — is left out of the turn's requests, the actions of a page `navigate_to` opens during the turn included, and a call to it anyway is refused. A limit: when nothing was left out as the turn started, an action left out only once `navigate_to` opened its page does not add the notice that some actions are not available to that turn's instructions; it is still not offered, and a call to it is still refused. A model that keeps calling actions is stopped by the run's cap, the same as for the application's own actions: 40 calls in a turn, Microsoft.Extensions.AI's default for the agent's function-invoking client (up to 1.3.0 a loop of the page's own stopped at 10).
+From 1.4.0 the coordinator calls a UI action through the **gate**, like every other action: the action policies and their before-action hook are asked about it, the observers receive its decisions, it gets a span, and Stop reaches it. Nothing else changes: a UI action asks for no confirmation and needs no role of its own — a policy can still stop it or ask the user to confirm it — and the widget shows its start and end as before. The text of its decisions is its description. A UI action whose handler throws is `Failed`, `exception`, with the type of the handler's exception, and the model gets the message `OnException` gives, else the exception's (up to 1.4.0 it was `Executed`, BUG-241). A UI action a client of the hub runs (WebAssembly, React, MAUI…) is `Executed` as soon as the request is sent to the client: the server is not told whether the client's handler succeeded. The policies also decide whether it is offered, as for the application's actions: one their `IsAllowedAsync` does not allow at `Offer` — asked with `Kind` `UI` and the page's name — is left out of the turn's requests, the actions of a page `navigate_to` opens during the turn included, and a call to it anyway is refused. A limit: when nothing was left out as the turn started, an action left out only once `navigate_to` opened its page does not add the notice that some actions are not available to that turn's instructions; it is still not offered, and a call to it is still refused. A model that keeps calling actions is stopped by the run's cap, the same as for the application's own actions: 40 calls in a turn, Microsoft.Extensions.AI's default for the agent's function-invoking client (up to 1.3.1 a loop of the page's own stopped at 10).
 
 UI actions are scoped to the **current page**: they appear in the tool list only while the page is mounted, and disappear the moment the page calls `PageContext.Clear(pageName)` in `Dispose()`, with the name it gave `SetPageName`. Blazor disposes the old page after it has initialized the new one, so a bare `Clear()` there would also remove what the new page has just registered. Give every page its own name: when two components share one, the old page's `Clear(pageName)` takes it for the current page and clears everything.
 
@@ -905,12 +907,16 @@ For the two typed overloads (`RegisterUIAction<TParam>` and `RegisterUIActionAsy
 
 | `TParam` | Auto-generated `parameterHint` |
 |---|---|
-| `int`, `long`, `short`, `byte` | `"integer"` |
+| `int`, `long`, `short`, `byte`, `uint`, `ulong`, `ushort`, `sbyte` | `"integer"` |
 | `float`, `double`, `decimal` | `"number"` |
 | `bool` | `"boolean"` |
 | `string` | `"string"` |
 | `Guid` | `"string (GUID)"` |
-| `DateTime`, `DateTimeOffset` | `"string (ISO 8601 date)"` |
+| `DateTime`, `DateTimeOffset`, `DateOnly` | `"string (ISO 8601 date)"` |
+| `TimeOnly` | `"string (time, HH:mm:ss)"` |
+| `TimeSpan` | `"string (duration, d.hh:mm:ss)"` |
+| `char` | `"string (one character)"` |
+| `Uri` | `"string (URI)"` |
 | `Status` *(enum)* | `"string (Active\|Inactive\|Pending)"` |
 | `int?` | `"integer?"` |
 | `List<int>` | `"array<integer>"` |
@@ -939,6 +945,158 @@ This means the AI sees a precise, field-by-field description of what to pass —
 > **Async handlers are awaited on Blazor Server** — the AI waits for the handler to complete before generating its next response. This makes multi-action chains reliable: the AI can call `select_order(42)` and then `highlight_row(42)`, knowing each step is done before it proceeds. A UI action requested through the hub (WebAssembly, React, MAUI…) is fire-and-forget: the model is told it succeeded once the request is sent to the client, not when the handler finishes.
 
 The AI automatically receives current page context (URL, page name, registered data) injected into its system prompt on every call — with no extra configuration required.
+
+### A page's form as a UI action — `RegisterForm<TModel>`
+
+A page registers its form once, and the model gets one action, `fill_<form>`, whose parameter is the fields to fill. Each field of the form carries a `data-mentor-id`, `"<form>.<field>"`, with the field written as the model sees it:
+
+```razor
+@inject IMentorPageContext PageContext
+@inject IJSRuntime JS
+@implements IDisposable
+
+<EditForm Model="_ticket" OnValidSubmit="SaveAsync">
+    <InputText data-mentor-id="ticket.title" @bind-Value="_ticket.Title" />
+    <InputNumber data-mentor-id="ticket.quantity" @bind-Value="_ticket.Quantity" />
+    <InputSelect data-mentor-id="ticket.priority" @bind-Value="_ticket.Priority">
+        @foreach (var p in Enum.GetValues<Priority>()) { <option value="@p">@p</option> }
+    </InputSelect>
+    <InputCheckbox data-mentor-id="ticket.urgent" @bind-Value="_ticket.Urgent" />
+    <InputText type="password" @bind-Value="_ticket.Pin" />
+    <button type="submit">Save</button>
+</EditForm>
+
+@code {
+    private readonly Ticket _ticket = new();
+
+    protected override void OnInitialized()
+    {
+        PageContext.SetPageName("New ticket")
+            .RegisterForm<Ticket>("ticket", "The form of a new support ticket", JS);
+        PageContext.SignalReady();
+    }
+
+    public void Dispose() => PageContext.Clear("New ticket");
+}
+```
+
+- **The fields** are the public properties of `TModel` with a getter and a setter of a simple type: a text, a number, a `bool` (a checkbox), an enum (a select, whose options read the enum's names), a `Guid`, a date or a time (`DateOnly` as `yyyy-MM-dd`). The model reads them in the action's hint, `{ title: string, quantity: integer, priority: string (Low|Normal|High), urgent: boolean }`, and gives only those it fills. Each value is checked against its field's type before anything runs in the page.
+- **It fills, and never submits.** The action writes the fields given, in the form's order, as the user would type them, and stops there: sending the form stays an action of your own, a UI action or a `[MentorAction]`, with its confirmation if it writes. The model is told so in the action's hint.
+- **Sensitive fields stay out.** A property with `[DataType(DataType.Password)]`, `[DataType(DataType.CreditCard)]` or `[PasswordPropertyText(true)]`, or whose name says it holds a password, a secret, a token, a PIN, a card's number or code, an IBAN, an API key or a one-time code, is not a field unless you let it in. In the page, a password field, or one whose `autocomplete` is `current-password`, `new-password`, `one-time-code`, `cc-number` or `cc-csc`, is never written, by a form or by a recipe, unless its field was let in. What the model writes into a field it has seen, and so has its provider: let in only what the user may say to the assistant.
+- **The options**, the fourth argument: `o => o.Exclude("Notes").IncludeSensitive("Pin").Selector("Title", "#ticket-title")`. A field is named by its property, `Title` or `title`; a name that is no field throws when the form is registered.
+- **Through the gate**, as any UI action: the action policies and their hook are asked, the observers receive its decisions, Stop reaches it. A field the page does not have, or that is hidden, disabled, inside `data-mentor-exclude` or a password field, fails the action, `Failed`, and the model is told which field: the fields before it stay filled. A value its field does not take fails it before anything is written.
+- **Where it runs**: in the page, through the `IJSRuntime` you pass, with the recipes' runner, on Blazor Server, WebAssembly and MAUI Blazor Hybrid. On a WebAssembly client, as for every UI action of a client of the hub, the server is not told whether the fill succeeded.
+
+### A page's grid as UI actions — `RegisterGrid<TRow>`
+
+A page registers its grid once, with the property that is the row's key, and the model gets up to three actions: `open_<grid>_row({ key })`, `sort_<grid>({ column, descending? })` and `filter_<grid>(text)`. In a table written by hand, each part carries a `data-mentor-id`:
+
+```razor
+@inject IMentorPageContext PageContext
+@inject IJSRuntime JS
+@implements IDisposable
+
+<input data-mentor-id="tickets.filter" @bind="_filter" @bind:event="oninput" />
+<table>
+    <thead>
+        <tr>
+            <th>Number</th>
+            <th data-mentor-id="tickets.sort.title" aria-sort="@AriaSort("title")" @onclick="@(() => Sort("title"))">Title</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var t in Shown)
+        {
+            <tr data-mentor-id="tickets.row">
+                <td data-mentor-id="tickets.cell.id">@t.Id</td>
+                <td>@t.Title</td>
+                <td><button data-mentor-id="tickets.open" @onclick="@(() => Open(t))">Open</button></td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    protected override void OnInitialized()
+    {
+        PageContext.SetPageName("Tickets")
+            .RegisterGrid<Ticket>("tickets", "The open tickets", JS, t => t.Id, o => o.Sortable("Title"));
+        PageContext.SignalReady();
+    }
+
+    public void Dispose() => PageContext.Clear("Tickets");
+}
+```
+
+- **Opening a row.** `open_<grid>_row({ key })` finds the row whose key cell, `"<grid>.cell.<key>"`, reads the key, as the page shows it, and clicks `"<grid>.open"` inside that row. A row not shown is looked for with the grid's filter, which is given the key, then by scrolling the rows' container, so that a virtualized grid renders the rows further down. The key is a property of the row: a text, a whole number, a `Guid` or an enum, checked against its type before anything runs in the page. A paged grid is not paged through: give it a filter that finds a row by its key.
+- **Sorting.** `sort_<grid>({ column, descending? })` clicks the column's header, `"<grid>.sort.<column>"`, until its `aria-sort`, or that of the `th` holding it, reads the order asked: three clicks at most, each one waited for until `aria-sort` changes. A header without `aria-sort` is taken as not sorted, so a table that marks only the header it is sorted by works. Without `aria-sort` the first click happens anyway: a table that never says its order is not sorted in the order asked, and the model is told so. The columns are every column of a simple type that is not sensitive, or those you name with `Sortable`; with `Sortable()` and none, the model gets no `sort_`.
+- **Filtering.** `filter_<grid>(text)` writes the text in `"<grid>.filter"` as the user would type it, and an empty text clears it. Without a filter, `o => o.Filter = false`, the model gets no `filter_`.
+- **Nothing of the rows goes back to the model.** Each action answers done, or not done and why: a key no row has, a header that does not say its order, a part the page does not have. Rows and cells inside `data-mentor-exclude` are never read.
+- **Sensitive columns**, by the same signs as a form's sensitive fields, are not sorted by unless you let them in with `IncludeSensitive`, and are never the key: the model would have to write the value to open a row, and `RegisterGrid` throws.
+- **A `QuickGrid`**, whose rows and headers take no attribute, is given its selectors with `Selector`, the part being what follows `"<grid>."` in its `data-mentor-id`. The key's cell is a `TemplateColumn` with a `<span data-mentor-id="orders.cell.id">`, the open button another; QuickGrid writes `aria-sort` on its headers:
+
+```csharp
+PageContext.RegisterGrid<Order>("orders", "The orders", JS, r => r.Id, o =>
+{
+    o.Filter = false;
+    o.Selector("row", "#orders tbody tr")
+     .Selector("sort.id", "#orders th:nth-child(1) .col-title")
+     .Selector("sort.customer", "#orders th:nth-child(2) .col-title");
+});
+```
+
+- **Through the gate**, as any UI action, and in the browser with the recipes' runner through the `IJSRuntime` you pass, on Blazor Server, WebAssembly and MAUI Blazor Hybrid. A part the page does not have, or that is hidden, disabled or inside `data-mentor-exclude`, fails the action, `Failed`.
+
+### Recipes from a source — `IMentorRecipeSource`
+
+A recipe is a sequence of steps on one page — write a field, choose an option, check a box, click, wait, find a row —
+that the widget runs in the user's browser, offered to the model as one of that page's actions. Recipes are not written
+in your code: they come from a source, typically a console where they are approved, through its bridge. Register an
+`IMentorRecipeSource` with `builder.Services.AddMentorRecipeSource<MyRecipes>()`; it is asked once for each session,
+when the session begins, and the session keeps the recipes it was given:
+
+```csharp
+public sealed class MyRecipes(IApprovedRecipes approved) : IMentorRecipeSource
+{
+    public async Task<MentorRecipeSourceResult> LoadAsync(MentorRecipeSourceContext context, CancellationToken ct)
+        => new(await approved.ForAsync(context.SessionId, ct), []);
+}
+
+new MentorRecipeDefinition
+{
+    Name = "create_order",
+    Description = "Creates an order for a customer",
+    Route = "/orders/new",
+    Parameters = [new() { Name = "customer", Description = "The customer's name" }],
+    Steps =
+    [
+        new() { Kind = MentorRecipeStepKind.Set, Selector = "#customer", Value = "{customer}" },
+        new() { Kind = MentorRecipeStepKind.Click, Selector = "#save" },
+    ],
+    RequiresConfirmation = true,
+};
+```
+
+**A recipe clicks what the user could click, with the user's rights.** What a source gives is what the application
+runs: the source decides which recipes are approved and checks where they come from — a signature, an approval.
+MentorAgent checks that each recipe holds together, within `MentorRecipeLimits`, and leaves out with its reason one
+that does not: each `IMentorAgentSourceObserver` hears it in `OnRecipesLoaded`, with a `MentorRecipeRejectionReasons`
+code, and a Warning `recipe.rejected-with-reason` says it. A recipe is known by its route and its name; the first source
+to give them keeps them.
+
+A recipe with the name of a UI action the page registers in code: the source says who wins, with
+`MentorRecipeSourceResult.Precedence` — `MentorRecipePrecedence.Code`, the default, offers the page's UI action, and
+`Source` offers the recipe. A bridge sets it from the application's mode in the console ("the code wins" or "the
+console wins"). Any other tool wins over a recipe, and the log says once for the session which one lost.
+
+A recipe is offered on the page of its route only, and the model reads its name, its description and its parameters,
+never a selector. It is governed as a UI action of that page: the action policies are asked about it with `Kind = UI`,
+the page's name and its name, when it is offered and when it is called, and it runs with its own roles and its own
+confirmation. A step whose element is gone turns that version of the recipe off until the application restarts: a
+new version, changed in anything, is on. On Blazor Server and
+MAUI Hybrid the steps run through the circuit's JavaScript runtime; on a WebAssembly client of the hub, through the hub.
+The rules are the `recipe` area of [ACTION-RULES.md](https://github.com/Novior-dev/MentorAgent/blob/main/ACTION-RULES.md).
 
 ---
 
@@ -2234,7 +2392,7 @@ builder.Services.AddMentorAgentBlazor(options =>
 ```
 
 > ⚠️ **Three WASM-only setup steps** not required in Blazor Server:
-> 1. **CSS/JS links** — in a standalone WASM app the static `index.html` is served before the .NET runtime starts, so the widget cannot inject its own assets. A Blazor Web App has no `index.html`: prerendered, the widget writes the tags itself; without prerendering they go in `App.razor`. Where you add them, add `<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.4.1" rel="stylesheet" />` and `<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.4.1"></script>` manually — **set the `?v=` to the version of the package you install and change it on every upgrade**, because nothing fingerprints these two and a cached older `MentorAgent.js` silently costs you the onboarding tour and streaming voice.
+> 1. **CSS/JS links** — in a standalone WASM app the static `index.html` is served before the .NET runtime starts, so the widget cannot inject its own assets. A Blazor Web App has no `index.html`: prerendered, the widget writes the tags itself; without prerendering they go in `App.razor`. Where you add them, add `<link href="_content/Novior.MentorAgent.Abstractions/css/MentorAgent.css?v=1.5.0" rel="stylesheet" />` and `<script src="_content/Novior.MentorAgent.Abstractions/js/MentorAgent.js?v=1.5.0"></script>` manually — **set the `?v=` to the version of the package you install and change it on every upgrade**, because nothing fingerprints these two and a cached older `MentorAgent.js` silently costs you the onboarding tour and streaming voice.
 > 2. **CORS + absolute `HubUrl`** when the WASM app and the server are on different origins (different ports). Confirmations and Stop (`POST /mentor/approve`, `/mentor/cancel`) then go to the hub's origin with the `AccessTokenProvider` token, through the `HttpClient` the client registers (step 3). See the [Novior.MentorAgent.Server](https://www.nuget.org/packages/Novior.MentorAgent.Server) and [Novior.MentorAgent.Blazor](https://www.nuget.org/packages/Novior.MentorAgent.Blazor) READMEs.
 > 3. **An `HttpClient` in the client project** — the widget sends Stop and confirmations through it, and `AddMentorAgentBlazor()` does not register one. The standalone WebAssembly template does; the client project of a Blazor Web App does not, and without it the WebAssembly runtime does not start (`CannotResolveService … HttpClient`). Add `builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) });` to its `Program.cs`, as in the snippet above.
 
@@ -2265,7 +2423,7 @@ with `NU1605`: `Microsoft.Extensions.Hosting` came in with the same server depen
 
 ```xml
 <!-- in the <ItemGroup> the MAUI template generated -->
-<PackageReference Include="Novior.MentorAgent" Version="1.4.1" />
+<PackageReference Include="Novior.MentorAgent" Version="1.5.0" />
 ```
 
 **2 · Reference the widget's static assets.** A MAUI app serves `wwwroot/index.html` itself, and the
@@ -2595,6 +2753,64 @@ to decide, with your own legal advice: the library does not make an application 
 - **Everything else in the article.** Deep fakes, emotion recognition, biometric categorisation and text published
   to inform the public are your application's decisions, not the widget's.
 
+### Showing that the assistant is off — `IMentorAssistantStatus`
+
+An application can turn its assistant off from somewhere else: a switch of its own, or a console that stops the
+requests to the model. Register an `IMentorAssistantStatus` and the widget shows it. While `IsOn` is false:
+
+- the input, the send button, the attachments and the microphone are disabled, and the welcome panel offers no
+  suggestion to send;
+- the header says *off*, with a grey dot, where it says *online*;
+- a sentence right above the input says so, before anyone writes, with `role="status"`. It is translated into the ten
+  languages of `Language`:
+
+  > The assistant was turned off by the administrator
+
+When `IsOn` turns true again, the widget is as before. Without a service registered, the assistant is on and nothing
+changes.
+
+```csharp
+public sealed class AssistantSwitch : IMentorAssistantStatus
+{
+    private volatile bool _on = true;
+
+    public bool IsOn => _on;
+
+    public event EventHandler? Changed;
+
+    public void Set(bool on)
+    {
+        if (_on == on) return;           // raised only when the value changes
+        _on = on;
+        foreach (var handler in Changed?.GetInvocationList() ?? [])
+        {
+            try { ((EventHandler)handler)(this, EventArgs.Empty); }
+            catch { /* a handler that throws does not stop the others */ }
+        }
+    }
+}
+
+builder.Services.AddSingleton<AssistantSwitch>();
+builder.Services.AddSingleton<IMentorAssistantStatus>(sp => sp.GetRequiredService<AssistantSwitch>());
+```
+
+- **Only on or off.** No reason and no author: keep those where the switch is.
+- **`Changed`** is raised only when the value changes, and may be raised on a background thread. The widget renders
+  again on its own dispatcher, and a handler of yours reads `IsOn` again and returns at once. Raise it so that a
+  handler that throws does not stop the others.
+- **What it does not do.** It does not refuse the requests to the model: the switch that turns the assistant off does
+  that. The widget only stops people from writing into an assistant that will not answer. A widget already in a turn
+  ends it as before.
+- Register it as a singleton.
+- **WebAssembly and the other front ends.** Register it in the server's application, with `AddMentorAgentServer()`:
+  the hub tells its clients. The WebAssembly widget of `AddMentorAgentBlazor()` reads the value when it connects and
+  follows each change, as the widget in the server does. For that its client opens the hub connection when the widget
+  is created, not at the first message: a server not up yet costs a line in the log, and the first message tries
+  again. A message sent before the value arrived waits for it, five seconds at most, and is not sent while the
+  assistant is off: it stays in the chat, under the sentence that says the assistant is off. A React or Angular page reads it with `assistantIsOn()` and
+  `onAssistantStatus(callback)` of `/mentor/agent.js`, and disables its own input (see the README of
+  Novior.MentorAgent.Server).
+
 ### Deciding before an action runs — `IMentorActionPolicy`
 
 Roles say who may run an action, and a confirmation asks the user first. A decision that depends on your own data —
@@ -2641,10 +2857,13 @@ offered, not counted in the prompt, with the same notice that names nothing. A c
 remembers it from an earlier turn, or the user dictates it — is refused for that turn (`Denied`, `not-offered`),
 without asking the policy about the call. It is asked again with `MentorActionStage.Call` before every call, with
 the arguments, and once more after the user confirmed: a permission taken away while the banner waits stops the
-action, as a role does. A call it does not allow is refused (`Denied`, `not-authorized`): the model reads that the
-user may not use this action, and the log has one Warning. Answer the coarse question at the call too, as the
+action, as a role does. A call it does not allow is refused (`Denied`, `not-authorized`): the model reads, in the
+application's language, that a rule of the application does not offer this action here, never that the user may not
+use it, since a policy may decide for every user (BUG-248; the same for an action not offered), and the log has one Warning. Answer the coarse question at the call too, as the
 example does: up to 1.3.0 a call to an action a policy had not offered was decided by its answer at the call alone,
 and through a specialist or a team the action was offered as well (BUG-233).
+
+**`MentorActionStage.Card`, from 1.5.0 — the A2A agent card.** The card asks `IsAllowedAsync` about each action it would list, with `Stage` `Card` and nobody: no `User`, no session, no arguments, `Surface` `A2A`. Answer `false` only for an action off for every caller: the card leaves it out. What you decide per caller is not the card's to follow: answer `true`, and the task asks again, with its caller. A policy that does not know the stage and looks at the user sees nobody and often answers no: the card leaves the action out, promising less, never more. The card is built at its first request and again when it is older than 30 seconds, so a rule you change at run time reaches it within that while (up to 1.4.x it was built once, at startup, without the policies: BUG-250).
 
 **`BeforeActionAsync` — may this call run?** Asked before every call, once the roles and `IsAllowedAsync` have let
 it through, it answers a `MentorActionVerdict`:
@@ -2678,7 +2897,7 @@ The log names the exception's type, never its message.
 
 | Property | What it holds |
 |---|---|
-| `Stage` | Whether MentorAgent is deciding what to offer (`Offer`) or a call is about to run (`Call`) |
+| `Stage` | Whether MentorAgent is deciding what to offer (`Offer`), a call is about to run (`Call`), or the A2A agent card is built (`Card`, from 1.5.0) |
 | `ToolName`, `Description` | The tool's technical name, as on `MentorActionDecision`, and the description the model reads; `null` when it has none. The description is the `IMentorActionGovernor`'s when it gives one, except on a call to the MCP server, which carries the code's; a question to the governor itself carries the code's |
 | `Arguments` | At `Call`, the arguments by parameter name, as the model or the MCP client sent them — in general a `JsonElement` each. **Nothing has checked them**: read them as you would read a request's body. `null` at `Offer` |
 | `User` | The signed-in user, or `null` when nobody is; read for every action, those that require no role too. On the MCP server, the caller `McpCallerPrincipal` resolves, else the request's user |
@@ -2686,6 +2905,7 @@ The log names the exception's type, never its message.
 | `SessionId`, `TurnId`, `CallId` | As on `MentorActionDecision`. `CallId` is `null` at `Offer`, and `TurnId` on the MCP server |
 | `PageName` | The page the user is on, as it named itself with `IMentorPageContext.SetPageName`; `null` when no page did, on the MCP server and in a task from another agent |
 | `Kind` | `MentorActionKind.Server` for an action of the application, `MentorActionKind.UI` for a UI action the page declared, which `PageName` then names |
+| `Provenance`, `ProvenanceName` | Who provides the tool: `MentorActionProvenance.Application` for an action of the application, whichever agent asks for it and on the MCP server, a team, a UI action, a form or a recipe of the page; `McpServer` for a tool of an MCP server you consume, with the server's `Name` in `ProvenanceName`; `Library` for MentorAgent's own tools, which policies are not asked about. A call by an agent of an `IMentorAgentSource` is `Application`: `AgentKind` says which agent it comes from. Be as strict as you need with what you do not provide yourself. `Unknown`, the default of a request built by hand, is never what MentorAgent sends on a path it knows: treat it, and a value you do not know, as not trusted |
 | `RequiredRoles` | The roles the action requires, any one of which is enough; empty when it requires none. They are the `IMentorActionGovernor`'s when it gives them; a question to the governor itself carries the code's |
 | `RequiresConfirmation` | Whether the action asks for a confirmation of its own — the attribute, `RequiresApproval` or an MCP server's `RequiresConfirmation` — with `RequireConfirmation` on; the `IMentorActionGovernor`'s answer when it gives one. A question to the governor itself carries the code's |
 | `Services` | The services of the conversation's scope: the circuit, the hub connection, the request, the A2A task; on the MCP server, the request's. Never the root services: resolve a scoped service of yours there, a `DbContext` or the current tenant |
@@ -2718,6 +2938,8 @@ at every call.
 var writesOnMcp = catalog.GetActions()
     .Where(a => a.McpExposure is MentorMcpExposure.Published or MentorMcpExposure.PublishedToRoles && !a.ReadOnly)
     .Select(a => a.ToolName);
+
+var cancelArguments = catalog.GetActions().Single(a => a.ToolName == "cancel_order").ParametersSchema;
 ```
 
 Each one carries `ToolName`, `Description`, `AgentKind` (`Coordinator`, `Specialist` or `TeamMember`) and
@@ -2727,7 +2949,10 @@ Each one carries `ToolName`, `Description`, `AgentKind` (`Coordinator`, `Special
 for an action shipped off, which is then `Withheld` on MCP and never `OnAgentCard`: the catalogue says what the code
 says, and does not ask the governor), `Origin` and `RegistrationId` (below), `Method` (the method an action of origin
 `attribute`, `fluent` or `candidate` runs, to read its parameters, and for a `command` or a `query` its handler's
-`HandleAsync`; `null` for an endpoint and any other origin, and left out of JSON) and `McpExposure`:
+`HandleAsync`; `null` for an endpoint and any other origin, and left out of JSON), `ParametersSchema` (the JSON schema
+of the action's arguments, the one the model reads in its tool: an endpoint's route, query and body, a command's or a
+query's properties, a method's parameters; `null` when there is no tool to read it from, such as an endpoint in a host
+without Novior.MentorAgent.Server) and `McpExposure`:
 `Published` to every caller, `PublishedToRoles` to the callers `McpCallerPrincipal` identifies with one of its roles,
 `Withheld` (it asks for a confirmation, the predicate holds it back, or it requires a role and no
 `McpCallerPrincipal` is set) or `NotServed` (the host does not map the MCP server, the action belongs to a specialist
@@ -2898,6 +3123,222 @@ builder.Services.AddScoped<ExpenseService>();             // a candidate runs on
 
 The rules are the `candidate` area of [ACTION-RULES.md](https://github.com/Novior-dev/MentorAgent/blob/main/ACTION-RULES.md).
 
+### Pages from your routes — `AutoMentor`
+
+With `options.AutoMentor.Enabled`, MentorAgent also knows the pages of your Blazor application, with no attribute:
+the components that carry `@page`, as the router reads them. It reads them once, the first time they are asked for,
+and keeps them. Structure only: a route template and the component that serves it, never what a page shows.
+
+```csharp
+// The server: its own pages, and those of an assembly the entry assembly does not reference
+builder.Services.AddMentorAgent(options =>
+{
+    options.AutoMentor.Enabled = true;
+    options.AutoMentor.PageAssemblies = [typeof(Shop.Reports.Pages.Sales).Assembly];
+});
+
+// A WebAssembly client: it sends its pages to the server, with those of an assembly of its own
+builder.Services.AddMentorAgentBlazor(options =>
+{
+    options.PageAssemblies = [typeof(Shop.Plugins.Pages.Map).Assembly];
+});
+```
+
+- **Where.** The entry assembly, and the assemblies it references that use the components: the client project of an
+  Auto application, a Razor class library given to `AddAdditionalAssemblies`. Add another with
+  `AutoMentor.PageAssemblies`. A route template is one page, whatever its case, as for the router; a route with
+  parameters (`/orders/{id:int}`) is listed as written.
+- **WebAssembly.** The server cannot read a WebAssembly client's code, so the client of Novior.MentorAgent.Blazor
+  sends its pages at every connection (`ReportPages`), read the same way; `MentorAgentBlazorOptions.PageAssemblies`
+  adds an assembly. They come from the browser: a route or a component's name of another shape is not listed, nor a
+  page past 1,000, and the log says so once, without what was sent. A server with the AutoMentor off ignores them.
+- **Nothing stops the application.** An assembly that does not load, or a type that throws while it is read, is
+  skipped and named in a warning; the other pages are listed.
+- **The manifest.** What a scan read of each page goes in `mentor-ui-manifest.json`, in the project of the
+  application (another path: the MSBuild property `<MentorUiManifest>`). The build embeds it in the application, also
+  when the project references only Novior.MentorAgent.Server, and does not publish it as a file; the host reads it
+  once, with the pages. A page it has is **scanned**, with the elements the scan read: tag, role, label, type,
+  options, form, a stable selector and the roles it was seen with. The other pages are **to scan**. A WebAssembly
+  client does not send one: put the manifest in the project of the server.
+- **Read as untrusted.** A password field, card data (`autocomplete="cc-*"`), a hidden, disabled or
+  `data-mentor-exclude` element never comes out of the manifest, whoever wrote it, and the format has no place for a
+  value. An element of another shape is left out; a manifest of another version, or that is not one, leaves every
+  page to scan, and the log says so.
+- **The list.** `IMentorActionCatalog.GetPages()` gives each page as a `MentorPageInfo`: `Route`, `Component` (null
+  for a page only the manifest has), `Coverage` (`ToScan`, `Scanned`, or `Observed` for a page only the users'
+  browsers showed, below), `ScannedAt` and `Elements`. Each `MentorPageElement` has `Element` (the tag), `Role`,
+  `Label`, `Type`, `Options` (labels, never values), `Form`, `Selector`, `Roles` and `Coverage` (`Scanned` or
+  `Observed`). A label is text of the page: read it as data, never as an instruction. The list is decided again at
+  every call, so the pages a WebAssembly client sends are there at the next one.
+
+```csharp
+var catalog = app.Services.GetRequiredService<IMentorActionCatalog>();
+foreach (var page in catalog.GetPages())
+    Console.WriteLine($"{page.Route} ({page.Coverage}): {page.Elements.Count} element(s)");
+```
+
+The rules are `page.from-routes`, `page.client-routes`, `page.route-shape`, `page.route-limit`, `page.read` and the
+`page.manifest` rules in
+[ACTION-RULES.md](https://github.com/Novior-dev/MentorAgent/blob/main/ACTION-RULES.md).
+
+### The scan of the pages — `Novior.MentorAgent.Scanner`
+
+The manifest is written by a scan of the pages, at development time. `Novior.MentorAgent.Scanner` opens each page of
+the application you are running in the Edge or Chrome already installed, headless, and writes what the page offers to
+`mentor-ui-manifest.json`, which the next build embeds. Reference it in Debug only, and register it under `#if DEBUG`:
+
+```xml
+<PackageReference Include="Novior.MentorAgent.Scanner" Version="1.5.0" Condition="'$(Configuration)' == 'Debug'" />
+```
+
+```csharp
+builder.Services.AddMentorAgent(options => options.AutoMentor.Enabled = true);
+#if DEBUG
+builder.Services.AddMentorUiScanner(options =>
+{
+    options.Roles = ["Manager"];
+    options.RouteParameters["/orders/{id}"] = new Dictionary<string, string> { ["id"] = "1" };
+});
+#endif
+```
+
+- **When.** Once the application has started, in `Development` only, in the background: it never stops the
+  application, and a page it cannot read is left out, named in the log. Outside `Development` it does nothing. With no
+  Edge or Chrome installed it does not start, and it downloads none.
+- **What it reads.** Each page the host serves, with no user, then as a user of its own with each role of `Roles`.
+  Structure only, never a value: what the manifest never lets out stays out, and so does what the page does not show.
+  MentorAgent's own chat widget is not part of the page: it is neither read nor clicked. It clicks what opens a tab, a
+  menu or a collapsed section, so what shows behind it is read too, and nothing else.
+- **Route parameters.** A page whose route has parameters is opened with the values of `RouteParameters`, by the route
+  with each parameter's name only: `/orders/{id}` for `/orders/{id:int}`, since a configuration key cannot hold a
+  colon. Each value is escaped and stays in the page's path. A page with no value is not opened and stays to scan; the
+  log names it.
+- **Only what changed.** Each page has a fingerprint of the code that renders it and of its layouts, kept in the
+  project's `obj/mentor-ui-scan.state.json`. The next scan reads again only the pages whose fingerprint changed and
+  those the manifest does not have, and writes the manifest only when what it says changes, so a scan does not start
+  another build under `dotnet watch`.
+- **A React or Angular front end.** With `FrontEndUrl`, the address of a front end this host does not serve (the
+  development server of Vite or of the Angular CLI), the scan reads the front end's pages instead of the host's: the
+  routes of `FrontEndRoutes`, as its router writes them (`/orders/:id`, opened with the values of `RouteParameters` by
+  `/orders/{id}`; `*` and `**` are never opened), or, with none, the pages its links reach from its first page, of its
+  own origin, without query or fragment, none inside `data-mentor-exclude`. It reads them with no user, since its user
+  signs in to this host only (`Roles` is not used, and the log says so), and each page at every scan.
+- **Options**, also in the configuration section `MentorAgent:Scanner`: `BrowserPath`, `ManifestPath`, `PageTimeout`
+  (15 seconds), `Roles`, `RouteParameters`, `Full`, `FrontEndUrl`, `FrontEndRoutes`.
+- **Auto.** The server of an Auto application is a host like Blazor Server: register the scanner there. The pages of
+  its client project, which the server references, are scanned with the others.
+- **MAUI.** In a .NET MAUI Blazor Hybrid app on Windows no host starts the scan: start it on the app's services, right
+  after `Build()`, before the app's window is created. It runs in a Debug build of the app only. It opens the DevTools
+  port of the app's WebView2 on the loopback, or uses the one `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` already names,
+  and the log says which port and which page it found. Then it reads each page in the app's window, which you see
+  change page, and returns to the page it found.
+
+```csharp
+var app = builder.Build();
+#if DEBUG
+app.Services.StartMentorUiScan();   // MAUI: no host starts the scan
+#endif
+return app;
+```
+
+- **In CI, and for a WebAssembly standalone app.** `novior-mentor scan`, the .NET tool of
+  `Novior.MentorAgent.Cli`, runs the same scan from outside the app. The pages come from the app's built dll: the
+  newest build in the `bin` of `--project`, or `--assembly`. The app runs at `--url`: a test environment, or the
+  development server of a WebAssembly app. The browser, the Edge or Chrome installed, runs on the machine that runs the
+  command, never on the app's server. The manifest goes next to the project, or to `--manifest`.
+
+```bash
+dotnet tool install --global Novior.MentorAgent.Cli
+novior-mentor scan --url https://test.example.com --project src/Shop/Shop.csproj \
+    --account Manager=SCAN_MANAGER_COOKIE --fail-on-change
+```
+
+  - `--account <role>=<variable>` reads as an account of the team with that role alone. The environment variable, a
+    secret of the pipeline, holds its session cookie, `name=value`. It is set for the app's address only and never
+    written to the log. A variable that is missing or empty stops the command before anything is scanned.
+  - `--fail-on-change` reads every page and writes nothing. When the manifest would change, the command exits with 3
+    and names the pages: commit the manifest a scan writes.
+  - `--parameters <file.json>` holds the route parameters, in the shape of `RouteParameters`; `--full` reads every page
+    again.
+  - Exit codes: 0 done, 1 the scan could not run, 2 the command line is wrong, 3 the manifest would change.
+
+What this version does not do, and what to know before you use it:
+
+- **Development data only.** Its user and its clicks run the application's own code on the database of your
+  development environment. Never run it on real data. Mark with `data-mentor-scan="skip"` anything that must not be
+  clicked.
+- **The DevTools port.** While it scans, the browser's DevTools port is open on the loopback: a program running on
+  this machine could connect to it. On Linux and macOS, if the application ends without stopping, the browser stays
+  open until the next scan or until you close it. See *Safety* in the package's README.
+- **A component a page renders is not in its fingerprint**, only the page's own code and its layouts: after changing
+  one, set `Full = true` or delete `obj/mentor-ui-scan.state.json`. A rebuild of unrelated code may also change a
+  fingerprint; that page is then just read again.
+- **One level of clicks.** A menu inside a menu the scan opened is not opened.
+- **A menu the scan does not open.** An element inside a menu with neither `aria-expanded` nor `aria-haspopup` has no
+  box on the page until someone opens it, so it stays out of the manifest.
+- **In CI, the team's account.** `novior-mentor scan` clicks with the accounts you give it: run it on a test
+  environment, never on real data. To read the pages it loads the app's dll, which runs the constructors of the app's
+  attributes: your own code, in your own pipeline.
+- **MAUI: the app's own user.** The MAUI scan clicks with the app's user: use it only with a build that points to
+  development data. It has no user of its own, so the manifest has no roles for the app's pages, and `Roles` is not
+  used. The WebView's DevTools port stays open on the loopback until the app closes. Windows only, since it needs the
+  WebView2.
+- **The project's path in the assembly.** In Debug the package's build file writes the absolute paths of the manifest
+  and of the state file into the application's assembly, as `AssemblyMetadata`: one more reason to reference it in
+  Debug only.
+
+The rules are `page.scan`, `page.scan-development`, `page.scan-browser`, `page.scan-user`, `page.scan-clicks`,
+`page.scan-parameters`, `page.scan-changed`, `page.scan-webview`, `page.scan-tool` and `page.scan-ci` in
+[ACTION-RULES.md](https://github.com/Novior-dev/MentorAgent/blob/main/ACTION-RULES.md).
+
+### What the users' browsers show — `ObservePages`
+
+An application in production often has no manifest, because nobody scanned it. With `AutoMentor.Enabled`, the widget
+then observes the pages your users open, dialogs, tabs and panels included, and `GetPages()` lists what it saw as
+`Observed`: on Blazor Server and MAUI Hybrid in the circuit, from a WebAssembly client through the hub
+(`ReportObservedPage`), where the server's answer stops a client when the observation is off. In WebAssembly the
+observation reaches the server when the widget connects to the hub, usually at the first message; until then it stays
+in the browser, at most 200 messages, the oldest dropped. It is on by default with the AutoMentor, which is off by
+default. If you publish the application, this is what it collects, so that you can tell your users:
+
+- **Structure, never a value.** The tag, role, type and selector of each interactive element, and its label. Never what
+  a field holds, nor a select's options or the one chosen, nor the text of a label around a field. A password field,
+  card data (`autocomplete="cc-…"`), a hidden or disabled element and MentorAgent's own widget are not sent.
+- **Selectors with nothing of the page.** An observed element's selector is its `data-mentor-id`, or its place by tag
+  and position from the nearest ancestor with a `data-mentor-id`, or from the body: never an id, a class, a name, a
+  `data-testid` or a label, which may be a record's. An element deeper than 16 steps is not sent. For stable
+  selectors on the observed pages, give the elements, or a container of theirs, a `data-mentor-id`.
+- **Never text that repeats.** The rows of a table are read once per column, with the column's header; a list of
+  links, cards of records or a feed are read once, with no label. A form field with a label tied to it
+  (`<label for>`, `aria-labelledby`) keeps its label.
+- **Labels only once several users saw them.** An element counts only once two different users saw it the same, so a
+  menu with one user's name never reaches the others. A MAUI Hybrid app, on its user's own device, needs one.
+  Without sign-in a user is their connection: two tabs, or two connections, of one anonymous person count as two
+  users. That is the limit of the rule of two users without sign-in.
+- **It stays in the process.** `GetPages()` gives an observed element without its label and its form; the labels stay
+  in the application's memory, a restart forgets them, and two instances do not share them. The log never has a
+  path or a text of the page.
+- **Exclude a zone** with `data-mentor-exclude`: nothing inside it is read, scanned or observed.
+- **Turn it off** with `options.AutoMentor.ObservePages = false`.
+
+```csharp
+builder.Services.AddMentorAgent(options =>
+{
+    options.AutoMentor.Enabled = true;
+    options.AutoMentor.ObservePages = false;   // pages from the routes and the manifest only
+});
+```
+
+What the observation adds is little. Whatever repeats on a page (the navigation, the rows of a table, a list of links, cards) is kept
+once as a pattern with no label, and an element counts only once two users saw it the same, so a page without a
+manifest stays mostly unknown. Scanning the pages in development (`Novior.MentorAgent.Scanner`, above) remains the main
+way to give the AutoMentor its pages; the observation adds what the scan did not open.
+
+Limits: 500 elements a page, a message every 2 seconds and 24 KB at most, 200 messages a connection; past one the
+browser stops observing, and the log says so once. The rules are `page.observe`, `page.observe-private`,
+`page.observe-values`, `page.observe-repeated`, `page.observe-shared`, `page.observe-route`, `page.observe-limit` and
+`page.observe-off` in [ACTION-RULES.md](https://github.com/Novior-dev/MentorAgent/blob/main/ACTION-RULES.md).
+
 ### Auditing the gate's decisions — `IMentorActionObserver`
 
 Every decision MentorAgent's tool gate takes — allowed, denied, blocked by a policy, confirmation asked, confirmed,
@@ -2947,6 +3388,7 @@ read the user for an action that requires no role.
 | `User` | Who asked for the action, or `null` when nobody is signed in |
 | `TenantId` | The tenant of the call, as `IMentorTenant.Id` names it: the one the `IMentorTenantResolver` resolved for the turn or, on the MCP server, for the request. `null` when the application registers no resolver and serves a single tenant. With one, the same `User` in two tenants is told apart by this |
 | `Kind` | `MentorActionKind.Server` for an action of the application, `MentorActionKind.UI` for a UI action the page declared |
+| `Provenance`, `ProvenanceName` | Who provides the tool, as the request's `Provenance` and `ProvenanceName` say: the application, an MCP server you consume (with its `Name`), or MentorAgent itself |
 | `PageName` | The page the user is on when the decision is taken, as the request's `PageName` names it: for a UI action, the page that declared it. `null` when no page named itself, on the MCP server and in a task from another agent |
 | `RequiredRoles` | The roles the action requires, any one of which is enough; empty when it requires none |
 | `RolesFromOutside` | `true` when `RequiredRoles` are the `IMentorActionGovernor`'s, in place of the code's: it answered the roles of this call with a list, empty or not |
@@ -2962,11 +3404,11 @@ the CHANGELOG says so.
 | `Outcome` | When | `ReasonCode` |
 |---|---|---|
 | `Allowed` | The roles and every [`IMentorActionPolicy`](#deciding-before-an-action-runs--imentoractionpolicy) allow the call; the confirmation, when the action or a policy asks for one, comes next | `allowed`; `auto-approved` when, in `Native` mode, an `AutoApprovalRules` rule let a call that asks for confirmation run without asking |
-| `Denied` | Refused | `disabled` (the action is off: shipped off and not turned on, or turned off by the governor), `role-missing`, `login-required` (a role is required and nobody is signed in), `auth-not-configured` (no `AuthenticationStateProvider`), `auth-check-failed` (reading the user threw), `not-authorized` (a policy does not allow this user the action), `nobody-to-confirm` (the action or a policy asks for a confirmation nobody can give: a task from another agent, a call to the MCP server), `not-offered` (the model called an action of the application its agent was not given in the turn — one that is off, or another agent's: no gate saw the call, and nothing ran; or one an action policy did not offer that agent in the turn: the gate refused it without asking the policies about the call); on the MCP server also `withheld` (an action it does not publish) and `rate-limited` |
+| `Denied` | Refused | `disabled` (the action is off: shipped off and not turned on, or turned off by the governor), `role-missing`, `login-required` (a role is required and nobody is signed in), `auth-not-configured` (no `AuthenticationStateProvider`), `auth-check-failed` (reading the user threw), `not-authorized` (a policy does not allow this user the action), `nobody-to-confirm` (the action or a policy asks for a confirmation nobody can give: a task from another agent, a call to the MCP server), `not-offered` (the model called an action of the application its agent was not given in the turn — one that is off, or another agent's: no gate saw the call, and nothing ran; the coordinator's, a specialist's, a team member's or a source agent's model alike, with that agent's `AgentKind` and `AgentName`; or one an action policy did not offer that agent in the turn: the gate refused it without asking the policies about the call); on the MCP server also `withheld` (an action it does not publish) and `rate-limited` |
 | `ConfirmationRequested`, `Confirmed`, `Rejected` | The user is asked, says yes, says no | `operator`; `policy` on `ConfirmationRequested` when a policy asked for a confirmation the action does not ask for itself; `confirmation-timeout` on `Rejected` when nobody answered within `ConfirmationTimeout` |
 | `Stopped` | Stopped before it finished | `stop` (Stop, `/mentor/cancel`, the MCP client cancelled the call, or the caller cancelled the A2A task — also after the confirmation, before the action started), `session-ended` (the circuit, the hub connection or the request closed), `turn-ended` (in `Native` mode, the turn ended before a confirmed call could run) |
 | `Executed` | The action ran | `completed`; `result-withheld` when `OnToolResult` threw — on the MCP server the caller then gets an error result |
-| `Failed` | The action threw | `exception` |
+| `Failed` | The action threw | `exception`; `element-missing` when a recipe of the page could not be done in the user's browser, because an element of one of its steps was not there, or was hidden, disabled or excluded (the step and why in `Detail`): the recipe is turned off |
 | `Blocked` | A policy stopped the call before it ran; its reason is in `Detail` | `policy` |
 | `PolicyFailed` | A policy or the governor threw, or did not answer within `ActionPolicyTimeout`: the call did not run | `policy-exception`, with the exception's type in `ExceptionType`; `policy-timeout`; `governor-failed` (the governor; the exception's type in `ExceptionType` when it threw) |
 
@@ -2999,6 +3441,51 @@ exception's type only, then at Debug while it keeps failing. When an observer's 
 are dropped, for that observer only: a Warning when it starts, an Information line with the count when it
 catches up.
 
+**The calls to the models** (from 1.5.0): the cost per agent and per user. An observer that implements
+`OnModelCallAsync` also receives one `MentorModelCall` for each call to a model, with its tokens, the agent it is
+attributed to and who asked. Never the text of the request or of the answer. An observer that keeps the
+interface's default, which does nothing, is not called for them, and without one nobody's user is read for them.
+
+```csharp
+public sealed class CostObserver(ILogger<CostObserver> logger) : IMentorActionObserver
+{
+    public ValueTask OnDecisionAsync(MentorActionDecision d, CancellationToken ct) => ValueTask.CompletedTask;
+
+    public ValueTask OnModelCallAsync(MentorModelCall c, CancellationToken ct)
+    {
+        logger.LogInformation("{Agent} ({Kind}, {Purpose}) for {User}: {In}+{Out} tokens on {Model}, {Outcome}, turn {Turn}",
+            c.AgentName, c.AgentKind, c.Purpose, c.User?.Identity?.Name ?? "nobody", c.InputTokens, c.OutputTokens,
+            c.ModelId, c.Outcome, c.TurnId);
+        if (!c.UsageMeasured)
+            logger.LogInformation("{Agent}: the provider did not say how many tokens", c.AgentName);
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+| Property | What it holds |
+|---|---|
+| `Purpose` | `Reply`: a round trip of an agent's reply, tool calls included. The other values are MentorAgent's own calls around a reply: `SafetyCheck` (`EnableSafetyCheck`, which also asks the question of the scope when it has one), `RefusalCheck` (`RefuseOutOfScope` without it), `OutputSafetyCheck` (`EnableOutputSafetyCheck`), `ScopeCheck` (`HostedToolDomainCheck`), `RequestCheck` (`RequireActionForChangeRequests`), `AnnouncedActionCheck` (`CheckAnnouncedActions`), `GroundingCheck` (a reply to another agent over A2A), `MemoryExtraction` (`MemoryAutoCapture`), `RoutingCheck` (`RoutingStrategy` `Classifier` or `Cascade`) and `WarmUp` (`WarmUpChatModel`, when the application starts) |
+| `Outcome` | `Completed`, `Failed`, or `Cancelled` (Stop, a limit of time, a reader that stopped reading). A call stopped before its first update was not served, and is not one |
+| `AgentKind`, `AgentName` | The agent that made the call, with its name: the `Coordinator`, the `Router` of the handoff, a `Specialist`, a `TeamMember` (its role), or an agent of an `IMentorAgentSource` (`AgentSource`). On Path A the coordinator and the router are both named `main_coordinator`: the kind tells them apart. `Router` (from 1.5.0) comes only on a delegated turn, when `route_to_specialist` hands the request to the router, which picks the specialist; it has no tools of the application, so a decision never names it, only its calls do. Both `null` for MentorAgent's own calls, every `Purpose` but `Reply`: they are no agent's |
+| `SessionId`, `TurnId`, `Surface`, `User`, `TenantId` | The same as on the decisions of the turn |
+| `ModelId` | The model that answered, else the deployment the client points at |
+| `InputTokens`, `OutputTokens` | The tokens, as the provider counts them; 0 when `UsageMeasured` is `false` |
+| `CachedInputTokens`, `ReasoningTokens` | When the provider says so |
+| `UsageMeasured` | `false` when the provider did not say: a stream without its usage part, a call that failed. The counts are then unknown, not zero |
+| `Duration`, `Timestamp` | How long the call took, and when it ended, in UTC |
+
+The calls come on a queue of their own for each observer, of 10,000 calls, next to the decisions' queue, with the
+same rules of delivery. There are more calls than decisions, several a turn: a full queue of calls drops calls,
+never a decision, with one Warning when it starts and an Information line with the count when it catches up.
+**The order between a call and a decision is not kept**: `SessionId`, `TurnId` and `Timestamp`, on both, put a
+turn back together.
+
+**What an observer of the calls sees from 1.5.0.** The checks MentorAgent makes on its own come too, each with its
+`Purpose` and no agent, in the turn they served: a cost per user counts them with the replies, a cost per agent
+leaves them out, or shows them on a line of their own. `WarmUp` is the one call outside any turn: no `SessionId`, no
+`TurnId`, no `User`, no `TenantId`, once per client each time the application starts.
+
 **UI actions are in the record** from 1.4.0: on Path A under their own names, with their description as the text;
 on Path B as calls to `invoke_ui_action`. `navigate_to`, the memory tools, the skills and `route_to_specialist`
 are recorded like any other tool.
@@ -3024,8 +3511,8 @@ widget links itself (`css/themes/dark.css`, `css/themes/minimal.css`).
 
 | Value | Description |
 |---|---|
-| `MentorTheme.Default` | The baseline. Deep navy glass (`--bm-bg-base: #0a0e1a`) with a blue accent (`--bm-accent: #3b82f6`): a translucent panel, navy at 55% opacity over a blur. Nothing is overridden. On a light page it shows as dark grey, with the page behind it: there, use `Minimal`. |
-| `MentorTheme.Dark` | Darker still — near-black base (`#050810`) and a near-black panel at 85% opacity instead of 55%, so less of the page shows through, with more contrast. For apps that are already dark and where the default glass looks washed out. |
+| `MentorTheme.Default` | The baseline. Deep navy (`--bm-bg-base: #0a0e1a`) with a blue accent (`--bm-accent: #3b82f6`): a navy panel at 96% opacity, so that its text keeps its contrast whatever the page behind it (from 1.5.0; up to 1.4 it was glass at 55%). Nothing is overridden. On a light page, `Minimal` matches the page. |
+| `MentorTheme.Dark` | Darker still — near-black base (`#050810`) and a near-black panel at 96% opacity. For apps that are already dark. |
 | `MentorTheme.Minimal` | **The light theme.** White panel, thin borders, soft shadow. Also re-tints the hosted-tools and A2A chip text, which is pale by design and would be unreadable on white. |
 | `MentorTheme.Custom` | Links no theme stylesheet, which today renders exactly like `Default`: the baseline `:root` values in `MentorAgent.css` still apply, and your own stylesheet changes what it overrides. `PrimaryColor`, if set, is still applied. |
 | `MentorTheme.Auto` | Follows the visitor's system setting (`prefers-color-scheme`): `Minimal` when it asks for light — which is also what a browser reports when the system states no preference — and `Default` when it asks for dark. The widget links `minimal.css` with `media="(prefers-color-scheme: light)"`, so no script is involved. It follows the system, not your page: on a page that is always light, a visitor whose system is dark sees the dark widget. |
@@ -3059,7 +3546,7 @@ complete set; with `MentorTheme.Custom` it is also the complete list of what you
 | Variable | Default | Used for |
 |---|---|---|
 | `--bm-bg-base` | `#0a0e1a` | Page-level base behind the panel |
-| `--bm-bg-panel` | `rgba(10,14,26,.55)` | The panel itself — translucent, this is what makes the glass effect |
+| `--bm-bg-panel` | `rgba(10,14,26,.96)` | The panel itself, nearly opaque so that the contrast of its text does not depend on the page (from 1.5.0). For the glass of 1.4, set `rgba(10,14,26,.55)`: the contrast is then the page's to keep, and the app's to check (see ACCESSIBILITY.md) |
 | `--bm-bg-surface` | `#141929` | Message bubbles, input, cards |
 | `--bm-bg-elevated` | `#1a2035` | Raised elements — header, chips, detail bars |
 | `--bm-bg-hover` | `#1e2540` | Hover state of buttons and chips |
@@ -3070,11 +3557,12 @@ complete set; with `MentorTheme.Custom` it is also the complete list of what you
 |---|---|---|
 | `--bm-text-primary` | `#f0f4ff` | Message text, headings |
 | `--bm-text-secondary` | `#8b9cc8` | Timestamps, secondary labels |
-| `--bm-text-muted` | `#4a567a` | Placeholders, disabled state |
+| `--bm-text-muted` | `#7d8bb3` | Placeholders, disabled state, times and hints; 4.5:1 or more on every surface (from 1.5.0; `#4a567a` up to 1.4) |
 | `--bm-hosted-text` | `#fcd34d` | Hosted-tools chip text (amber tint) |
 | `--bm-hosted-text-strong` | `#fde68a` | Its emphasised variant |
 | `--bm-a2a-text` | `#a5b4fc` | A2A chip text (indigo tint) |
 | `--bm-a2a-text-strong` | `#c7d2fe` | Its emphasised variant |
+| `--bm-status-online` | `#34d399` | The header's "online" status; `MentorTheme.Minimal` sets a darker green for its white panel (from 1.5.0) |
 
 > The four chip colours sit on a translucent tint of their own hue, so they must move with the
 > theme. `Minimal` overrides all four to amber-700/indigo-700 — if you build a light theme with
@@ -3232,7 +3720,7 @@ options.EnableOnboardingTour = true;  // first-run guided tour, generated from y
 | **Action bar** | While a tool is executing, a pulsing bar shows the tool display name |
 | **Stop button** | A ■ Stop button appears above the input while the AI is processing. Clicking it cancels the current request immediately — the partial response (if any) is kept in the chat |
 | **Reset button** | Button in the widget header that clears the message list and starts a new `AgentSession` |
-| **Voice toggle** | When `EnableVoiceOutput = true` and the browser supports Speech Synthesis, a speaker toggle button appears in the header. Turning it off also silences whatever is currently playing |
+| **Voice toggle** | When `EnableVoiceOutput = true` and the browser supports Speech Synthesis, a speaker toggle button appears in the header. Turning it off also silences whatever is currently playing. The visitor's choice is remembered in their browser, so it starts as they left it on the next visit. With a screen reader, turn the widget's voice off with this button: otherwise both read the reply at the same time |
 | **Replay tour** | When `EnableOnboardingTour = true`, a **?** button in the header reopens the [tour](#onboarding-tour) at any time |
 | **MCP status badge** | When `ShowMcpStatus = true` and MCP servers are configured, a pill in the header shows the server's name (one server) or `online/total` (several), coloured by connection state. Click to see details |
 | **A2A status badge** | When `ShowA2AStatus = true`, a badge in the header shows configured remote A2A agents (name + URL). Click to expand the detail bar |
@@ -3314,8 +3802,9 @@ options.ClassifierChatClient  = smallDeploymentClient; // where the question goe
 ```
 
 - **Never a required call.** The second request keeps the tool mode it had: an action that asks no one first must not run on a judgement that may be wrong. The call it makes passes the gate as any other: one that asks for confirmation shows the banner.
-- **Once per turn.** The reply of the second request is not checked again, and the request that reads the tool's result is not told again to call it.
-- **Nothing is held back.** The first reply streams as before; the second follows in the same turn, as a message of its own, as the approval rounds of `MentorHitlMode.Native` do. The instruction is that request's last message, read after the reply it is about — a message of the user, since many chat templates (Mistral and Ministral, Gemma, others served by llama-server or vLLM) refuse a system message that is not the first (BUG-231) — and it is never added to the conversation, so it is not stored or carried into later turns.
+- **Once per turn.** The reply of the second request is not checked again, and the request that reads the tool's result is not told again to call it. The second request is the turn's: with routing on (`StrongChatClient`), the model that served the turn serves it, and nothing is decided again (BUG-245).
+- **Nothing is held back.** The first reply streams as before; the second follows in the same turn, as a message of its own, as the approval rounds of `MentorHitlMode.Native` do. With the history kept by MentorAgent, the instruction is that request's last message, read after the reply it is about — a message of the user, since many chat templates (Mistral and Ministral, Gemma, others served by llama-server or vLLM) refuse a system message that is not the first (BUG-231) — and it is never added to the conversation, so it is not stored or carried into later turns.
+- **With the history kept by the service.** With `UseServiceManagedHistory` (the Responses client) every message of a request is stored in the conversation the service keeps, and the service's responses form a tree. The second request is sent from the response the turn started from, with the user's message again, its pictures and files included, and the instruction in that request's instructions, which the service does not carry to the next response. The model reads the message as if for the first time; the reply it gave first stays on the service, on a branch nobody follows; the conversation goes on from the second request's answer, in the next turn and in a session snapshot taken after the turn. The user reads both replies, as with the history kept by MentorAgent. In such a turn the user's message is sent, and paid for, twice. A second request that fails, or is stopped, leaves the conversation on the first reply. Only a turn of one request is checked there: a turn that called a tool is not, since a branch from its start would leave out what ran, nor is a turn that answers the approval requests a stopped turn left open. With an `IMentorSessionManager` of your own MentorAgent cannot move the conversation to the branch, so the check is not made, and a Warning at startup says so. Up to 1.4.0 the check was never made with this history (BUG-238). For the actions that ask for a confirmation, `RequireActionForChangeRequests` makes the model call the action instead of announcing it.
 - **After a turn that called tools too.** A model can read a record and then write that it took it in charge, without calling the tool that does it. So a turn that called tools is checked as well: the question also names the tools the turn called, and only an action none of them did counts — a reply that reports what they did or returned, or the state of the records they read, is not one. The second request then says that this action did not run, not that nothing ran. A turn that handed the request to a specialist, a team or a remote agent, used a hosted tool, or waits for an approval is not checked: another agent, the provider or the user acted.
 - **What it costs.** One small call after every reply, while the coordinator has an action of the application to call (your `[MentorAction]` methods, specialists, teams, remote agents or MCP servers): the user's message and the reply, each cut to one line, the names of the tools the model was sent and of those the turn called, and an answer of one or two words. An application with no actions is not checked. Measured on gpt-4.1 over 18 turns that read records, with the question on the main deployment: about 440 tokens a turn (386 to 643: a long reply, such as a list, costs more) and 0.5 to 0.7 s while the provider answered in its usual time; when it slowed down, the check slowed with it, up to 7.6 s. No reply was flagged by mistake. The reply reaches the user before the check: it lengthens the end of the turn, not the wait for the text. The question goes to `ClassifierChatClient`, or to `ChatClient` without one; unlike the other checks on that client, this one is on by default, so a small, fast deployment there is worth configuring. It is bounded by `SafetyCheckTimeout` and asked at temperature 0.
 - **What it cannot see.** It reads the reply, not the application: a reply that says *"done"* after a tool that did something else is not its case. A question that fails, runs out of time or answers anything unreadable leaves the turn as it is. A line at Information in the log gives the verdict of every reply it checks — `ANNOUNCED`, `CLAIMED`, `NONE` or `unreadable`, with the time and the tokens it took — and another says when the second request was made and whether it called a tool. A call to an action of the application the agent was not given in the turn — one that is off, or another agent's — runs nothing, and does not count among the turn's calls. With this option on or off, an `IMentorActionObserver` receives that call's one decision: `Denied`, `not-offered`.
@@ -3328,7 +3817,7 @@ return new ChatResponse(new ChatMessage(ChatRole.Assistant, "The assistant is tu
 };
 ```
 
-> Applies to the pipeline MentorAgent builds around `ChatClient` (Path A), with the history MentorAgent keeps. With `UseServiceManagedHistory`, or with a pre-built `Agent` (Path B), the option has no effect.
+> Applies to the pipeline MentorAgent builds around `ChatClient` (Path A). With `UseServiceManagedHistory` it checks the turns of one request, with MentorAgent's own session manager (see above). With an `IMentorSessionManager` of your own and the history kept by the service, or with a pre-built `Agent` (Path B), the option has no effect.
 
 ### History compaction
 
@@ -3431,7 +3920,7 @@ options.OnToolResult = (toolName, result) =>
 
 ## Observability (OpenTelemetry)
 
-Opt in with `EnableObservability`. MentorAgent then emits **GenAI-convention** traces/metrics for the coordinator's model calls (its `ChatClient` pipeline on Path A), plus its own per-turn/tool spans and counters on both paths — all under the source/meter named by `ObservabilitySourceName` (default `"MentorAgent"`). Nothing else is wrapped: to trace the embedding generator, the `ClassifierChatClient` or a pre-built `Agent` too, wrap it with `UseOpenTelemetry()` before you hand it over. Your app wires the exporter:
+Opt in with `EnableObservability`. MentorAgent then emits **GenAI-convention** traces/metrics for the model calls of the coordinator (its `ChatClient` pipeline on Path A) and, from 1.5.0, of the agents under it: the router of the handoff, the specialists, the team members and the agents of an `IMentorAgentSource`. Plus its own per-turn/tool spans and counters on both paths — all under the source/meter named by `ObservabilitySourceName` (default `"MentorAgent"`). From 1.5.0 MentorAgent's own calls around a reply are traced too — the checks on `ClassifierChatClient`, the routing classifier, the warm-up — each with its span. A client you already trace (one with `UseOpenTelemetry()` in its chain) is not traced again: its span stays yours, one for each call. To trace the embedding generator or a pre-built `Agent`, wrap it with `UseOpenTelemetry()` before you hand it over. Your app wires the exporter:
 
 ```csharp
 options.EnableObservability = true;
@@ -3442,6 +3931,15 @@ builder.Services.AddOpenTelemetry()
     .WithTracing(t => t.AddSource("MentorAgent").AddConsoleExporter())
     .WithMetrics(m => m.AddMeter("MentorAgent").AddConsoleExporter());
 ```
+
+From 1.5.0 the span of each of those calls, `chat {model}`, also says who made it and what for. Never the user:
+who asked goes to the [action observers](#auditing-the-gates-decisions--imentoractionobserver) only.
+
+| Tag | Value |
+|---|---|
+| `gen_ai.agent.name` | The agent's name, the `AgentName` of the call's `MentorModelCall` |
+| `mentoragent.agent.kind` | `coordinator`, `router`, `specialist`, `team_member` or `agent_source`: on Path A the coordinator and the router are both `main_coordinator`. Absent on MentorAgent's own calls, which are no agent's |
+| `mentoragent.model.purpose` | `reply`: a round trip of an agent's reply, tool calls included. MentorAgent's own calls: `safety_check`, `refusal_check`, `output_safety_check`, `scope_check`, `request_check`, `announced_action_check`, `grounding_check`, `memory_extraction`, `routing_check`, `warm_up`, as the `Purpose` of their `MentorModelCall`. Only on MentorAgent's spans: a client you trace yourself keeps its span as it is |
 
 On top of the GenAI spans, MentorAgent emits these under `ObservabilitySourceName`:
 
@@ -3472,7 +3970,7 @@ at a time.
 
 ## Token & cost dashboard
 
-An **admin-only** view — never shown in the end-user widget — modelled on Azure OpenAI's monitoring page: a **model selector**, **temporal charts** (tokens / requests / latency over time), a **per-model cost table**, plus deflection and top actions. Usage is attributed **per model** — the cheap chat model, the strong routing model, the embedding model and `ClassifierChatClient` (its own row when it is a different deployment) are tracked separately (tokens, requests, latency), so you see exactly where cost goes. Every model call inside a delegated turn is counted: the handoff router, Level-2 specialists, Level-3 team members and agents from an `IMentorAgentSource`. Supply prices (MentorAgent ships none), then drop the component on a protected page:
+An **admin-only** view — never shown in the end-user widget — modelled on Azure OpenAI's monitoring page: a **model selector**, **temporal charts** (tokens / requests / latency over time), a **per-model cost table**, plus deflection and top actions. Usage is attributed **per model** — the cheap chat model, the strong routing model, the embedding model and `ClassifierChatClient` (its own row when it is a different deployment) are tracked separately (tokens, requests, latency), so you see exactly where cost goes. Every model call inside a delegated turn is counted: the handoff router, Level-2 specialists, Level-3 team members and agents from an `IMentorAgentSource`. So are MentorAgent's own calls around a reply — the checks, the routing classifier — and, with `WarmUpChatModel`, the warm-up, counted in no session. Supply prices (MentorAgent ships none), then drop the component on a protected page:
 
 ```csharp
 options.ModelPricing = new Dictionary<string, ModelPrice>(StringComparer.OrdinalIgnoreCase)
@@ -3718,7 +4216,7 @@ options.WarmUpAtStartup = true;
 options.WarmUpChatModel = true;
 ```
 
-The decision uses the latest user message and applies to the whole turn; the chosen model is logged at `Debug` level (`… routing → strong/cheap model`; set the `Novior.MentorAgent.Middleware.RoutingChatClient` category to `Debug` to see it). Any routing failure falls back to the cheap model. Semantic without an `EmbeddingGenerator`, or Custom without a predicate, disables routing (cheap only) with a warning. The [dashboard](#token--cost-dashboard) attributes tokens and cost **per model**, so cheap vs strong spend is broken out separately. Note: the routing decision's own auxiliary calls (Classifier's label, Cascade's cheap probe + completeness judge) are made below the token meter and are not counted.
+The decision uses the latest user message and applies to the whole turn; the chosen model is logged at `Debug` level (`… routing → strong/cheap model`; set the `Novior.MentorAgent.Middleware.RoutingChatClient` category to `Debug` to see it). Any routing failure falls back to the cheap model. Semantic without an `EmbeddingGenerator`, or Custom without a predicate, disables routing (cheap only) with a warning. The [dashboard](#token--cost-dashboard) attributes tokens and cost **per model**, so cheap vs strong spend is broken out separately. The routing decision's own call is counted too, from 1.5.0 (BUG-240): the classifier's question, on the dashboard under the classifier's model and on the session's counter, once a turn with `Classifier` and with `Cascade`. A turn streams, and a stream cannot be taken back, so `Cascade` decides before the answer with the same question; its completeness judge, which runs the cheap model first and drops an answer judged incomplete, is only for a caller that does not stream.
 
 ## Structured outputs
 
@@ -3972,7 +4470,7 @@ The codes of `MentorAgentRejectionReasons` stay the same from one version to the
 
 **Nothing is added at runtime.** There is no API to hand MentorAgent agents or YAML texts while the application runs: a source supplies them when it is asked.
 
-See the [package README](https://www.nuget.org/packages/Novior.MentorAgent.Declarative) for the YAML reference, including two format details the Agent Framework guide does not document: every `tools` entry needs `kind`, and folded scalars (`>`) are not supported.
+See the [package README](https://www.nuget.org/packages/Novior.MentorAgent.Declarative) for the YAML reference, including two format details the Agent Framework guide does not document: every `tools` entry needs `kind`, and three forms of valid YAML the Agent Framework's reader refuses (folded scalars, lists at their key's indentation, an explicit end of the document) are rewritten for it from 1.5.0.
 
 ## Voice input and output
 
@@ -5009,7 +5507,7 @@ asking for its language, and a Warning is logged.
 | `ToolFilterMaxTools` | `int` | `12` | Max matched business tools to send (core tools always kept on top) |
 | `RequireLookupForRecordQuestions` | `bool` | `false` | Opt-in. When a classifier says a message asks for a value of your records, the first model call must call a declared read-only action (or hand over to a specialist): with semantic tool filtering, one the filter selected; without it, any declared read the user may run. One classifier call per turn whose selection holds a read — without the filter, nearly every turn. Needs declared reads. Needs a provider that honours `tool_choice: "required"`: Ollama ignores it, and a Warning says so. See [Semantic tool filtering](#semantic-tool-filtering) |
 | `RequireActionForChangeRequests` | `bool` | `false` | Opt-in. When a classifier says a message asks to carry out one of your confirmation-gated actions and gives every input it needs, the first model call must call one of those actions the filter selected and the user may run (or hand over to a specialist), so the banner comes first; when it asks for a page, `navigate_to`. A request that leaves an input out is not forced. One classifier call per turn, shared with `RequireLookupForRecordQuestions`. Unlike that option, needs `EnableToolFiltering` and an `EmbeddingGenerator`, and `RequireConfirmation` for actions. Needs a provider that honours `tool_choice: "required"`: Ollama ignores it, and a Warning says so. See [Semantic tool filtering](#semantic-tool-filtering) |
-| `CheckAnnouncedActions` | `bool` | `true` | After a turn of the coordinator, asks a model whether its reply announces an action or reports one as done that no tool of the turn did — not after a delegation, a hosted tool or an approval, nor when no request reached a model (`MentorChatKeys.ModelNotCalled`); if so, one more request in the same turn, with the same tools, told to call the tool now or to say it was not done. Never a required call, once per turn. The question goes to `ClassifierChatClient`, or to `ChatClient` without one. Path A with the history MentorAgent keeps; no effect with `UseServiceManagedHistory` or a pre-built `Agent`. Read at every turn. BUG-220. See [Token & cost optimization](#token--cost-optimization) |
+| `CheckAnnouncedActions` | `bool` | `true` | After a turn of the coordinator, asks a model whether its reply announces an action or reports one as done that no tool of the turn did — not after a delegation, a hosted tool or an approval, nor when no request reached a model (`MentorChatKeys.ModelNotCalled`); if so, one more request in the same turn, with the same tools, told to call the tool now or to say it was not done. Never a required call, once per turn. The question goes to `ClassifierChatClient`, or to `ChatClient` without one. Path A. With `UseServiceManagedHistory`, only a turn of one request is checked, and the second request is sent from the response the turn started from (BUG-238); no effect there with an `IMentorSessionManager` of your own (a Warning at startup says so), nor with a pre-built `Agent`. Read at every turn. BUG-220. See [Token & cost optimization](#token--cost-optimization) |
 | `ToolFilterMinTools` | `int` | `0` | Once one action clears `ToolFilterMinScore`, at least this many best-ranked actions are sent, whatever their score (up to `ToolFilterMaxTools`). `0` = the threshold alone. A trade-off, not a fix: it can hand the model a read action it needed, or a wrong one it picks instead. See [Semantic tool filtering](#semantic-tool-filtering) |
 | `ToolFilterMinScore` | `float` | `0.35` | Minimum cosine similarity (0–1) for a tool to count as relevant. Higher = stricter |
 | `EnableCompaction` | `bool` | `false` | Compact long conversation history before each call — what is sent, never what is stored (BUG-104). Locally kept history only (Path A: the built-in provider, `ChatHistoryProviderFactory` or a provider instance); not installed with `UseServiceManagedHistory` |
@@ -5061,7 +5559,7 @@ asking for its language, and a Warning is logged.
 | `SafetyCheckFailure` | `MentorSafetyCheckFailure` | `Allow` | What a safety check with **no verdict** (timed out, provider error, custom guardrail threw) does: `Allow` processes the message / shows the reply and logs a warning; `Block` refuses the message ("can't check it right now, try again") or withholds the reply. An UNSAFE verdict blocks under both |
 | `RefuseOutOfScope` | `bool` | `false` | Politely refuse a message that plainly has nothing to do with this application, without calling the coordinator. Asks its own question, which defaults to answering: a name the classifier does not recognise may be one of the application's records, and greetings, follow-ups and questions about the assistant are answered (BUG-105). A short reply ("yes", a choice the assistant offered) is judged with the end of the assistant's last reply, in the same call; the safety check still judges the message alone (BUG-223). With `EnableSafetyCheck` on it travels in the same classifier call; alone it adds one small call per turn. Judged against `HostedToolDomainScope`, or the app's name, description and pages with their descriptions. Counted in `GuardrailBlockCount` |
 | `WarmUpAtStartup` | `bool` | `false` | Build one coordinator when the application starts, so the first visitor does not pay for the shared work: embedding the tool catalogue and the routing exemplars, opening the shared MCP sessions, fetching the remote agent cards. Runs once the host has started (after it starts listening); a failed warm-up never fails the boot, an invalid configuration does ([When the options are read and checked](#when-the-options-are-read-and-checked)). A MAUI app runs no hosted service, so there it does nothing |
-| `WarmUpChatModel` | `bool` | `false` | With `WarmUpAtStartup`, one minimal request to the chat model (`ChatClient`, and `StrongChatClient` when set) once the coordinator is built, so the first turn does not pay for the connection, the provider's empty prompt cache or a local model still loading. At most 16 output tokens; it goes straight to the provider's client, so no history, memory, safety check or dashboard turn. **Every start costs one request per client.** A failure is a warning. Without `WarmUpAtStartup` it does nothing and a warning says so; with a pre-built `Agent` (Path B) it calls nothing |
+| `WarmUpChatModel` | `bool` | `false` | With `WarmUpAtStartup`, one minimal request to the chat model (`ChatClient`, and `StrongChatClient` when set) once the coordinator is built, so the first turn does not pay for the connection, the provider's empty prompt cache or a local model still loading. At most 16 output tokens; it goes straight to the provider's client, so no history, memory, safety check or turn; the request is counted on the dashboard under its model (from 1.5.0), in no session, and reaches the action observers as a `WarmUp` call. **Every start costs one request per client.** A failure is a warning. Without `WarmUpAtStartup` it does nothing and a warning says so; with a pre-built `Agent` (Path B) it calls nothing |
 | `MaxMessageLength` | `int` | `4000` | Max message length in characters (0 = unlimited) |
 | `RateLimitPerUser` | `int` | `0` | Max messages per user per window (0 = disabled). A signed-in user is counted by `ClaimTypes.NameIdentifier`, else `sub`, `oid` or the name; a signed-out visitor according to `AnonymousIdentity`: per session by default, or one global `"anonymous"` counter shared by every visitor with `MentorAnonymousIdentity.Shared`. MCP `tools/call` has its own allowance with the same limit, per `NameIdentifier`, `sub` or `oid`; a caller with none is counted by remote address when `IHttpContextAccessor` is registered, otherwise all such callers share one |
 | `RateLimitWindowSecs` | `int` | `60` | Rate limiting window in seconds |
@@ -5291,20 +5789,20 @@ same event and take the same reply.
 | .NET | 10.0 |
 | Blazor | For the widget: a Blazor Web App (Server or Auto render mode) or Hybrid (MAUI). Any ASP.NET Core app with `Novior.MentorAgent.Server`, no Blazor needed |
 | Novior.MentorAgent.Abstractions | same version (installed with it) |
-| Microsoft.Agents.AI | 1.27.0 |
-| Microsoft.Agents.AI.Workflows | 1.27.0 |
+| Microsoft.Agents.AI | 1.28.0 |
+| Microsoft.Agents.AI.Workflows | 1.28.0 |
 | Microsoft.AspNetCore.Components.Authorization | 10.0.3 |
 | Microsoft.AspNetCore.Components.Web | 10.0.3 |
-| Microsoft.Extensions.AI | 10.11.0 |
+| Microsoft.Extensions.AI | 11.0.0 |
 | Microsoft.Extensions.VectorData.Abstractions | 10.10.0 (the vector store abstractions of `MentorVectorStoreRagSource`; Agent Framework brings it too) |
-| A2A | 1.0.0-preview3 (the A2A client) |
+| A2A | 1.0.0-preview4 (the A2A client) |
 | ModelContextProtocol | 2.3.0 (the MCP client) |
 | System.ClientModel | 1.10.0 |
 
 No AI provider SDK: the host adds its own — see [Provider package versions](#provider-package-versions).
 
 The MCP and A2A **servers** are in `Novior.MentorAgent.Server`, with `ModelContextProtocol.AspNetCore` 2.3.0 and
-`A2A.AspNetCore` 1.0.0-preview3. Up to 1.0.0-rc.14 `MentorAgent` referenced
+`A2A.AspNetCore` 1.0.0-preview4. Up to 1.0.0-rc.14 `MentorAgent` referenced
 `ModelContextProtocol.AspNetCore` and `Microsoft.Agents.AI.Hosting.A2A.AspNetCore` itself, and with them
 ASP.NET Core and the `Microsoft.Agents.AI.Hosting` packages.
 
@@ -5319,10 +5817,10 @@ MentorAgent references no provider SDK, so `Azure.AI.OpenAI`, `OpenAI`, `Microso
 combination needs a hold:
 
 **Azure OpenAI with the Responses API.** `Azure.AI.OpenAI` 2.9.0-beta.1, the latest published version,
-calls a `ResponsesClient` constructor that `OpenAI` 2.11.0 removed. With `OpenAI` 2.11 or later — what
-`Microsoft.Extensions.AI.OpenAI` 10.7.0+, `Microsoft.Agents.AI.OpenAI` and `Microsoft.Agents.AI.Foundry`
-1.18.0+ bring in — `AzureOpenAIClient.GetResponsesClient()` throws when your code calls it, although the build
-is clean:
+calls a `ResponsesClient` constructor that `OpenAI` 2.11.0 removed (2.14.0 does not have it either). With `OpenAI`
+2.11 or later — what `Microsoft.Extensions.AI.OpenAI` 10.7.0+ (11.0.0 requires 2.14.0),
+`Microsoft.Agents.AI.OpenAI` and `Microsoft.Agents.AI.Foundry` 1.18.0+ bring in —
+`AzureOpenAIClient.GetResponsesClient()` throws when your code calls it, although the build is clean:
 
 ```
 System.MissingMethodException: Method not found: 'Void OpenAI.Responses.ResponsesClient..ctor(
@@ -5336,6 +5834,10 @@ Hold `OpenAI` at 2.10:
 <!-- and, only if you use it: -->
 <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="[1.17.0-preview.260804.1]" />
 ```
+
+From 1.5.0 MentorAgent is built on `Microsoft.Extensions.AI` 11.0.0, and this hold — `Microsoft.Extensions.AI.OpenAI`
+10.6.0 running on `Microsoft.Extensions.AI` 11.0.0, with `OpenAI` 2.10.0 and `Azure.AI.OpenAI` 2.9.0-beta.1 — was
+verified with it on 17 November 2026: turns on the Azure OpenAI Responses API, with and without a tool, streamed.
 
 Azure OpenAI with Chat Completions (`GetChatClient`), OpenAI direct and Ollama through its OpenAI endpoint
 need no hold.
@@ -5592,6 +6094,9 @@ conversation belongs to another organization. Reload the page to start a new one
   [Discussions](https://github.com/Novior-dev/MentorAgent/discussions), bugs and feature requests to
   [issues](https://github.com/Novior-dev/MentorAgent/issues/new/choose) on GitHub, and a vulnerability privately to
   security@mentoragent.net. See [SUPPORT.md](https://github.com/Novior-dev/MentorAgent/blob/main/SUPPORT.md).
+- **Accessibility.** The chat widget meets WCAG 2.1 A and AA in what we tested; what was tested, its known limits
+  and how to report a barrier are in
+  [ACCESSIBILITY.md](https://github.com/Novior-dev/MentorAgent/blob/main/ACCESSIBILITY.md).
 - **What changed.** Every package contains `CHANGELOG.md` with the whole history, and its release notes
   on nuget.org are that version's section.
 

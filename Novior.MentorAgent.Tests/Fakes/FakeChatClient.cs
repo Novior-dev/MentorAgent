@@ -56,6 +56,9 @@ internal sealed class FakeChatClient : IChatClient
     /// <summary>Awaited before each response — lets a test interleave a cancel or an approval.</summary>
     internal Func<Task>? BeforeRespond { get; set; }
 
+    /// <summary>Whether the wait of <see cref="BeforeRespond"/> ends when the request's token is cancelled, as a real model's does.</summary>
+    internal bool HonourCancellation { get; set; }
+
     /// <summary>Delay between streamed chunks, so a test can cancel mid-stream deterministically.</summary>
     internal TimeSpan ChunkDelay { get; set; } = TimeSpan.Zero;
 
@@ -211,7 +214,12 @@ internal sealed class FakeChatClient : IChatClient
             throw ex;
         }
 
-        if (BeforeRespond is { } hook) await hook();
+        if (BeforeRespond is { } hook)
+        {
+            // A real model's client gives up its request when the token is cancelled.
+            if (HonourCancellation) await hook().WaitAsync(ct);
+            else await hook();
+        }
 
         ct.ThrowIfCancellationRequested();
 

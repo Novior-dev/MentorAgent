@@ -36,9 +36,16 @@ internal sealed class GroupChatBuilder
     }
 
     public AITool BuildTeamTool(TeamDiscoveryInfo team, IChatClient chatClient)
+        => BuildTeamTool(team, (_, _) => chatClient);
+
+    /// <param name="team">The team.</param>
+    /// <param name="clientFor">
+    /// The client of each member, by its kind and role: story 1289, each member's calls to the model are its own.
+    /// </param>
+    public AITool BuildTeamTool(TeamDiscoveryInfo team, Func<MentorAgentKind, string, IChatClient> clientFor)
     {
         var participants = team.Members
-            .Select(member => BuildMemberAgent(member, chatClient))
+            .Select(member => BuildMemberAgent(member, clientFor(MentorAgentKind.TeamMember, member.Attribute.Role)))
             .ToArray();
 
         _logger.LogDebug("[MentorAgent] GroupChat '{Name}': {N} participants",

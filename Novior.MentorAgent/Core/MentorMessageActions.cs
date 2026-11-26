@@ -112,6 +112,29 @@ internal static class MentorActionFunctions
         => action.Message is { } message
             ? new MentorMessageFunction(action.ToolName, description, action.Method, message, target)
             : AIFunctionFactory.Create(method: action.Method, target: target, name: action.ToolName, description: description);
+
+    /// <summary>
+    /// Story 1773 — the JSON schema of the arguments of the tool <see cref="Create"/> builds for <paramref name="action"/>
+    /// with <paramref name="description"/>, built the same way but without an instance: the type's for a command or a
+    /// query, the method's parameters for the rest. <see langword="null"/> when the method cannot be described.
+    /// </summary>
+    internal static JsonElement? Schema(MethodDiscoveryInfo action, string description)
+    {
+        if (action.Message is { } message)
+            return MentorMessageFunction.SchemaOf(message.MessageType);
+        try
+        {
+            var factory = new AIFunctionFactoryOptions { Name = action.ToolName, Description = description };
+            var function = action.Method.IsStatic
+                ? AIFunctionFactory.Create(action.Method, target: null, factory)
+                : AIFunctionFactory.Create(action.Method, _ => throw new InvalidOperationException("Only described."), factory);
+            return function.JsonSchema;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary>
@@ -131,8 +154,11 @@ internal sealed class MentorMessageFunction(
     public override string Description => description;
 
     /// <inheritdoc/>
-    public override JsonElement JsonSchema
-        => Schemas.GetOrAdd(binding.MessageType, type => AIJsonUtilities.CreateJsonSchema(type, serializerOptions: Options));
+    public override JsonElement JsonSchema => SchemaOf(binding.MessageType);
+
+    /// <summary>The schema of the tool of the command or the query <paramref name="type"/>: its public properties.</summary>
+    internal static JsonElement SchemaOf(Type type)
+        => Schemas.GetOrAdd(type, t => AIJsonUtilities.CreateJsonSchema(t, serializerOptions: Options));
 
     /// <summary>The handler's <c>HandleAsync</c>: the gate finds the action by it.</summary>
     public override MethodInfo? UnderlyingMethod => handleAsync;

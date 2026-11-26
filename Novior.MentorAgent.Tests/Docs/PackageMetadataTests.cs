@@ -43,6 +43,7 @@ public sealed class PackageMetadataTests
     [InlineData(RepoFiles.Blazor)]
     [InlineData(RepoFiles.Declarative)]
     [InlineData(RepoFiles.Server)]
+    [InlineData(RepoFiles.Scanner)]
     public void Every_package_ships_LICENSE_and_NOTICE(string package)
     {
         var packed = XDocument.Load(Path.Combine(RepoFiles.Root, package, package + ".csproj"))

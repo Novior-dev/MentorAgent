@@ -344,6 +344,107 @@ public sealed class A2AServerSurfaceTests
         app.Logs.Records.Should().Contain(r => r.Message.Contains("written without calling any tool"));
     }
 
+    // ── BUG-265 · the announced-action check's two replies ──
+
+    /// <summary>A host with the announced-action check, whose classifier says every reply reports an action.</summary>
+    private static Task<ServerAppFactory> A2AHostWithTheCheckAsync() => ServerAppFactory.CreateAsync(
+        configure: o =>
+        {
+            o.A2AServerEnabled = true;
+            o.A2AServerUrl = "http://localhost/a2a";
+            o.MemoryAutoCapture = false;
+            o.CheckAnnouncedActions = true;
+            o.ClassifierChatClient = new Novior.MentorAgent.Tests.Fakes.FakeChatClient().Say("CLAIMED");
+        },
+        configureApp: a => a.UseEndpoints(e => e.MapMentorAgentA2A()));
+
+    [Fact]
+    public async Task After_the_announced_action_check_the_caller_gets_the_second_reply_alone()
+    {
+        // Found live on the 1.5.0 candidate, asked over A2A how many orders had been delivered: the reply after the read was
+        // taken for a reported action, the check sent its second request, and the caller got both replies in one text,
+        // "…2 ordini.Sono stati consegnati 2 ordini…" — the handler collected every chunk of the task. The widget shows
+        // two messages; a program reads one. The first was judged to report an action that did not run: the second is
+        // the answer, as after the handler's own retry for a grounded one.
+        await using var app = await A2AHostWithTheCheckAsync();
+        app.Chat.CallTool("count_open_orders").Say("Sono stati consegnati 2 ordini.")
+                .Say("Gli ordini consegnati sono 2; nessuna azione è stata fatta.");
+
+        var answer = await AskOverA2AAsync(app, "quanti ordini sono stati consegnati?");
+
+        app.Logs.Records.Should().Contain(r => r.Message.Contains("Announced-action check: CLAIMED after 1 call(s)"));
+        answer.Should().Be("Gli ordini consegnati sono 2; nessuna azione è stata fatta.",
+            "only the second reply is returned: one reply per task, never two joined");
+    }
+
+    [Fact]
+    public async Task When_the_check_second_request_fails_the_caller_gets_the_first_reply()
+    {
+        await using var app = await A2AHostWithTheCheckAsync();
+        app.Chat.CallTool("count_open_orders").Say("Sono stati consegnati 2 ordini.")
+                .Respond((_, _) => throw new InvalidOperationException("down"));
+
+        var answer = await AskOverA2AAsync(app, "quanti ordini sono stati consegnati?");
+
+        app.Logs.Records.Should().Contain(r => r.Message.Contains("second request after an announced action failed"));
+        answer.Should().Be("Sono stati consegnati 2 ordini.", "a second request that fails is not the turn's failure");
+    }
+
+    [Fact]
+    public async Task When_the_check_second_request_writes_nothing_the_caller_gets_the_first_reply()
+    {
+        await using var app = await A2AHostWithTheCheckAsync();
+        app.Chat.CallTool("count_open_orders").Say("Sono stati consegnati 2 ordini.").Say("");
+
+        var answer = await AskOverA2AAsync(app, "quanti ordini sono stati consegnati?");
+
+        app.Logs.Records.Should().Contain(r => r.Message.Contains("the second request answered without calling one"));
+        answer.Should().Be("Sono stati consegnati 2 ordini.", "an empty second reply leaves the caller the first");
+    }
+
+    [Fact]
+    public async Task When_the_check_second_request_breaks_off_mid_reply_the_caller_gets_the_first_reply_whole()
+    {
+        await using var app = await ServerAppFactory.CreateAsync(
+            configure: o =>
+            {
+                o.A2AServerEnabled = true;
+                o.A2AServerUrl = "http://localhost/a2a";
+                o.MemoryAutoCapture = false;
+                o.CheckAnnouncedActions = true;
+                o.ClassifierChatClient = new Novior.MentorAgent.Tests.Fakes.FakeChatClient().Say("CLAIMED");
+                o.ChatClient = new BreaksMidReply(o.ChatClient!, breakOn: 3);   // the read, the reply, the second request
+            },
+            configureApp: a => a.UseEndpoints(e => e.MapMentorAgentA2A()));
+        app.Chat.CallTool("count_open_orders").Say("Sono stati consegnati 2 ordini.");
+
+        var answer = await AskOverA2AAsync(app, "quanti ordini sono stati consegnati?");
+
+        app.Logs.Records.Should().Contain(r => r.Message.Contains("second request after an announced action failed"));
+        answer.Should().Be("Sono stati consegnati 2 ordini.", "never the words of a reply that broke off");
+    }
+
+    /// <summary>The model's client, whose <paramref name="breakOn"/>-th streamed reply breaks off after a few words.</summary>
+    private sealed class BreaksMidReply(Microsoft.Extensions.AI.IChatClient inner, int breakOn)
+        : Microsoft.Extensions.AI.DelegatingChatClient(inner)
+    {
+        private int _streams;
+
+        public override async IAsyncEnumerable<Microsoft.Extensions.AI.ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
+            Microsoft.Extensions.AI.ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _streams) == breakOn)
+            {
+                yield return new Microsoft.Extensions.AI.ChatResponseUpdate(Microsoft.Extensions.AI.ChatRole.Assistant, "Gli ordini consegnati ");
+                throw new InvalidOperationException("the connection dropped");
+            }
+            await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken))
+                yield return update;
+        }
+    }
+
     private static Task<ServerAppFactory> A2AHostWithSkillsAsync() => ServerAppFactory.CreateAsync(
         configure: o =>
         {

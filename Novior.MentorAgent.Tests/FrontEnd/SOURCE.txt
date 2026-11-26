@@ -1,0 +1,42 @@
+Test fixtures only: used by Novior.MentorAgent.Tests to run a real React front end in a browser, never shipped in a
+package (the test project is not packable).
+
+- react.production.js            react 19.2.7, cjs/react.production.js                 MIT, LICENSE-react.txt
+- react-dom.production.js        react-dom 19.2.7, cjs/react-dom.production.js         MIT, LICENSE-react.txt
+- react-dom-client.production.js react-dom 19.2.7, cjs/react-dom-client.production.js  MIT, LICENSE-react.txt
+- scheduler.production.js        scheduler 0.27.0, cjs/scheduler.production.js         MIT, LICENSE-react.txt
+- signalr.min.js                 @microsoft/signalr 10.0.0, dist/browser/signalr.min.js MIT, LICENSE-signalr.txt
+
+Copied unchanged from the npm packages of the React sample's node_modules.
+
+- angular.main.js                built ahead of time from angular/ (main.ts, angular.json, tsconfig.json)  LICENSE-angular.txt
+- LICENSE-angular.txt            the build's 3rdpartylicenses.txt: Angular (MIT), RxJS (Apache-2.0), tslib (0BSD)
+
+angular.main.js is dist/browser/main.js of this build, in an empty folder with angular/ copied into it and src/main.ts
+being angular/main.ts, and this package.json (exact versions, from registry.npmjs.org):
+
+  {
+    "name": "mentoragent-angular-fixture",
+    "private": true,
+    "dependencies": {
+      "@angular/common": "22.2.4", "@angular/compiler": "22.2.4", "@angular/core": "22.2.4",
+      "@angular/forms": "22.2.4", "@angular/platform-browser": "22.2.4", "@angular/router": "22.2.4",
+      "rxjs": "7.8.2", "tslib": "2.9.1"
+    },
+    "devDependencies": {
+      "@angular/build": "22.2.4", "@angular/cli": "22.2.4", "@angular/compiler-cli": "22.2.4", "typescript": "6.0.3"
+    }
+  }
+
+  set NG_CLI_ANALYTICS=false
+  npm install --ignore-scripts --before=2026-11-06T00:00:00Z
+  node node_modules/@angular/cli/bin/ng.js build
+
+@angular/router is used for its Routes type only: the bundle does not contain it.
+
+- axe.min.js                     axe-core 4.10.3, axe.min.js                           MPL-2.0, LICENSE-axe-core.txt
+
+Copied unchanged from https://registry.npmjs.org/axe-core/-/axe-core-4.10.3.tgz (integrity
+sha512-Xm7bpRXnDSX2YE2YFfBk2FnF0ep6tmG7xPh8iHee8MIcrgq762Nkce856dYtJYLkuIoYZvGfTs/PbZhideTcEg==, checked against the
+registry); LICENSE-axe-core.txt is the package's LICENSE. The accessibility tests (AccessibilityBrowserTests) load it
+into their page.

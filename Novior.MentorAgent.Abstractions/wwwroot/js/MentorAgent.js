@@ -9,6 +9,30 @@ var __mentorAgentPrevious = window.MentorAgent;
 // changes (ContractNameTests).
 window.MentorAgent = {
 
+    // ── Loaded (BUG-261) ──────────────────────────────────────────────────────
+    //
+    // Does nothing: the widget calls it until it answers, so that its first calls wait for this file. Without a
+    // prerender the widget adds this file to the head with its first render, and the browser runs it later.
+    ready: () => { },
+
+    // ── A modal dialog keeps the focus (BUG-262) ──────────────────────────────
+    //
+    // The tour: Tab after its last control goes to its first, Shift+Tab before its first (or on the dialog itself) to
+    // its last. Once per element; the listener goes with the element.
+    trapFocus: (el) => {
+        if (!el || el.__mentorTrap) return;
+        el.__mentorTrap = true;
+        el.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab') return;
+            const items = [...el.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+                .filter(n => !n.disabled && n.getClientRects().length > 0);
+            if (items.length === 0) { e.preventDefault(); return; }
+            const first = items[0], last = items[items.length - 1], at = document.activeElement;
+            if (e.shiftKey && (at === first || at === el)) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
+        });
+    },
+
     // ── Scroll ────────────────────────────────────────────────────────────────
     scrollToBottom: (el) => {
         if (el) el.scrollTop = el.scrollHeight;

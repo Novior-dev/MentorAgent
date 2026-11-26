@@ -22,10 +22,12 @@ internal static class RepoFiles
     internal const string Blazor       = "Novior.MentorAgent.Blazor";
     internal const string Declarative  = "Novior.MentorAgent.Declarative";
     internal const string Server       = "Novior.MentorAgent.Server";
+    internal const string Scanner      = "Novior.MentorAgent.Scanner";
+    internal const string Cli          = "Novior.MentorAgent.Cli";
     internal const string Tests        = "Novior.MentorAgent.Tests";
 
-    /// <summary>The five package projects.</summary>
-    internal static IReadOnlyList<string> Packages { get; } = [Core, Abstractions, Blazor, Declarative, Server];
+    /// <summary>The seven package projects: every packable project of the solution (<c>RepoFilesTests</c> holds them equal).</summary>
+    internal static IReadOnlyList<string> Packages { get; } = [Core, Abstractions, Blazor, Declarative, Server, Scanner, Cli];
 
     /// <summary>Repository root — the folder holding <see cref="Solution"/>.</summary>
     internal static string Root { get; } = LocateRoot();
@@ -67,7 +69,10 @@ internal static class RepoFiles
             : $"the sample repository is not beside {Root} as {string.Join(" or ", SampleFolderNames)}; " +
               $"set {SamplesVariable} to its folder";
 
-    /// <summary>The five package READMEs, keyed by the short name used in failure messages.</summary>
+    /// <summary>
+    /// The package READMEs that carry the guide, keyed by the short name used in failure messages. Novior.MentorAgent.Scanner's
+    /// points to the core's, where its section is.
+    /// </summary>
     internal static IReadOnlyDictionary<string, string> Readmes { get; } =
         new Dictionary<string, string>
         {
@@ -76,13 +81,17 @@ internal static class RepoFiles
             ["blazor"] = Path.Combine(Root, Blazor, "README.md"),
             ["abstr"]  = Path.Combine(Root, Abstractions, "README.md"),
             ["decl"]   = Path.Combine(Root, Declarative, "README.md"),
+            // Story 1636, slice C: the scanner's README, now that it has its text.
+            ["scanner"] = Path.Combine(Root, Scanner, "README.md"),
+            // Story 1637: the README of novior-mentor.
+            ["cli"]     = Path.Combine(Root, Cli, "README.md"),
         };
 
     /// <summary>Reads one README by its short name.</summary>
     internal static string Readme(string name) => File.ReadAllText(Readmes[name]);
 
     /// <summary>
-    /// Every source file of the five packages. Excludes build output and the test project, so a
+    /// Every source file of the packages. Excludes build output and the test project, so a
     /// symbol that exists only in a test cannot make a documentation claim look satisfied.
     /// </summary>
     internal static IReadOnlyList<string> SourceFiles { get; } = EnumerateSource();

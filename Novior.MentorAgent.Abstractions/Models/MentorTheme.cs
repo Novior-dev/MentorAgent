@@ -4,14 +4,14 @@
 public enum MentorTheme
 {
     /// <summary>
-    /// Dark translucent glass with a blue accent: the baseline in <c>MentorAgent.css</c>, a navy panel at 55%
-    /// opacity over a blur. On a light page it shows as dark grey with the page behind it; there, use
-    /// <see cref="Minimal"/>.
+    /// Dark and nearly opaque, with a blue accent: the baseline in <c>MentorAgent.css</c>, a navy panel at 96%
+    /// opacity, so that its text keeps its contrast on any page (from 1.5.0; up to 1.4 it was glass at 55%, which
+    /// <c>--bm-bg-panel</c> brings back). On a light page, <see cref="Minimal"/> matches it.
     /// </summary>
     Default = 0,
     /// <summary>
-    /// Dark and nearly opaque: a near-black panel at 85%, darker than <see cref="Default"/>. For apps that are
-    /// already dark, where the default glass looks washed out.
+    /// Dark and nearly opaque: a near-black panel at 96%, darker than <see cref="Default"/>. For apps that are
+    /// already dark.
     /// </summary>
     Dark = 1,
     /// <summary>Light: a white panel, thin borders and a soft shadow. The theme for a light page.</summary>

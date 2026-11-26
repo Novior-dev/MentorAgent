@@ -112,6 +112,48 @@ public sealed class BadgeLocalisationTests : ComponentTestBase
             "ships one language to all ten audiences");
     }
 
+    [Fact]
+    public void No_component_names_a_control_with_a_literal()
+    {
+        // BUG-257: the close buttons of the MCP and A2A details said "Chiudi", by title alone, in every language. A name
+        // or a title written in the markup is one language for all ten: every one comes from the localiser, or from
+        // the application (a server's or an agent's name), always through an expression.
+        var components = Path.Combine(RepositoryRoot(), RepoFiles.Abstractions, "Components");
+        var literal = new System.Text.RegularExpressions.Regex(@"\b(title|aria-label)=""(?!@)[^""]*""");
+        var offenders = new List<string>();
+
+        foreach (var file in Directory.EnumerateFiles(components, "*.razor", SearchOption.AllDirectories))
+            foreach (System.Text.RegularExpressions.Match m in literal.Matches(File.ReadAllText(file)))
+                offenders.Add($"{Path.GetFileName(file)}: {m.Value}");
+
+        string.Join(" | ", offenders).Should().BeEmpty("a control's name and title speak the widget's language");
+    }
+
+    [Theory]
+    [InlineData(MentorLanguage.English, "Close")]
+    [InlineData(MentorLanguage.Japanese, "閉じる")]
+    public void The_close_buttons_of_the_MCP_and_A2A_details_are_named_in_the_widgets_language(MentorLanguage language, string close)
+    {
+        Widget.Language = language;
+        var cut = Render<ChatWidget>();
+        cut.Find(".bm-fab").Click();
+        cut.Find(".bm-mcp-pill").Click();
+        cut.Find(".bm-a2a-pill").Click();
+
+        foreach (var button in new[] { cut.Find(".bm-mcp-detail__close"), cut.Find(".bm-a2a-detail__close") })
+        {
+            button.GetAttribute("aria-label").Should().Be(close, "an icon-only button is named by its aria-label");
+            button.GetAttribute("title").Should().Be(close);
+        }
+
+        Widget.Language = language;
+        var mcp = Render<McpDetailBar>(p => p.Add(c => c.Visible, true)
+            .Add(c => c.ServerStatus, new Dictionary<string, bool?> { ["filesystem"] = true }));
+        mcp.Find(".bm-mcp-detail__close").GetAttribute("aria-label").Should().Be(close, "the component on its own too");
+        Render<A2ADetailBar>(p => p.Add(c => c.Visible, true))
+            .Find(".bm-a2a-detail__close").GetAttribute("aria-label").Should().Be(close);
+    }
+
     /// <summary>Does nothing; this file is about markup, not turns.</summary>
     private sealed class StubOrchestrator : IMentorOrchestrator
     {

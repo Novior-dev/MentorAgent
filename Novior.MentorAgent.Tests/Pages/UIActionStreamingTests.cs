@@ -38,7 +38,7 @@ public sealed class UIActionStreamingTests
 
         /// <summary>
         /// Story 1288 — the run as the agent makes it: the page's actions are tools of the request, called by a
-        /// function-invoking client over the middleware. Up to 1.3.0 the middleware ran them in a loop of its own.
+        /// function-invoking client over the middleware. Up to 1.3.1 the middleware ran them in a loop of its own.
         /// </summary>
         private (IChatClient Client, ChatOptions Options) Run()
         {

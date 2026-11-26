@@ -18,8 +18,15 @@ namespace Novior.MentorAgent.Middleware;
 /// MentorAgent's. Below the function-invoking client, so neither the agent's history nor
 /// that client's list of messages ever holds it, and only for that one request: the function-invoking client calls this
 /// one again with the tool's result, and a model told once more to call the tool could call it twice. With the history
-/// kept by the service (a request with a <see cref="ChatOptions.ConversationId"/>), every message of a request is stored
-/// there, so the instruction stays in the instructions, as the notice of an action left out does (BUG-200).
+/// kept by the service (a request with a <see cref="ChatOptions.ConversationId"/>, or any request when the host keeps
+/// its history there, the first of a conversation included), every message of a request is stored there, so the
+/// instruction stays in the instructions, as the notice of an action left out does (BUG-200).
+/// </para>
+///
+/// <para>
+/// BUG-238: with the history kept by the service the second request is sent from the response the turn started from,
+/// with the user's message again (<see cref="Core.MentorSessionManager.BranchAsync"/>): the model does not read the
+/// first reply there, and that reply stays on a branch nobody follows.
 /// </para>
 ///
 /// <para>
@@ -32,7 +39,8 @@ namespace Novior.MentorAgent.Middleware;
 /// was sent, which the classifier may name.
 /// </para>
 /// </summary>
-internal sealed class AnnouncedActionChatClient(IChatClient innerClient, ILogger? logger = null) : DelegatingChatClient(innerClient)
+internal sealed class AnnouncedActionChatClient(IChatClient innerClient, ILogger? logger = null, bool serviceHistory = false)
+    : DelegatingChatClient(innerClient)
 {
     /// <summary>The heading, English in every language as the other headings of the prompts.</summary>
     internal const string Heading = "## No action ran in this turn — MANDATORY for THIS request\n";
@@ -96,6 +104,18 @@ internal sealed class AnnouncedActionChatClient(IChatClient innerClient, ILogger
         if (properties is null || !properties.TryGetValue(MentorChatKeys.ModelNotCalled, out var value)) return false;
         cause = value?.ToString();
         return true;
+    }
+
+    /// <summary>
+    /// BUG-238 — how many requests of the coordinator this turn made so far. One: the reply came from a single request, so
+    /// no function was called, and a branch from the turn's start leaves out only that reply.
+    /// </summary>
+    internal int Requests
+    {
+        get
+        {
+            lock (_offered) return _requests;
+        }
     }
 
     /// <summary>The names of the tools the requests of this turn were sent with.</summary>
@@ -166,9 +186,9 @@ internal sealed class AnnouncedActionChatClient(IChatClient innerClient, ILogger
             string.Join(", ", options?.Tools?.Select(t => t.Name) ?? []),
             options?.ToolMode?.ToString() ?? "default");
 
-        if (options?.ConversationId is not null)
+        if (options?.ConversationId is not null || serviceHistory)
         {
-            var copy = options.Clone();
+            var copy = options?.Clone() ?? new ChatOptions();
             copy.Instructions = string.IsNullOrEmpty(copy.Instructions) ? instruction : copy.Instructions + "\n\n" + instruction;
             return (messages, copy);
         }

@@ -65,11 +65,24 @@ internal sealed class RoutingChatClient : DelegatingChatClient
     /// </summary>
     internal void BeginUserTurn() => _userTurnStarting = true;
 
+    /// <summary>Set by <see cref="ContinueTurn"/>; consumed by the next request.</summary>
+    private bool _continuesTurn;
+
+    /// <summary>
+    /// Tells the router that the next request goes on with the turn in progress, though it does not end on a tool result:
+    /// the second request of the announced-action check, which ends on MentorAgent's instruction, or, with the history
+    /// kept by the service, sends the user's message again (BUG-238). It is served by the turn's model, and nothing is
+    /// decided again: the instruction is not the user's message, and the check's request must not change the model.
+    /// </summary>
+    internal void ContinueTurn() => _continuesTurn = true;
+
     private bool ContinuesTurn(IReadOnlyList<ChatMessage> list)
     {
         var startsTurn = _userTurnStarting;
+        var continues = _continuesTurn;
         _userTurnStarting = false;
-        return !startsTurn && TurnContinuation.IsToolResult(list);
+        _continuesTurn = false;
+        return !startsTurn && (continues || TurnContinuation.IsToolResult(list));
     }
 
     public RoutingChatClient(

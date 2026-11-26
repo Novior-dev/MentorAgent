@@ -157,6 +157,15 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IMentorActionCatalog, MentorActionCatalog>();
         // Story 1288, slice C — the names of the UI actions every page of the process declared, for the catalogue.
         services.TryAddSingleton<MentorPageActionTrace>();
+        // Story 1635 — the pages of the application, from its routes and from its WebAssembly clients, for the AutoMentor.
+        services.TryAddSingleton<MentorPageDirectory>();
+        // Story 1640 — what the widget observes of the pages, one per circuit (Blazor Server, MAUI Hybrid). TryAdd: the
+        // WebAssembly client of Novior.MentorAgent.Blazor registers its own, which sends to the hub.
+        services.TryAddScoped<IMentorPageObserver, MentorHostPageObserver>();
+        // Story 1638 — the recipes of the pages, and where they run: the user's browser, through the scope's JavaScript
+        // runtime. TryAdd: the hub of Novior.MentorAgent.Server runs them in its WebAssembly client.
+        services.TryAddSingleton<MentorRecipeRegistry>();
+        services.TryAddScoped<IMentorRecipeRunner, MentorHostRecipeRunner>();
 
         // Wave 5 #16 — single source of truth for "does this tool need approval, and what does the
         // banner say?", shared by the middleware (blocking flow), the orchestrator (native AF flow)
@@ -422,6 +431,21 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IMentorTeamSource, TSource>());
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an <see cref="IMentorRecipeSource"/>: when a session begins, it is asked for recipes that are not written
+    /// in the application's code, each offered on its page as one of the page's actions. A singleton, resolved from the
+    /// application's root services; every source registered is asked, in the order of registration, and the first to
+    /// give a route and a name keeps them. Registering the same type twice registers it once.
+    /// </summary>
+    /// <typeparam name="TSource">The source.</typeparam>
+    public static IServiceCollection AddMentorRecipeSource<TSource>(this IServiceCollection services)
+        where TSource : class, IMentorRecipeSource
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMentorRecipeSource, TSource>());
         return services;
     }
 

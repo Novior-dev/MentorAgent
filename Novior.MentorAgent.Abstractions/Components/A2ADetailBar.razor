@@ -1,5 +1,7 @@
+@using Novior.MentorAgent.Abstractions.Core
 @using Novior.MentorAgent.Abstractions.Models
 @inject IOptions<MentorWidgetOptions> Options
+@inject MentorLocalizer ApplicationL
 
 @{
     var agents = Options.Value.RemoteAgentDisplays;
@@ -21,9 +23,9 @@
                     </div>
                 }
             </div>
-            <button class="bm-a2a-detail__close" @onclick="OnClose" title="Chiudi">
+            <button class="bm-a2a-detail__close" @onclick="OnClose" title="@L.Get("header.close")" aria-label="@L.Get("header.close")">
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
-                     width="12" height="12" aria-hidden="true">
+                     width="12" height="12" aria-hidden="true" focusable="false">
                     <path d="M3 3l10 10M13 3L3 13" />
                 </svg>
             </button>
@@ -32,6 +34,9 @@
 }
 
 @code {
+    // The close button is named in the language of the ChatWidget around this component, else the application's.
+    [CascadingParameter(Name = ChatWidget.LocalizerCascade)] private MentorLocalizer? WidgetL { get; set; }
+    private MentorLocalizer L => WidgetL ?? ApplicationL;
     [Parameter] public bool Visible { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
 }

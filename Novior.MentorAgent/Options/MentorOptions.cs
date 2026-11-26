@@ -1437,9 +1437,13 @@ public sealed class MentorOptions
     /// The reply the user is reading is not held back; the second request goes on in the same turn.
     /// </para>
     /// <para>
-    /// On Path A with the history kept by MentorAgent: not with <see cref="UseServiceManagedHistory"/>, nor with a
-    /// pre-built <see cref="Agent"/>. A question that fails or runs out of <see cref="SafetyCheckTimeout"/> leaves the turn
-    /// as it is.
+    /// On Path A, not with a pre-built <see cref="Agent"/>. With <see cref="UseServiceManagedHistory"/> every message of a
+    /// request is stored on the service: the second request is sent from the response the turn started from, with the
+    /// user's message again and the instruction in its instructions, and the conversation goes on from its answer
+    /// (BUG-238). Only a turn of one request is checked there, so nothing that ran is left out; with an
+    /// <c>IMentorSessionManager</c> of the application the check is not made, and a Warning at startup says so. The
+    /// second request is served by the turn's model, routing decides nothing again (BUG-245). A question that fails or
+    /// runs out of <see cref="SafetyCheckTimeout"/> leaves the turn as it is.
     /// </para>
     /// <para>Read again at every turn: a change made while the application runs applies from the next turn of every session (<see cref="MentorRuntimeOptions"/>).</para>
     /// Default: <see langword="true"/>.

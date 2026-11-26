@@ -30,6 +30,15 @@ public sealed class WasmMentorOrchestrator : IMentorOrchestrator, IAsyncDisposab
         _http        = http;
     }
 
+    /// <summary>Story 1638 — runs the recipes the server asks for, and knows the page shown; none without a browser.</summary>
+    internal WasmRecipeClient? Recipes { get; set; }
+
+    /// <summary>Story 1290 — the assistant turned off by the server's application: no turn is sent while it is off.</summary>
+    internal WasmAssistantStatus? Status { get; set; }
+
+    /// <summary>How long a message waits for the server to say whether the assistant is on; then it goes as on.</summary>
+    internal TimeSpan StatusWait { get; set; } = TimeSpan.FromSeconds(5);
+
     /// <summary>Ensures the SignalR connection is established.</summary>
     public async Task InitializeAsync(CancellationToken ct = default)
         => await _hub.StartAsync(ct);
@@ -53,8 +62,16 @@ public sealed class WasmMentorOrchestrator : IMentorOrchestrator, IAsyncDisposab
             await _hub.StartAsync(ct);
         }
 
+        // Story 1290 — with the assistant turned off nothing is sent: the widget shows that it is off.
+        if (Status is { } status && !await status.ReadIsOnAsync(StatusWait, ct))
+        {
+            _logger.LogWarning("[MentorAgent.Blazor] The assistant is turned off: the message was not sent.");
+            return;
+        }
+
         // Send page context before each message so the server has the current state
         var snapshot = _pageContext.BuildSnapshot();
+        snapshot.Path = Recipes?.PagePath();   // story 1638: the server offers the recipes of this page
         await _hub.UpdatePageContextAsync(snapshot, ct);
         if (message.Language is null)
             await _hub.SendMessageAsync(message.Text, message.Attachments, ct);

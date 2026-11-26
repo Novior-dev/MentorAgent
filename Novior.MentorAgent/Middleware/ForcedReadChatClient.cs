@@ -105,7 +105,9 @@ internal sealed class ForcedReadChatClient : DelegatingChatClient
         var reads = tools.Where(t => t is AIFunction f && _isForcibleRead(f.Name)).ToList();
         if (reads.Count == 0) return options;
 
-        if (await _classify(message, Reads, ct) != Core.RequestKind.Lookup) return options;
+        // BUG-247: with the page's own actions shown, a request for one of them is not forced onto the reads.
+        var shape = Reads with { PageActions = Core.RequestClassifier.PageActions(tools) };
+        if (await _classify(message, shape, ct) != Core.RequestKind.Lookup) return options;
 
         var forced = new List<AITool>(reads.Count + _waysOut.Count);
         forced.AddRange(reads);

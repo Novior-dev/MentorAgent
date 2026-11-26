@@ -29,6 +29,20 @@ public sealed class RepoFilesTests
     }
 
     [Fact]
+    public void The_package_list_is_every_packable_project_of_the_solution()
+    {
+        // Story 1636: the sixth package, Novior.MentorAgent.Scanner. A package missing from RepoFiles.Packages is missing
+        // from every check that reads the list: metadata, README references, the local feeds of the package tests.
+        var solution = System.Xml.Linq.XDocument.Load(Path.Combine(RepoFiles.Root, RepoFiles.Solution));
+        var packable = solution.Descendants("Project")
+            .Select(p => Path.Combine(RepoFiles.Root, ((string)p.Attribute("Path")!).Replace('/', Path.DirectorySeparatorChar)))
+            .Where(path => System.Xml.Linq.XDocument.Load(path).Descendants("IsPackable").Any(e => e.Value.Trim() == "true"))
+            .Select(path => Path.GetFileNameWithoutExtension(path));
+
+        packable.Should().BeEquivalentTo(RepoFiles.Packages);
+    }
+
+    [Fact]
     public void A_test_run_writes_the_ledgers_outside_the_tracked_files_unless_asked()
     {
         // BUG-190: every dotnet test rewrote option-coverage.md and claims.tsv, so a run left the working tree changed.

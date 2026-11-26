@@ -309,7 +309,8 @@ public sealed class ActionPolicyTests
         host.Get<TestOrderService>().Invoked.Should().BeEmpty();
         observer.Steps("count_open_orders").Should().Equal("Denied/not-authorized");
         p2.Asked("count_open_orders").Should().BeEmpty("p1 said no");
-        WhatTheModelRead(host.Chat).Should().Contain(t => t.Contains("you are not allowed to use this action"));
+        WhatTheModelRead(host.Chat).Should().Contain(t => t.Contains("a rule of the application does not offer this action here"),
+            "a policy's no is a rule, not the user's fault (BUG-248)");
     }
 
     // ── A policy that fails ──────────────────────────────────────────────────────

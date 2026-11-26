@@ -281,6 +281,49 @@ public sealed class PageContextTests
         HintFor(type).Should().Be(expected);
     }
 
+    /// <summary>
+    /// BUG-242 — a struct, or a class, that JSON writes as one text or one number was described by its properties: a
+    /// <c>DateOnly</c> as <c>{ year: integer, month: integer, day: integer, … }</c>, which the model followed and the
+    /// handler could not read; an unsigned integer or a <c>char</c> by its .NET name, <c>UInt32</c> or <c>Char</c>.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(DateOnly), "string (ISO 8601 date)")]
+    [InlineData(typeof(TimeOnly), "string (time, HH:mm:ss)")]
+    [InlineData(typeof(TimeSpan), "string (duration, d.hh:mm:ss)")]
+    [InlineData(typeof(uint), "integer")]
+    [InlineData(typeof(ulong), "integer")]
+    [InlineData(typeof(ushort), "integer")]
+    [InlineData(typeof(sbyte), "integer")]
+    [InlineData(typeof(char), "string (one character)")]
+    [InlineData(typeof(Uri), "string (URI)")]
+    [InlineData(typeof(DateOnly?), "string (ISO 8601 date)?")]
+    [InlineData(typeof(TimeSpan?), "string (duration, d.hh:mm:ss)?")]
+    public void A_value_JSON_writes_as_one_text_or_number_is_described_by_that_shape(Type type, string expected)
+    {
+        HintFor(type).Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task A_value_written_as_its_hint_says_reaches_the_typed_handler()
+    {
+        // What the hint tells the model to send is what the handler reads.
+        (await Received<DateOnly>("\"2026-12-01\"")).Should().Be(new DateOnly(2026, 12, 1));
+        (await Received<TimeOnly>("\"14:30:00\"")).Should().Be(new TimeOnly(14, 30));
+        (await Received<TimeSpan>("\"1.02:30:00\"")).Should().Be(new TimeSpan(1, 2, 30, 0));
+        (await Received<uint>("7")).Should().Be(7u);
+        (await Received<char>("\"x\"")).Should().Be('x');
+        (await Received<Uri>("\"https://example.com/orders/7\"")).Should().Be(new Uri("https://example.com/orders/7"));
+    }
+
+    private static async Task<T?> Received<T>(string json)
+    {
+        var ctx = New();
+        T? received = default;
+        ctx.RegisterUIActionAsync<T>("a", "d", v => { received = v; return Task.CompletedTask; });
+        await ctx.UIActions["a"].HandlerAsync!(JsonDoc(json));
+        return received;
+    }
+
     [Fact]
     public void An_enum_parameter_lists_its_allowed_values()
     {

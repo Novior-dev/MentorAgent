@@ -38,6 +38,76 @@ public sealed class OnboardingTourTests : ComponentTestBase
             if (onIndexChanged is not null) p.Add(c => c.OnIndexChanged, onIndexChanged);
         });
 
+    // ── BUG-263: a screen reader hears the step it moves to ─────────────────────
+    // The focus stays on Next or Back as the step changes, and Narrator said nothing of the new step: the user pressed
+    // Tab to hear it. A live region inside the dialog says it, only when the step changes.
+
+    private string Announced(IRenderedComponent<OnboardingTour> cut)
+        => cut.Find(".bm-tour [aria-live='polite']").TextContent;
+
+    private IReadOnlyList<string> FocusMoves()
+        => [.. JSInterop.Invocations.Where(i => i.Identifier == "Blazor._internal.domWrapper.focus")
+            .Select(i => ((Microsoft.AspNetCore.Components.ElementReference)i.Arguments[0]!).Id)];
+
+    [Fact]
+    public void Opened_the_tour_announces_nothing_of_its_own_the_dialog_is_read_with_the_focus()
+    {
+        var cut = RenderTour();
+
+        var region = cut.Find(".bm-tour [aria-live='polite']");
+        region.GetAttribute("aria-atomic").Should().Be("true");
+        region.ClassList.Should().Contain("bm-sr-only", "it is for a screen reader only");
+        region.TextContent.Should().BeEmpty("the step would be read twice as the tour opens");
+    }
+
+    [Fact]
+    public void Next_and_Back_announce_the_step_they_move_to_and_leave_the_focus_on_the_button()
+    {
+        var cut = RenderTour();
+        var before = FocusMoves().Count;
+
+        cut.Find(".bm-tour__actions .bm-btn--primary").Click();
+        Announced(cut).Should().Be("Step 2 of 3. Orders. Track and cancel orders.");
+        cut.Find(".bm-tour__actions .bm-btn--primary").Click();
+        Announced(cut).Should().Be("Step 3 of 3. Reports. Export the monthly ledger.");
+        cut.Find(".bm-tour__actions .bm-btn--ghost").Click();
+        Announced(cut).Should().Be("Step 2 of 3. Orders. Track and cancel orders.");
+
+        FocusMoves().Count.Should().Be(before, "with Enter the user goes on from step to step, the focus on the button");
+    }
+
+    [Fact]
+    public void Back_to_the_first_step_gives_the_focus_to_Next_since_Back_is_disabled_there()
+    {
+        var cut = RenderTour(startIndex: 1);
+        var before = FocusMoves().Count;
+
+        cut.Find(".bm-tour__actions .bm-btn--ghost").Click();
+
+        Announced(cut).Should().Be("Step 1 of 3. Welcome. This is the assistant.");
+        cut.Find(".bm-tour__actions .bm-btn--ghost").HasAttribute("disabled").Should().BeTrue();
+        var next = ((Microsoft.AspNetCore.Components.ElementReference)typeof(OnboardingTour)
+            .GetField("_next", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(cut.Instance)!).Id;
+        cut.WaitForAssertion(() => FocusMoves().Skip(before).Should().Equal([next],
+            "the focus of the disabled Back would be lost: it goes to Next"));
+    }
+
+    [Fact]
+    public void A_title_that_already_ends_a_sentence_gets_no_full_stop_of_its_own()
+    {
+        // Heard live: "Welcome to the demo!. Manage…".
+        var cut = RenderTour([new("Welcome to the demo!", "Hello."), new("Is it clear?", "Ask."), new("Orders", "Track them.")]);
+
+        cut.Find(".bm-tour__actions .bm-btn--primary").Click();
+        Announced(cut).Should().Be("Step 2 of 3. Is it clear? Ask.");
+        cut.Find(".bm-tour__actions .bm-btn--ghost").Click();
+        Announced(cut).Should().Be("Step 1 of 3. Welcome to the demo! Hello.");
+        cut.Find(".bm-tour__actions .bm-btn--primary").Click();
+        cut.Find(".bm-tour__actions .bm-btn--primary").Click();
+        Announced(cut).Should().Be("Step 3 of 3. Orders. Track them.");
+    }
+
     // ── Rendering ───────────────────────────────────────────────────────────────
 
     [Fact]

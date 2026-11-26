@@ -40,8 +40,9 @@ public sealed class OptionExampleCoverageTests
     /// Names the row regex picks up that are not members of ours at all — a BCL type used as a
     /// column value, and a class named in prose. Deliberately tiny and explicit: an allow-list is
     /// how this kind of test quietly stops meaning anything, so anything added here needs a reason.
+    /// <c>TimeOnly</c> is a BCL type too, a row of the table of generated parameter hints (BUG-242).
     /// </summary>
-    private static readonly HashSet<string> NotOurMembers = ["Guid", "MentorLanguageExtensions"];
+    private static readonly HashSet<string> NotOurMembers = ["Guid", "MentorLanguageExtensions", "TimeOnly"];
 
     private static (HashSet<string> Documented, string Code) Read()
     {

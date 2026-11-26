@@ -11,6 +11,12 @@ internal interface IMentorEndpointActionRunner
 {
     /// <summary>The tool for <paramref name="action"/>, whose <see cref="MethodDiscoveryInfo.Endpoint"/> is set.</summary>
     AIFunction Create(MethodDiscoveryInfo action, IServiceProvider services);
+
+    /// <summary>
+    /// Story 1773 — the JSON schema of the arguments of the tool <see cref="Create"/> builds for <paramref name="action"/>:
+    /// the route's, the query's and the body's, without the parameters the model does not give.
+    /// </summary>
+    System.Text.Json.JsonElement Schema(MethodDiscoveryInfo action);
 }
 
 /// <summary>

@@ -43,10 +43,17 @@ internal static class MentorParameterHint
         if (type == typeof(string))                              return "string";
         if (type == typeof(bool))                               return "boolean";
         if (type == typeof(Guid))                               return "string (GUID)";
-        if (type == typeof(DateTime) || type == typeof(DateTimeOffset))
-                                                                return "string (ISO 8601 date)";
+        if (type == typeof(DateTime) || type == typeof(DateTimeOffset) ||
+            type == typeof(DateOnly))                           return "string (ISO 8601 date)";
+        // BUG-242: these are one text or one number in JSON, not objects of their properties.
+        if (type == typeof(TimeOnly))                           return "string (time, HH:mm:ss)";
+        if (type == typeof(TimeSpan))                           return "string (duration, d.hh:mm:ss)";
+        if (type == typeof(char))                               return "string (one character)";
+        if (type == typeof(Uri))                                return "string (URI)";
         if (type == typeof(int)   || type == typeof(long)  ||
-            type == typeof(short) || type == typeof(byte))      return "integer";
+            type == typeof(short) || type == typeof(byte)  ||
+            type == typeof(uint)  || type == typeof(ulong) ||
+            type == typeof(ushort) || type == typeof(sbyte))    return "integer";
         if (type == typeof(float) || type == typeof(double) ||
             type == typeof(decimal))                            return "number";
 

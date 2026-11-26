@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+
+    <!-- Package identity — Version, Authors, License, Symbols inherited from Directory.Build.props -->
+    <PackageId>Novior.MentorAgent.Scanner</PackageId>
+    <Title>Novior.MentorAgent.Scanner</Title>
+    <Description>Development-time scan of a Blazor application's pages for Novior.MentorAgent's AutoMentor: after the application starts, it opens each page in the Edge or Chrome already installed and writes what the page offers to mentor-ui-manifest.json in the project. Reference it in Debug only; it never runs outside Development.</Description>
+    <PackageTags>ai-agents;blazor;blazor-server;blazor-auto;maui;automentor;ui-manifest;scanner;development;cdp;dotnet;csharp</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>IconMA.png</PackageIcon>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <!-- New in 1.5.0: no published version to compare with yet. Validation still checks the package itself. -->
+    <PackageValidationBaselineVersion></PackageValidationBaselineVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="\" />
+    <None Include="..\Novior.MentorAgent\IconMA.png" Pack="true" PackagePath="IconMA.png" />
+    <!-- Story 1636: tells the scanner where the project's manifest is. It holds no target and no check. -->
+    <None Include="build\Novior.MentorAgent.Scanner.targets" Pack="true" PackagePath="build\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Story 1640: one reader of the pages for the scan and for the widget's observation, the widget's own module. -->
+    <EmbeddedResource Include="..\Novior.MentorAgent.Abstractions\wwwroot\js\MentorPageReader.js" Link="MentorPageReader.js"
+                      LogicalName="Novior.MentorAgent.Scanner.MentorPageReader.js" />
+    <EmbeddedResource Include="SafeClicks.js" LogicalName="Novior.MentorAgent.Scanner.SafeClicks.js" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Novior.MentorAgent\Novior.MentorAgent.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Novior.MentorAgent.Tests" />
+    <!-- Story 1637: novior-mentor runs the scan. -->
+    <InternalsVisibleTo Include="Novior.MentorAgent.Cli" />
+  </ItemGroup>
+
+</Project>

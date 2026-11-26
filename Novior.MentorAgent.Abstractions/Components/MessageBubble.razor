@@ -2,8 +2,10 @@
 @using System.Net
 @using System.Text
 @using System.Text.RegularExpressions
+@using Novior.MentorAgent.Abstractions.Core
 @using Novior.MentorAgent.Abstractions.Models
 @inject IOptions<MentorWidgetOptions> Options
+@inject MentorLocalizer ApplicationL
 
 <div class="bm-bubble @(IsUser ? "bm-bubble--user" : "bm-bubble--assistant") @(IsStreaming ? "bm-bubble--streaming" : "")"
      data-ai-generated="@(IsAiGenerated ? "true" : null)">
@@ -14,11 +16,13 @@
             ? "_content/Novior.MentorAgent.Abstractions/IconMA.png"
             : Options.Value.AvatarUrl;
         <div class="bm-bubble__avatar">
-            <img src="@avatarUrl" alt="AI" class="bm-avatar-img" />
+            <img src="@avatarUrl" alt="" class="bm-avatar-img" />
         </div>
     }
 
     <div class="bm-bubble__body">
+        @* BUG-257: the avatar is decoration, so a screen reader hears who speaks from these words, hidden from sight. *@
+        <span class="bm-sr-only">@Speaker</span>
         @* Attached images (#13) — rendered from the message's own content parts *@
         @if (Images.Count > 0)
         {
@@ -35,7 +39,7 @@
                 @((MarkupString)RenderMarkdown(Message.Text ?? string.Empty))
                 @if (IsStreaming)
                 {
-                    <span class="bm-cursor">▋</span>
+                    <span class="bm-cursor" aria-hidden="true">▋</span>
                 }
             </div>
         }
@@ -55,6 +59,13 @@
     [Parameter]                 public IReadOnlyList<MentorRagResult>? Sources    { get; set; }
 
     private bool IsUser => Message.Role == ChatRole.User;
+
+    // The localizer of the ChatWidget around this bubble, in the widget's Language; the application's when there is none.
+    [CascadingParameter(Name = ChatWidget.LocalizerCascade)] private MentorLocalizer? WidgetL { get; set; }
+    private MentorLocalizer L => WidgetL ?? ApplicationL;
+
+    /// <summary>Who speaks, as a screen reader hears it before the message: "You:", or the assistant's name.</summary>
+    private string Speaker => IsUser ? L.Get("message.you") : string.Format(L.Get("message.assistant"), Options.Value.BotName);
 
     // ── The marker of AI-generated text (EU AI Act, article 50) ──────────────────
     // A reply the model wrote, finished or still streaming, carries data-ai-generated="true". The widget's own

@@ -26,4 +26,13 @@ public interface IMentorActionCatalog
     /// <see cref="MentorActionInfo.RegistrationId"/>. A catalogue written before this member returns none.
     /// </summary>
     IReadOnlyList<MentorActionRegistration> GetRegistrations() => [];
+
+    /// <summary>
+    /// The pages of the application, for the AutoMentor (<c>options.AutoMentor.Enabled</c>; none when it is off), in the
+    /// order first seen: the routes of the host's components, those a WebAssembly client sent, then those only the
+    /// manifest of a scan has. Each with whether a scan read it and the elements it read. Structure only: never a value,
+    /// a password field, card data, a hidden, disabled or excluded element. Decided again at every call, as clients
+    /// send their pages. A catalogue written before this member returns none.
+    /// </summary>
+    IReadOnlyList<MentorPageInfo> GetPages() => [];
 }

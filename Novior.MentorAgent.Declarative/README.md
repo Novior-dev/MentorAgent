@@ -142,8 +142,12 @@ Neither is in the Agent Framework guide, and both fail in a way that points some
 
 **Every `tools` entry needs `kind`.** The reader accepts `codeInterpreter`, `fileSearch`,
 `function`, `webSearch` and `mcp`, but `function` is the only one MentorAgent keeps: it binds to a
-tool of your application. Omit `kind` and loading fails with `NotSupportedException` — not a
-validation message naming the line.
+tool of your application. Omit `kind` and the agent is not loaded, `invalid-definition`, with the
+reason. From 1.5.0 `kind` may be anywhere in the entry, and an agent never loads with fewer tools
+than its `tools` lists, apart from those MentorAgent takes away and reports (below). Up to 1.4.0
+the Agent Framework's reader found `kind` only as the entry's first key, and with a list at its
+key's indentation it dropped an entry without `kind` and said nothing: the agent loaded without
+the tool (BUG-244).
 
 The other four are **not** names of your tools, and they do not add anything. The Agent Framework
 would turn them into provider-hosted tools (web search, code interpreter, file search, or a remote
@@ -159,18 +163,32 @@ each tool removed as `hosted-tool-removed`, with `Tool` set. If those tools cann
 whole agent is skipped with an error instead, and reported as `foreign-tools`. To give the assistant these capabilities, configure
 them in the host (`MentorOptions.HostedTools`, `McpServers`), where the host's own controls apply.
 
-**Folded scalars (`>`) are not supported by this reader.** Use `|`, or a single line. With `>` the
-parse error reports the *end of the file*, so you will look everywhere except at the block that
-caused it:
+**Three forms of valid YAML the reader refuses are rewritten for it (from 1.5.0).** A folded scalar
+(`>`), a list at its key's indentation (`tools:`, then `- kind: function` on the next line, the form
+YamlDotNet writes by default) and an explicit end of the document (`...`): the Agent Framework's
+reader refuses each, with an error that names the *end of the file*. MentorAgent gives the reader
+each definition as it is written first. Only when the reader refuses it, and the text is YAML, is
+it given again rewritten: lists indented, no end marker, folded scalars written literal with the
+same value. A definition the reader takes is never rewritten, and one that fails both ways is
+reported with the error of the text as written, whose line numbers are the file's (BUG-243). Up to
+1.4.0, write `|` or a single line, indent a list under its key, and leave out `...`:
 
 ```yaml
-description: >                     # ✗ parse error, blamed on the last line of the file
+description: >                     # ✗ up to 1.4.0: parse error, blamed on the last line of the file
   Handles shipping and delivery.
 
 description: |                     # ✓
   Handles shipping and delivery.
 
 description: Handles shipping.     # ✓
+
+tools:                             # ✗ up to 1.4.0: InvalidIndent, blamed on the end of the file
+- kind: function
+  name: get_order_status
+
+tools:                             # ✓
+  - kind: function
+    name: get_order_status
 ```
 
 ---
@@ -486,7 +504,7 @@ The team files are read with **YamlDotNet 18.1.0** (MIT), its node model only, w
 An application that references an older YamlDotNet itself gets NuGet's downgrade error (NU1605) until it references
 18.1.0 or later.
 
-The reference is `Microsoft.Agents.AI.Declarative` **1.27.0-rc1**, on the same 1.27 line as `Microsoft.Agents.AI` 1.27.0 in the core package, so adding it does not move the rest of the library onto a different Agent Framework version. The declarative package is still a prerelease upstream.
+The reference is `Microsoft.Agents.AI.Declarative` **1.28.0-rc1**, on the same 1.28 line as `Microsoft.Agents.AI` 1.28.0 in the core package, so adding it does not move the rest of the library onto a different Agent Framework version. The declarative package is still a prerelease upstream.
 
 ---
 

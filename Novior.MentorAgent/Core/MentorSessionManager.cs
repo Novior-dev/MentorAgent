@@ -293,6 +293,61 @@ internal sealed class MentorSessionManager : IMentorSessionManager
         }
     }
 
-    private static string? ConversationIdOf(AgentSession session)
+    /// <summary>The service conversation id <paramref name="session"/> points to; null with a local history or a new conversation.</summary>
+    internal static string? ConversationIdOf(AgentSession session)
         => session is ChatClientAgentSession { ConversationId: { Length: > 0 } id } ? id : null;
+
+    // ── BUG-238: the second pass of the announced-action check on a branch ─────────────────
+
+    /// <summary>
+    /// A copy of <paramref name="session"/> that points to <paramref name="conversationId"/>, the response the turn
+    /// started from (none on the first turn), with the same state bag. With the history kept by the service the
+    /// responses form a tree: a request sent from an earlier response branches there, and the reply the turn gave
+    /// first stays on the service as a branch nobody follows. The Agent Framework (1.28) gives the session's
+    /// conversation id no public setter, so the copy goes through the session's own serialization, as a snapshot does.
+    /// Nothing changes here until <see cref="InstallBranchAsync"/>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The serialized session has no conversation id where it is expected.</exception>
+    internal static async Task<AgentSession> BranchAsync(AIAgent agent, AgentSession session, string? conversationId,
+        CancellationToken ct = default)
+    {
+        const string ConversationIdProperty = "conversationId";
+        var payload = await agent.SerializeSessionAsync(session, cancellationToken: ct);
+        // A session with no conversation id is written without the property; one with an id must carry it, as it is.
+        var current = ConversationIdOf(session);
+        if (System.Text.Json.Nodes.JsonNode.Parse(payload.GetRawText()) is not System.Text.Json.Nodes.JsonObject json
+            || (current is not null
+                && (json[ConversationIdProperty] is not System.Text.Json.Nodes.JsonValue value
+                    || !value.TryGetValue<string>(out var written) || written != current)))
+            throw new InvalidOperationException(
+                "The serialized session has no top-level conversation id: the Agent Framework's session format changed.");
+
+        if (conversationId is null) json.Remove(ConversationIdProperty);
+        else json[ConversationIdProperty] = conversationId;
+
+        using var document = JsonDocument.Parse(json.ToJsonString());
+        return await agent.DeserializeSessionAsync(document.RootElement.Clone(), cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Makes <paramref name="branch"/> the session, if <paramref name="turnSession"/>, the one the turn began on, still
+    /// is: a reset or a restore that happened since wins, and the branch is dropped. Atomic under the manager's lock.
+    /// Not a change of conversation for the host (<see cref="OnSessionChanged"/> is not raised): the conversation goes
+    /// on, from the branch. A restore not yet confirmed is confirmed by the turn that branched from it.
+    /// </summary>
+    internal async Task<bool> InstallBranchAsync(AgentSession turnSession, AgentSession branch)
+    {
+        await _semaphore.WaitAsync();
+        try
+        {
+            if (!ReferenceEquals(_session, turnSession)) return false;
+            _session = branch;
+            if (ReferenceEquals(_unconfirmedRestore, turnSession)) _unconfirmedRestore = null;
+            return true;
+        }
+        finally
+        {
+            _semaphore.Release();
+        }
+    }
 }

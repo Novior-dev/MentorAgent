@@ -113,4 +113,11 @@ public static class MentorActionReasons
 
     /// <summary><see cref="MentorActionOutcome.Failed"/>: the action threw.</summary>
     public const string Exception = "exception";
+
+    /// <summary>
+    /// <see cref="MentorActionOutcome.Failed"/>: a recipe of the page could not be done in the user's browser, because an
+    /// element of one of its steps was not there, or was hidden, disabled or excluded; <c>Detail</c> says which step and
+    /// why. The recipe is turned off and no longer offered: the page changed under it.
+    /// </summary>
+    public const string ElementMissing = "element-missing";
 }

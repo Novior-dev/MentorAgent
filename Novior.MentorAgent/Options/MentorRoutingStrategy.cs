@@ -32,11 +32,11 @@ public enum MentorRoutingStrategy
     Classifier,
 
     /// <summary>
-    /// Model cascade / self-escalation. The turn is served by the cheap model first, then a small
-    /// classifier judges whether the answer fully resolved the request; if not, the turn is re-run on
-    /// the strong model. Best quality/cost trade-off — it only pays for the strong model when the cheap
-    /// one actually falls short. On streaming calls it cannot re-run mid-stream, so it pre-decides like
-    /// <see cref="Classifier"/> on the input.
+    /// Model cascade / self-escalation, for calls that do not stream: the cheap model answers first, a
+    /// small classifier judges whether the answer fully resolved the request, and if not the call is re-run
+    /// on the strong model. A chat turn always streams (widget, hub, SSE), and a stream cannot be taken
+    /// back: in a turn it decides before the answer, on the input, as <see cref="Classifier"/> does — one
+    /// small call, no cheap answer judged and dropped.
     /// </summary>
     Cascade,
 }

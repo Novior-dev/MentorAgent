@@ -235,8 +235,11 @@ internal sealed class A2AChatClient : IChatClient
 
     // ── Stop (BUG-210) ─────────────────────────────────────────────────────────
 
-    /// <summary>How long a stopped turn waits, at most, for the peer to take its cancel.</summary>
-    private static readonly TimeSpan CancelTimeout = TimeSpan.FromSeconds(2);
+    /// <summary>
+    /// How long a stopped turn waits, at most, for the peer to take its cancel: 2 seconds. A test that stops a turn on a
+    /// loaded machine sets it longer, so that the peer's answer to the cancel, not the machine's load, decides it.
+    /// </summary>
+    internal TimeSpan CancelTimeout { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>How often a task the peer is still working on is read again: from a quarter of a second up to one.</summary>
     private static readonly TimeSpan FirstPoll = TimeSpan.FromMilliseconds(250), LongestPoll = TimeSpan.FromSeconds(1);
@@ -278,10 +281,10 @@ internal sealed class A2AChatClient : IChatClient
         private readonly CancellationTokenRegistration _onStop;
         private string? _id;
 
-        internal RemoteTaskWatch(CancellationToken turn)
+        internal RemoteTaskWatch(CancellationToken turn, TimeSpan cancelTimeout)
             => _onStop = turn.Register(() =>
             {
-                if (Id is null) _request.CancelAfter(CancelTimeout);
+                if (Id is null) _request.CancelAfter(cancelTimeout);
                 else _request.Cancel();
             });
 
@@ -373,7 +376,7 @@ internal sealed class A2AChatClient : IChatClient
         var request = OutboundRequest(messages);
         request.Configuration = new SendMessageConfiguration { ReturnImmediately = true };
         SendMessageResponse response;
-        using (var watch = new RemoteTaskWatch(cancellationToken))
+        using (var watch = new RemoteTaskWatch(cancellationToken, CancelTimeout))
         {
             try
             {
@@ -425,7 +428,7 @@ internal sealed class A2AChatClient : IChatClient
         var answered = false;
         // The task the stream belongs to, from its first event, and whether the stream got as far as its end: a turn
         // that leaves it before, a Stop above all, cancels the task (BUG-210).
-        using var watch = new RemoteTaskWatch(cancellationToken);
+        using var watch = new RemoteTaskWatch(cancellationToken, CancelTimeout);
         var ended = false;
         try
         {

@@ -111,23 +111,17 @@ public sealed class AnnouncedActionTests
         host.Recorder!.StreamedText.Should().Contain("Ci sono 3 ordini aperti.");
     }
 
+    // With the history kept by the service (BUG-238): AnnouncedActionServiceHistoryTests.
+
     [Fact]
-    public async Task With_the_history_kept_by_the_service_no_second_request_is_made()
+    public async Task With_the_history_kept_here_no_warning_is_given_about_the_check()
     {
-        // The check runs on the history MentorAgent keeps: with UseServiceManagedHistory every message of a request would
-        // be stored on the service, so the reply is not even asked about.
-        var classifier = Classifier("ANNOUNCED");
-        await using var host = Host(classifier, o => o.UseServiceManagedHistory = true);
-        host.Chat!.Respond((_, _) => new ChatResponse(new ChatMessage(ChatRole.Assistant, "Procedo a contare gli ordini aperti…"))
-        {
-            ModelId = host.Chat.ModelId,
-            ConversationId = "resp_1",
-        });
+        await using var host = Host(Classifier("NONE"));
+        host.Chat!.Say("ok");
 
-        (await host.RunTurnAsync("quanti ordini sono aperti?")).Should().BeNull(host.Logs.WarningText);
+        (await host.RunTurnAsync("ciao")).Should().BeNull();
 
-        classifier.CallCount.Should().Be(0);
-        Coordinator(host).Should().ContainSingle().Which.Messages.Should().NotContain(m => (m.Text ?? "").Contains(AnnouncedActionChatClient.Heading));
+        host.Logs.HasWarning("CheckAnnouncedActions has no effect").Should().BeFalse();
     }
 
     /// <summary>A chat template that takes a system message only as the first: what llama-server answers with a 500.</summary>

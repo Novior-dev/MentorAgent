@@ -48,8 +48,24 @@ public static class ClientServiceExtensions
         services.AddScoped<WasmMentorStateService>();
         services.AddScoped<IMentorStateService>(sp => sp.GetRequiredService<WasmMentorStateService>());
 
-        // Orchestrator (scoped — delegates to hub)
-        services.AddScoped<WasmMentorOrchestrator>();
+        // Story 1640 — what the widget observes of the pages goes to the hub (ReportObservedPage).
+        services.TryAddScoped<IMentorPageObserver, WasmPageObserver>();
+
+        // Story 1638, slice C — the recipes the server asks this browser to run, and the page they are offered for.
+        services.TryAddScoped<WasmRecipeClient>();
+
+        // Orchestrator (scoped — delegates to hub). With a JavaScript runtime, the recipes' client goes with it: it
+        // listens from the first turn, and the orchestrator sends the page's path with the page context.
+        services.AddScoped<WasmMentorOrchestrator>(sp =>
+        {
+            var orchestrator = ActivatorUtilities.CreateInstance<WasmMentorOrchestrator>(sp);
+            if (sp.GetService<Microsoft.JSInterop.IJSRuntime>() is not null)
+                orchestrator.Recipes = sp.GetRequiredService<WasmRecipeClient>();
+            // Story 1290 — no turn while the server's application has the assistant off.
+            if (sp.GetService<IMentorAssistantStatus>() is WasmAssistantStatus status)
+                orchestrator.Status = status;
+            return orchestrator;
+        });
         services.AddScoped<IMentorOrchestrator>(sp => sp.GetRequiredService<WasmMentorOrchestrator>());
 
         // Localizer (singleton — uses language from options)
@@ -58,6 +74,10 @@ public static class ClientServiceExtensions
         // #18 — onboarding tour, fetched from the server (the client has no discovery data).
         // TryAdd so a hand-written IMentorTour registered by the app still wins.
         services.TryAddSingleton<IMentorTour, WasmMentorTour>();
+
+        // Story 1290 — the assistant turned off or on by the server's application (GetAssistantStatus, AssistantStatus):
+        // the widget disables its input as in-process. TryAdd, as the tour.
+        services.TryAddSingleton<IMentorAssistantStatus, WasmAssistantStatus>();
 
         // Widget options (used by ChatWidget from Novior.MentorAgent.Abstractions)
         services.AddOptions<MentorWidgetOptions>()

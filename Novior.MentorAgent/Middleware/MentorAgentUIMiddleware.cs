@@ -100,12 +100,15 @@ internal sealed class MentorAgentUIMiddleware
         if (_classifierClient is not null) return _classifierClient;
         if (_options.AuxiliaryChatClient is not { } raw) return null;
 
+        // Story 1289 — the output check's calls, to the observers and on their spans.
+        var who = ModelCallAttribution.Check(MentorModelCallPurpose.OutputSafetyCheck);
         return _classifierClient = _tokenUsage is null
             ? raw
-            : new TokenUsageChatClient(raw, _tokenUsage, _metrics,
+            : new TokenUsageChatClient(ModelCallSpanTags.Traced(raw, who, _options), _tokenUsage, _metrics,
                 (_loggerFactory ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance)
                     .CreateLogger<TokenUsageChatClient>(),
-                _services?.GetService<MentorSessionTokenUsage>());   // story 171
+                _services?.GetService<MentorSessionTokenUsage>(),   // story 171
+                new ModelCallReporter(this), who);
     }
 
     // -- Run middleware (non-streaming) ----------------------------------------
@@ -323,7 +326,8 @@ internal sealed class MentorAgentUIMiddleware
                 agentKind: MentorAgentKind.Coordinator,
                 agentName: agent?.Name,
                 description: context.Function.Description,
-                pageAction: UIActionTools.IsPageAction(context.Function));
+                pageAction: UIActionTools.IsPageAction(context.Function),
+                recipe: UIActionTools.RecipeOf(context.Function));
         }
         finally
         {
@@ -392,6 +396,9 @@ internal sealed class MentorAgentUIMiddleware
     /// The call is one of the page's UI actions (story 1288): no feedback of the gate's own, since the action reports
     /// its own start and end, and the description is the text shown.
     /// </param>
+    /// <param name="recipe">
+    /// Story 1638 — the recipe a page action runs, with its own roles and confirmation (<c>recipe.gated</c>).
+    /// </param>
     public async ValueTask<object?> InvokeGatedAsync(
         string toolName,
         IEnumerable<KeyValuePair<string, object?>>? arguments,
@@ -403,7 +410,8 @@ internal sealed class MentorAgentUIMiddleware
         MentorAgentKind agentKind = MentorAgentKind.Coordinator,
         string? agentName = null,
         string? description = null,
-        bool pageAction = false)
+        bool pageAction = false,
+        MentorRecipe? recipe = null)
     {
         _logger.LogDebug("[MentorAgent] Tool call: {Name}", toolName);
         Turn?.Gated(callId);                 // story 526 — the call was found, and reached the gate
@@ -423,6 +431,7 @@ internal sealed class MentorAgentUIMiddleware
             AgentKind = agentKind,
             AgentName = agentName,
             PageAction = pageAction,
+            Recipe = recipe,
             DisplayName = pageAction ? description : null,
         };
         call.Span = toolActivity;
@@ -447,7 +456,7 @@ internal sealed class MentorAgentUIMiddleware
         // Story 1546 — the governor's roles, when it gives them, in place of the code's: asked at every check.
         var governed = await GovernedRolesAsync(call, arguments, cancellationToken);
         if (governed.Refusal is { } governorFailed) return Refuse(governorFailed);
-        var roles = await CheckRolesAsync(toolName, cancellationToken, method, governed.Roles ?? (pageAction ? Array.Empty<string>() : null));
+        var roles = await CheckRolesAsync(toolName, cancellationToken, method, governed.Roles ?? PageRoles(call));
         call.Roles = roles.Roles;
         call.RolesFromOutside = governed.FromOutside;
         call.User  = roles.User ?? call.User;
@@ -603,7 +612,7 @@ internal sealed class MentorAgentUIMiddleware
             // was no longer allowed to run (BUG-143).
             governed = await GovernedRolesAsync(call, arguments, cancellationToken);
             if (governed.Refusal is { } governorFailedAfter) return Refuse(governorFailedAfter);
-            roles = await CheckRolesAsync(toolName, cancellationToken, method, governed.Roles);
+            roles = await CheckRolesAsync(toolName, cancellationToken, method, governed.Roles ?? call.Recipe?.Roles.ToArray());
             call.RolesFromOutside = governed.FromOutside;
             if (!roles.Allowed)
             {
@@ -668,6 +677,20 @@ internal sealed class MentorAgentUIMiddleware
                 _state.NotifyActionCompleted(toolName);
             Decide(call, MentorActionOutcome.Stopped, StopReason);
             return MentorUtils.ToolStopped(L.Get("stop.request"), Lang);
+        }
+        catch (MentorRecipeNotDoneException notDone)
+        {
+            // Story 1638 (recipe.element-missing): the page changed under the recipe, which is now off.
+            Decide(call, MentorActionOutcome.Failed, MentorActionReasons.ElementMissing,
+                detail: $"step {notDone.Step + 1}: {notDone.Reason}");
+            return MentorUtils.ToolError(notDone.Message);
+        }
+        catch (MentorUIActionFailedException failed)
+        {
+            // BUG-241: a UI action whose handler threw failed. The widget shows it as before, with its own start and no
+            // end, and no line of the gate's; the model gets the app's message, else the handler's (OnException).
+            Decide(call, MentorActionOutcome.Failed, MentorActionReasons.Exception, exceptionType: failed.Handler.GetType().FullName);
+            return MentorUtils.ToolError(AppMessage(failed.Handler) ?? failed.Handler.Message);
         }
         catch (Exception ex)
         {
@@ -784,6 +807,40 @@ internal sealed class MentorAgentUIMiddleware
     /// </summary>
     internal IReadOnlySet<string>? ApprovalMarked { get; set; }
 
+    /// <summary>
+    /// Story 1877 — the server of each tool of the MCP servers the coordinator was built with, by the tool's name. Set by
+    /// the orchestrator when it builds them.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string>? McpServerOfTool { get; set; }
+
+    /// <summary>
+    /// Story 1877 — who provides a tool. A page's action (a UI action, a form, a recipe) is the application's. On the
+    /// coordinator, as <see cref="IsApplicationAction"/> reads it: a name an action of the application has is the
+    /// application's, then MentorAgent's own tools, then a team (its exact name), then the tools of the MCP servers.
+    /// Any other agent is given only actions of the application. A name nobody provides is
+    /// <see cref="MentorActionProvenance.Unknown"/>.
+    /// </summary>
+    internal (MentorActionProvenance Provenance, string? Name) ProvenanceOf(string toolName, MentorAgentKind? agentKind,
+        bool pageAction)
+    {
+        if (pageAction) return (MentorActionProvenance.Application, null);
+        _discoveryCache ??= _discovery.Discover();
+        if (agentKind == MentorAgentKind.Coordinator)
+        {
+            if (_discoveryCache.Level1Methods.Any(m => string.Equals(m.ToolName, toolName, StringComparison.Ordinal)))
+                return (MentorActionProvenance.Application, null);
+            if (LibraryTools.Contains(toolName)) return (MentorActionProvenance.Library, null);
+            if (_discoveryCache.Level3Teams.Any(t =>
+                    string.Equals(MentorUtils.ToSnakeCase(t.Attribute.Name), toolName, StringComparison.Ordinal)))
+                return (MentorActionProvenance.Application, null);
+            if (McpServerOfTool is { } servers && servers.TryGetValue(toolName, out var server))
+                return (MentorActionProvenance.McpServer, server);
+        }
+        return _discoveryCache.Named(toolName).Any()
+            ? (MentorActionProvenance.Application, null)
+            : (MentorActionProvenance.Unknown, null);
+    }
+
     /// <summary>MentorAgent's own tools on the coordinator, which no policy decides about; a team's tool is one too.</summary>
     internal static readonly HashSet<string> LibraryTools = new(
         ["navigate_to", "invoke_ui_action", "remember", "forget_all", "load_skill", "read_skill_resource", "route_to_specialist"],
@@ -794,6 +851,10 @@ internal sealed class MentorAgentUIMiddleware
     /// coordinator, everything but MentorAgent's own tools — the application's actions and the tools of the MCP
     /// servers it consumes. Decided by excluding, so a tool this list does not know is the policies' to decide.
     /// </summary>
+    /// <summary>Whether the application declares an action named <paramref name="toolName"/>, for any of its agents.</summary>
+    internal bool IsDeclaredAction(string toolName)
+        => (_discoveryCache ??= _discovery.Discover()).Named(toolName).Any();
+
     internal bool IsApplicationAction(string toolName, MentorAgentKind? agentKind)
     {
         if (agentKind != MentorAgentKind.Coordinator) return true;
@@ -832,6 +893,8 @@ internal sealed class MentorAgentUIMiddleware
             CallId               = call.CallId,
             PageName             = PageOf(call),
             Kind                 = call.PageAction ? MentorActionKind.UI : MentorActionKind.Server,
+            Provenance           = ProvenanceOf(call.ToolName, call.AgentKind, call.PageAction).Provenance,
+            ProvenanceName       = ProvenanceOf(call.ToolName, call.AgentKind, call.PageAction).Name,
             RequiredRoles        = call.Roles,
             RequiresConfirmation = requiresConfirmation,
             Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
@@ -865,8 +928,12 @@ internal sealed class MentorAgentUIMiddleware
             TurnId               = Turn?.TurnId,
             PageName             = PageName(),
             Kind                 = pageAction ? MentorActionKind.UI : MentorActionKind.Server,
-            RequiredRoles        = pageAction ? [] : GetRequiredRoles(function.Name, function.UnderlyingMethod),
-            RequiresConfirmation = !pageAction && _confirmations.RequiresApproval(function.Name, function.UnderlyingMethod),
+            Provenance           = ProvenanceOf(function.Name, agentKind, pageAction).Provenance,
+            ProvenanceName       = ProvenanceOf(function.Name, agentKind, pageAction).Name,
+            RequiredRoles        = pageAction ? [.. UIActionTools.RecipeOf(function)?.Roles ?? []] : GetRequiredRoles(function.Name, function.UnderlyingMethod),
+            RequiresConfirmation = pageAction
+                ? UIActionTools.RecipeOf(function)?.RequiresConfirmation == true
+                : _confirmations.RequiresApproval(function.Name, function.UnderlyingMethod),
             Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
         };
 
@@ -888,6 +955,7 @@ internal sealed class MentorAgentUIMiddleware
             SessionId            = Session?.Id,
             TurnId               = Turn?.TurnId,
             PageName             = PageName(),
+            Provenance           = MentorActionProvenance.Application,
             RequiredRoles        = method.RequiredRoles,
             RequiresConfirmation = _confirmations.CodeRequiresApproval(method.ToolName, method.Method),
             Services             = _services ?? MentorConfirmationBuilder.EmptyServices.Instance,
@@ -1011,8 +1079,9 @@ internal sealed class MentorAgentUIMiddleware
     /// </summary>
     internal ConfirmationAtTheCall Confirms(GateCall call, MentorConfirmationChoice atTheCall)
     {
-        // page.gated: a UI action asks for no confirmation of its own; a policy may ask for one.
-        if (call.PageAction) return new(false, false);
+        // page.gated: a UI action asks for no confirmation of its own; a policy may ask for one. A recipe has its own
+        // (story 1638, recipe.gated).
+        if (call.PageAction) return new(call.Recipe?.RequiresConfirmation == true, false);
 
         var asks = _confirmations.RequiresApproval(call.ToolName, call.Method, atTheCall);
         call.ConfirmationFromOutside = asks != _confirmations.CodeRequiresApproval(call.ToolName, call.Method);
@@ -1025,6 +1094,13 @@ internal sealed class MentorAgentUIMiddleware
     /// (story 1501, <c>page.kind</c>): one that has the name of an action the session does not offer — off, or left out
     /// by the governor — is still the page's, and nothing of that action applies to it.
     /// </summary>
+    /// <summary>
+    /// The roles of a UI action of the page: none of its own (page.gated), or a recipe's (story 1638, recipe.gated). Null
+    /// for any other call, whose roles are looked up.
+    /// </summary>
+    private static string[]? PageRoles(GateCall call)
+        => call.PageAction ? [.. call.Recipe?.Roles ?? []] : null;
+
     private MethodDiscoveryInfo? Discovered(GateCall call)
         => call.PageAction ? null : (_discoveryCache ??= _discovery.Discover()).Called(call.ToolName, call.Method);
 
@@ -1098,11 +1174,13 @@ internal sealed class MentorAgentUIMiddleware
                 _logger.LogWarning(
                     "[MentorAgent] {Caller} called tool '{Tool}', which an action policy did not offer on this turn — blocked.",
                     MentorUserKey.LogTag(call.User), call.ToolName);
-                return L.Get("auth.not.authorized");
+                return L.Get("action.not.offered.rule");
+            // BUG-248: a policy's no is a rule of the application, which may hold for every user: never "you are not
+            // allowed", which reads as the user's own fault. Nor "turned off for everyone": a policy may decide per user.
             case PolicyResult.NotAllowed:
                 _logger.LogWarning("[MentorAgent] {Caller} not allowed tool '{Tool}' by an action policy — blocked.",
                     MentorUserKey.LogTag(call.User), call.ToolName);
-                return L.Get("auth.not.authorized");
+                return L.Get("action.not.offered.rule");
             case PolicyResult.Stop:
                 _logger.LogInformation("[MentorAgent] Tool '{Name}' stopped by an action policy.", call.ToolName);
                 return string.Format(L.Get("action.stopped.rule"), check.Reason);
@@ -1174,6 +1252,9 @@ internal sealed class MentorAgentUIMiddleware
             TenantId       = MentorTenantContext.Ambient,
             // Story 1501 — the kind, and the page read now, as the tenant.
             Kind           = call.PageAction ? MentorActionKind.UI : MentorActionKind.Server,
+            // Story 1877 — who provides the tool, as the policies' request says.
+            Provenance     = ProvenanceOf(call.ToolName, call.AgentKind, call.PageAction).Provenance,
+            ProvenanceName = ProvenanceOf(call.ToolName, call.AgentKind, call.PageAction).Name,
             PageName       = PageOf(call),
             RequiredRoles  = call.Roles,
             RolesFromOutside = call.RolesFromOutside,

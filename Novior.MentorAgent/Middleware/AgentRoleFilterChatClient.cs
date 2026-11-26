@@ -27,6 +27,13 @@ namespace Novior.MentorAgent.Middleware;
 /// example did — let the user run, through a specialist or a team, an action it did not offer. They are asked at the
 /// agent's first request of the turn, once for each tool, with the agent's kind and name.
 /// </para>
+///
+/// <para>
+/// BUG-235: a call of these agents' models to an action of the application their agent does not hold, one a governor
+/// or <c>EnabledByDefault = false</c> left out when the agent was built, or another agent's, was answered "not found"
+/// by the function-invoking client, ran nothing, and had no decision: an audit of the actions did not see it. It is
+/// decided here, Denied with <see cref="MentorActionReasons.NotOffered"/>, as the coordinator's is (story 1600).
+/// </para>
 /// </summary>
 internal sealed class AgentRoleFilterChatClient : DelegatingChatClient
 {
@@ -35,6 +42,9 @@ internal sealed class AgentRoleFilterChatClient : DelegatingChatClient
     private readonly MentorAgentKind _agentKind;
     private readonly string? _agentName;
     private readonly Func<Func<string, MethodInfo?, bool>, (string Built, string ForUser)?>? _instructions;
+
+    // Whether the agent's requests are filtered at all: some tool needs a role, or the application registers a policy.
+    private readonly bool _filters;
 
     // BUG-233 — what the policies answered about this agent's tools in the turn _offerTurn: asked once for each tool.
     private readonly SemaphoreSlim _offerLock = new(1, 1);
@@ -47,9 +57,11 @@ internal sealed class AgentRoleFilterChatClient : DelegatingChatClient
         MentorTurnContext turn,
         MentorAgentKind agentKind,
         string? agentName,
-        Func<Func<string, MethodInfo?, bool>, (string Built, string ForUser)?>? instructions)
+        Func<Func<string, MethodInfo?, bool>, (string Built, string ForUser)?>? instructions,
+        bool filters)
         : base(innerClient)
     {
+        _filters = filters;
         _gate = gate;
         _turn = turn;
         _agentKind = agentKind;
@@ -58,9 +70,9 @@ internal sealed class AgentRoleFilterChatClient : DelegatingChatClient
     }
 
     /// <summary>
-    /// The chat client for an agent that holds <paramref name="tools"/>: <paramref name="chatClient"/> itself when
-    /// none of them needs a role and the application registers no action policy, so the agent's requests stay as they
-    /// are and nobody is read for them. <paramref name="agentKind"/> and <paramref name="agentName"/> are the agent's,
+    /// The chat client for an agent that holds <paramref name="tools"/>, in a turn: when none of them needs a role and
+    /// the application registers no action policy, the agent's requests stay as they are and nobody is read for them;
+    /// its model's calls to an action it does not hold are decided all the same (BUG-235). <paramref name="agentKind"/> and <paramref name="agentName"/> are the agent's,
     /// as its calls carry them to the gate. <paramref name="instructions"/>, for an agent whose instructions describe
     /// its tools, gives the text as it was built and as it reads with only the tools the user may run.
     /// </summary>
@@ -75,17 +87,21 @@ internal sealed class AgentRoleFilterChatClient : DelegatingChatClient
         if (gate.Turn is not { } turn) return chatClient;
 
         var roleGated = tools.OfType<AIFunction>().Any(f => gate.GetRequiredRoles(f.Name, f.UnderlyingMethod).Length > 0);
-        if (!roleGated && gate.Policies is not { Any: true }) return chatClient;
-
         if (roleGated) turn.AgentsHoldRoleGatedTools = true;
-        return new AgentRoleFilterChatClient(chatClient, gate, turn, agentKind, agentName, instructions);
+        return new AgentRoleFilterChatClient(chatClient, gate, turn, agentKind, agentName, instructions,
+            filters: roleGated || gate.Policies is { Any: true });
     }
 
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
-        => await base.GetResponseAsync(messages, await FilterAsync(options, cancellationToken), cancellationToken);
+    {
+        var response = await base.GetResponseAsync(messages, await FilterAsync(options, cancellationToken), cancellationToken);
+        foreach (var message in response.Messages)
+            await DecideCallsNotHeldAsync(message.Contents, options, cancellationToken);
+        return response;
+    }
 
     public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -94,7 +110,35 @@ internal sealed class AgentRoleFilterChatClient : DelegatingChatClient
     {
         var filtered = await FilterAsync(options, cancellationToken);
         await foreach (var update in base.GetStreamingResponseAsync(messages, filtered, cancellationToken))
+        {
+            await DecideCallsNotHeldAsync(update.Contents, options, cancellationToken);
             yield return update;
+        }
+    }
+
+    /// <summary>
+    /// BUG-235: the calls of the model to an action of the application the agent does not hold. The tools of
+    /// <paramref name="options"/> are the agent's own, as its function-invoking client holds them, before any is left
+    /// out of the request. Nothing runs, since that client answers "not found", and no gate sees the call, so its one
+    /// decision is given here, Denied with <see cref="MentorActionReasons.NotOffered"/>. A tool the agent holds and a
+    /// role or a policy left out of the request is decided at the gate; a name the application does not declare is not
+    /// an action, and has none.
+    /// </summary>
+    private async ValueTask DecideCallsNotHeldAsync(IList<AIContent> contents, ChatOptions? options, CancellationToken ct)
+    {
+        foreach (var call in contents.OfType<FunctionCallContent>())
+        {
+            if (options?.Tools?.Any(t => t.Name == call.Name) == true || !_gate.IsDeclaredAction(call.Name)) continue;
+
+            _gate.Decide(new GateCall
+            {
+                ToolName  = call.Name,
+                CallId    = call.CallId,
+                AgentKind = _agentKind,
+                AgentName = _agentName,
+                User      = await _gate.ReadUserForDecisionsAsync(ct),
+            }, MentorActionOutcome.Denied, MentorActionReasons.NotOffered);
+        }
     }
 
     /// <summary>
@@ -104,7 +148,7 @@ internal sealed class AgentRoleFilterChatClient : DelegatingChatClient
     /// </summary>
     private async ValueTask<ChatOptions?> FilterAsync(ChatOptions? options, CancellationToken ct)
     {
-        if (!_turn.OfferDecided || options?.Tools is not { Count: > 0 } tools) return options;
+        if (!_filters || !_turn.OfferDecided || options?.Tools is not { Count: > 0 } tools) return options;
 
         var user = _turn.OfferedTo;
         bool ForItsRoles(string name, MethodInfo? method)

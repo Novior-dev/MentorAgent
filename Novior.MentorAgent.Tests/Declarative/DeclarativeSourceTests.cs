@@ -503,4 +503,156 @@ public sealed class DeclarativeSourceTests : IDisposable
         result.Agents.Should().BeEmpty();
         result.Rejected.Should().BeEmpty();
     }
+
+    // ── Valid YAML the Agent Framework's reader refuses (BUG-243) ─────────────────────
+
+    private static string Yaml(string eol, params string[] lines) => string.Join(eol, lines) + eol;
+
+    private static readonly string[] Head =
+        ["kind: Prompt", "name: shipping", "description: Ships.", "instructions: |", "  You ship.", "  Briefly."];
+
+    public static TheoryData<string, string> ValidFormsTheReaderRefuses => new()
+    {
+        { "a list at its key's indentation, LF", Yaml("\n", [.. Head, "tools:", "- kind: function", "  name: count_open_orders"]) },
+        { "a list at its key's indentation, CRLF", Yaml("\r\n", [.. Head, "tools:", "- kind: function", "  name: count_open_orders"]) },
+        { "an explicit end of the document", Yaml("\n", [.. Head, "tools:", "  - kind: function", "    name: count_open_orders", "..."]) },
+        { "a folded scalar", Yaml("\n", ["kind: Prompt", "name: shipping", "description: >", "  Handles shipping", "  and delivery.",
+            "instructions: |", "  You ship.", "tools:", "  - kind: function", "    name: count_open_orders"]) },
+    };
+
+    [Theory]
+    [MemberData(nameof(ValidFormsTheReaderRefuses))]
+    public async Task A_valid_definition_the_Agent_Frameworks_reader_refuses_loads_rewritten(string form, string yaml)
+    {
+        // Found by the console, whose export writes YAML with YamlDotNet: its lists at the key's indentation were refused
+        // as invalid-definition, "InvalidIndent", near the end of the file.
+        var hostTools = new List<AIFunction> { AIFunctionFactory.Create(() => "ok", name: "count_open_orders") };
+        var options = new MentorDeclarativeOptions();
+        options.Definitions.Add(yaml);
+
+        var (result, logs) = await LoadAsync(options, hostTools);
+
+        result.Rejected.Should().BeEmpty(form);
+        var agent = result.Agents.Should().ContainSingle(logs.ExceptionText).Subject;
+        agent.Name.Should().Be("shipping", form);
+        ((ChatOptions)agent.GetService(typeof(ChatOptions))!).Tools!.Select(t => t.Name).Should().Equal(["count_open_orders"], form);
+        if (form == "a folded scalar")
+            agent.Description.Should().StartWith("Handles shipping and delivery.", "folded, as YAML reads it");
+    }
+
+    [Fact]
+    public async Task A_definition_the_reader_takes_is_given_to_it_as_written()
+    {
+        var yaml = Yaml("\n", [.. Head, "tools:", "- kind: function", "  name: count_open_orders"]);
+        var given = new List<string>();
+
+        (await DeclarativeYaml.CreateAsync(yaml, (text, _) => { given.Add(text); return Task.FromResult("agent"); }, CancellationToken.None))
+            .Should().Be("agent");
+
+        given.Should().Equal([yaml], "a definition the factory takes is never rewritten");
+    }
+
+    [Fact]
+    public async Task A_definition_rewritten_has_its_lists_indented_no_end_marker_and_its_folded_scalars_literal()
+    {
+        var yaml = Yaml("\n", ["kind: Prompt", "description: >", "  Handles shipping", "  and delivery.", "tools:", "- kind: function", "  name: a", "..."]);
+        var given = new List<string>();
+
+        await DeclarativeYaml.CreateAsync(yaml, (text, _) =>
+        {
+            given.Add(text);
+            return given.Count == 1 ? throw new InvalidOperationException("refused") : Task.FromResult("agent");
+        }, CancellationToken.None);
+
+        given.Should().HaveCount(2);
+        given[1].Should().Be("kind: Prompt\ndescription: |\n  Handles shipping and delivery.\ntools:\n  - kind: function\n    name: a\n");
+    }
+
+    [Fact]
+    public async Task A_definition_that_fails_rewritten_too_fails_with_the_error_of_the_text_as_written()
+    {
+        // The list at its key's indentation is refused first; rewritten, the kind no factory knows is refused in its turn.
+        // The error said is the first: its line is the file's.
+        var options = new MentorDeclarativeOptions();
+        options.Definitions.Add(Yaml("\n", ["kind: NoSuchKind", .. Head[1..], "tools:", "- kind: function", "  name: count_open_orders"]));
+
+        var (result, _) = await LoadAsync(options);
+
+        result.Agents.Should().BeEmpty();
+        result.Rejected.Should().ContainSingle().Which.Detail.Should().Contain("InvalidIndent");
+    }
+
+    [Fact]
+    public async Task A_text_YamlDotNet_cannot_read_is_given_to_the_factory_once()
+    {
+        var given = new List<string>();
+        var act = () => DeclarativeYaml.CreateAsync<string>("kind: [Prompt", (text, _) =>
+        {
+            given.Add(text);
+            throw new InvalidOperationException("the factory's error");
+        }, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>()).WithMessage("the factory's error");
+        given.Should().HaveCount(1, "not YAML: nothing to rewrite, and the factory's error is the answer");
+    }
+
+    // ── A tools entry the factory drops, or whose kind it does not find (BUG-244) ─────────
+
+    public static TheoryData<string, string[], string[]?, string?> ToolsEntries => new()
+    {
+        { "kind first, indented", ["  - kind: function", "    name: count_open_orders"], ["count_open_orders"], null },
+        { "kind first, at the key's indentation", ["- kind: function", "  name: count_open_orders"], ["count_open_orders"], null },
+        { "name first, indented", ["  - name: count_open_orders", "    kind: function"], ["count_open_orders"], null },
+        { "name first, at the key's indentation", ["- name: count_open_orders", "  kind: function"], ["count_open_orders"], null },
+        { "two entries, name first", ["- name: count_open_orders", "  kind: function", "- name: get_order_status", "  kind: function"],
+            ["count_open_orders", "get_order_status"], null },
+        { "no kind, at the key's indentation", ["- name: count_open_orders"], null,
+            "made 0 of the 1 tools the definition lists, and said nothing of the others: entry 1 of `tools` (count_open_orders) has no `kind`" },
+        { "no kind, indented", ["  - name: count_open_orders"], null, "unsupported tool type" },
+        { "a name alone", ["  - count_open_orders"], null, "function" },
+    };
+
+    [Theory]
+    [MemberData(nameof(ToolsEntries))]
+    public async Task An_agent_loads_with_every_tool_its_file_lists_or_is_rejected_saying_why(
+        string form, string[] entries, string[]? tools, string? detail)
+    {
+        // Up to 1.4.0 an entry without kind, in a list at its key's indentation, was dropped by the Agent Framework's
+        // factory without a word: the agent loaded, without the tool. And the factory read kind as an entry's first key
+        // only: name first, the entry was refused.
+        var hostTools = new List<AIFunction>
+        {
+            AIFunctionFactory.Create(() => "ok", name: "count_open_orders"),
+            AIFunctionFactory.Create(() => "ok", name: "get_order_status"),
+        };
+        var options = new MentorDeclarativeOptions();
+        options.Definitions.Add(Yaml("\n", [.. Head, "tools:", .. entries]));
+
+        var (result, logs) = await LoadAsync(options, hostTools);
+
+        if (tools is not null)
+        {
+            result.Rejected.Should().BeEmpty(form);
+            var agent = result.Agents.Should().ContainSingle(logs.ExceptionText).Subject;
+            ((ChatOptions)agent.GetService(typeof(ChatOptions))!).Tools!.Select(t => t.Name).Should().Equal(tools, form);
+        }
+        else
+        {
+            result.Agents.Should().BeEmpty("{0}: an agent never starts with fewer tools than its file lists, unsaid", form);
+            var rejection = result.Rejected.Should().ContainSingle(form).Subject;
+            rejection.ReasonCode.Should().Be(MentorAgentRejectionReasons.InvalidDefinition, form);
+            rejection.Detail.Should().Contain(detail, form);
+            logs.Records.Should().Contain(r => r.Level == LogLevel.Error && r.Message.Contains("could not be loaded"), form);
+        }
+    }
+
+    [Fact]
+    public void The_entries_of_tools_are_counted_and_a_text_that_is_not_YAML_is_not()
+    {
+        DeclarativeYaml.ToolsListed(Yaml("\n", [.. Head, "tools:", "- kind: function", "  name: a", "- name: b", "- c"]))
+            .Should().Equal(new DeclarativeYaml.ToolEntry(1, "a", true), new DeclarativeYaml.ToolEntry(2, "b", false),
+                new DeclarativeYaml.ToolEntry(3, "c", false));
+        DeclarativeYaml.ToolsListed(Yaml("\n", Head)).Should().BeEmpty("no tools: none listed");
+        DeclarativeYaml.ToolsListed("kind: [Prompt").Should().BeNull();
+    }
 }

@@ -21,6 +21,14 @@ public interface IMentorAgentSourceObserver
     /// the observer implements it.
     /// </summary>
     void OnTeamsLoaded(MentorAgentSourceReport report) { }
+
+    /// <summary>
+    /// One report per <see cref="IMentorRecipeSource"/>, every time a session asks for its recipes — also when the source
+    /// gave none. <see cref="MentorRecipeSourceReport.Loaded"/> holds the recipes the session offers on their pages, and
+    /// <see cref="MentorRecipeSourceReport.Rejected"/> those left out, with a <see cref="MentorRecipeRejectionReasons"/>
+    /// code. Does nothing unless the observer implements it.
+    /// </summary>
+    void OnRecipesLoaded(MentorRecipeSourceReport report) { }
 }
 
 /// <summary>What one <see cref="IMentorAgentSource"/> loaded and left out for one coordinator.</summary>

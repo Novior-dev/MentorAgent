@@ -61,7 +61,10 @@ internal sealed class MentorMcpCallHandler(
 {
     private readonly MentorOptions _options = options.Value;
 
-    /// <summary>What the caller reads for a call a policy wanted confirmed: nobody can confirm it here.</summary>
+    /// <summary>
+    /// What the caller reads for a call a policy wanted confirmed: nobody can confirm it here. In English without a
+    /// localizer; otherwise in the application's language, as the other refusals of a policy (BUG-249).
+    /// </summary>
     internal const string NobodyToConfirm =
         "Not run: this action needs a person to confirm it, and a call to this MCP server has nobody to ask. " +
         "Say that it has to be done from the application itself.";
@@ -331,7 +334,7 @@ internal sealed class MentorMcpCallHandler(
             PolicyResult.Stop       => (MentorActionOutcome.Blocked, MentorActionReasons.Policy, "blocked",
                 string.Format(Text("action.stopped.rule", "Stopped by a rule: {0}"), check.Reason)),
             PolicyResult.Confirm    => (MentorActionOutcome.Denied, MentorActionReasons.NobodyToConfirm, "nobody-to-confirm",
-                NobodyToConfirm),
+                Text("mcp.nobody.to.confirm", NobodyToConfirm)),
             PolicyResult.Failed     => (MentorActionOutcome.PolicyFailed, check.ReasonCode ?? MentorActionReasons.PolicyException,
                 "policy-failed", Text("action.stopped.rule.failed", "Stopped: the check before this action could not be completed.")),
             _                       => null,
@@ -539,6 +542,8 @@ internal sealed class MentorMcpCallHandler(
                     arguments?.ToDictionary(a => a.Key, a => (object?)a.Value) ?? []),
             User          = user?.Identity?.IsAuthenticated == true ? user : null,
             Surface       = MentorActionSurface.Mcp,
+            // Story 1877 — this server publishes the application's actions only.
+            Provenance    = MentorActionProvenance.Application,
             SessionId     = sessionId is { Length: > 0 } ? "mcp#" + Fingerprint(sessionId) : null,
             CallId        = callId,
             RequiredRoles = roles,
@@ -618,6 +623,7 @@ internal sealed class MentorMcpCallHandler(
             ToolName      = toolName,
             DisplayName   = string.IsNullOrWhiteSpace(lookup.Description) ? toolName : lookup.Description,
             Surface       = MentorActionSurface.Mcp,
+            Provenance    = MentorActionProvenance.Application,
             SessionId     = context.Server?.SessionId is { Length: > 0 } session ? "mcp#" + Fingerprint(session) : null,
             CallId        = context.JsonRpcRequest?.Id.ToString(),
             User          = user?.Identity?.IsAuthenticated == true ? user : null,

@@ -3,6 +3,7 @@ using Novior.MentorAgent.Abstractions.Core;
 using Novior.MentorAgent.Abstractions.Interfaces;
 using Novior.MentorAgent.Abstractions.Models;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -49,6 +50,9 @@ public partial class ChatWidget : IDisposable
 
     /// <summary>The name the widget's localizer cascades under, to the components inside it.</summary>
     internal const string LocalizerCascade = "Novior.MentorAgent.WidgetLocalizer";
+
+    /// <summary>The cascade that makes the message field inert while the tour is open (BUG-262).</summary>
+    internal const string InertCascade = "Novior.MentorAgent.WidgetInert";
 
     // The localizer of Language, made again only when Language changes; null without one.
     private MentorLocalizer? _pageLocalizer;
@@ -199,6 +203,19 @@ public partial class ChatWidget : IDisposable
 
     private ConfirmationRequest? _confirmRequest;
     private ElementReference     _scrollEl;
+
+    // Story 750: where the focus goes when the panel opens and closes, a confirmation comes, a reply ends.
+    private ElementReference     _fabEl;
+    private ElementReference     _confirmEl;
+    private ChatInput?           _input;
+    private OnboardingTour?      _tour;
+    private bool                 _focusInput;
+    private bool                 _focusFab;
+    private bool                 _focusConfirm;
+    private bool                 _focusAfterReply;
+
+    /// <summary>The panel's id, unique to this widget: the launcher controls it, the banner's ids start with it.</summary>
+    private string PanelId { get; } = "bm-panel-" + Guid.NewGuid().ToString("N")[..8];
     private bool _voiceOutputEnabled  = false;
     private bool _voiceSynthSupported = false;
     // #17 — streaming TTS. Chunks are accumulated here and handed to JS a sentence at a time:
@@ -234,6 +251,40 @@ public partial class ChatWidget : IDisposable
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // Story 750: the focus follows the panel, once it is rendered open or closed. Opened by the user, it goes to the
+        // tour when the tour opened with it (A11), else to the field, or to the banner of a confirmation still waiting
+        // (A6); a confirmation takes it on its banner when it comes; a turn that ends gives it back to the field the
+        // message was sent from (A5), and so does a confirmation answered, its buttons gone.
+        if (_focusConfirm && _open && _confirmRequest is not null && !_tourOpen)
+        {
+            _focusConfirm = false;
+            _focusInput = false;
+            try { await _confirmEl.FocusAsync(); } catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException) { }
+        }
+        if (_focusInput && _open)
+        {
+            _focusInput = false;
+            try
+            {
+                if (_tourOpen && _tour is not null) await _tour.FocusAsync();
+                else if (_input is not null) await _input.FocusAsync();
+            }
+            catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException) { }
+        }
+        // Over means not busy and no longer awaiting the reply: the render right after the send comes before the server
+        // reports the turn busy (on WebAssembly a round trip later), and a focus then is lost when the field is disabled.
+        // An open tour keeps it (BUG-259): it is a modal dialog, and it gives the focus to the field itself when it closes.
+        if (_focusAfterReply && _open && !_busy && !_awaitingReply && !_tourOpen && _confirmRequest is null && _input is not null)
+        {
+            _focusAfterReply = false;
+            try { await _input.FocusAsync(); } catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException) { }
+        }
+        if (_focusFab && !_open)
+        {
+            _focusFab = false;
+            try { await _fabEl.FocusAsync(); } catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException) { }
+        }
+
         if (firstRender)
         {
             var opt = Options.Value;
@@ -242,6 +293,8 @@ public partial class ChatWidget : IDisposable
             // refuses a <style> block or a style attribute, not style.setProperty (BUG-213). Until this runs,
             // on a prerendered page for instance, the accent is the theme's own.
             var accent = PrimaryColorVars(opt.PrimaryColor);
+            // BUG-261: the first calls wait for the widget's script, which may come after this render.
+            if (accent.Count > 0 || opt.EnableVoiceOutput) await WhenScriptReadyAsync();
             if (accent.Count > 0)
             {
                 try { await JS.InvokeVoidAsync("MentorAgent.setRootVars", accent); }
@@ -253,10 +306,110 @@ public partial class ChatWidget : IDisposable
                 try
                 {
                     _voiceSynthSupported = await JS.InvokeAsync<bool>("MentorAgent.isSpeechSynthesisSupported");
-                    _voiceOutputEnabled  = _voiceSynthSupported;
+                    // BUG-260: on, unless this visitor turned it off: someone with a screen reader turns it off once.
+                    _voiceOutputEnabled  = _voiceSynthSupported && await LoadVoiceOutputChoiceAsync() != false;
                     if (_voiceSynthSupported) StateHasChanged();
                 }
                 catch { _voiceSynthSupported = false; }
+            }
+
+            await StartObservationAsync();
+        }
+    }
+
+    // ── The widget's script (BUG-261) ─────────────────────────────────────────
+    // The widget adds MentorAgent.js to the head itself (<HeadContent>). Without a prerender the script tag comes with
+    // the first interactive render and the browser runs it later: the calls of that render found no MentorAgent, failed
+    // without a word, and the voice and the primary colour stayed off for the visit.
+
+    /// <summary>
+    /// How long the first render waits for the script before it goes on without it, and how often it asks: 10 s and
+    /// 100 ms, unless a test registers its own.
+    /// </summary>
+    internal sealed record ScriptWaiting(TimeSpan Wait, TimeSpan Poll)
+    {
+        internal static readonly ScriptWaiting Default = new(TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(100));
+    }
+
+    private readonly CancellationTokenSource _gone = new();
+
+    /// <summary>
+    /// Waits until <c>MentorAgent.ready</c> answers: at once where the script is already in the page, as on a prerendered
+    /// page or with the script in an <c>index.html</c>. Past the wait it logs a Warning, once, and goes on. Never throws.
+    /// </summary>
+    private async Task WhenScriptReadyAsync()
+    {
+        var (wait, poll) = Services.GetService(typeof(ScriptWaiting)) as ScriptWaiting ?? ScriptWaiting.Default;
+        var until = DateTime.UtcNow + wait;
+        while (true)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("MentorAgent.ready", _gone.Token);
+                return;
+            }
+            catch (JSException)
+            {
+                // Not loaded yet.
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or TaskCanceledException or OperationCanceledException
+                                          or JSDisconnectedException or ObjectDisposedException)
+            {
+                return;   // no browser to ask (prerender), the circuit is gone, or the widget is
+            }
+
+            if (DateTime.UtcNow >= until)
+            {
+                Logger.LogWarning(
+                    "[MentorAgent:UI] MentorAgent.js did not load within {Seconds} s: the voice output and the PrimaryColor "
+                    + "of the widget are off. The widget adds the script with <HeadContent>: check that the page has a "
+                    + "<HeadOutlet>, or that its index.html names _content/Novior.MentorAgent.Abstractions/js/MentorAgent.js.",
+                    wait.TotalSeconds);
+                return;
+            }
+
+            try { await Task.Delay(poll, _gone.Token); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    // Story 1640 — the observation of the pages (page.observe), when the application has it on.
+    private IJSObjectReference? _observation;
+    private DotNetObjectReference<MentorPageObservation>? _observationRef;
+
+    private async Task StartObservationAsync()
+    {
+        if (Services.GetService(typeof(IMentorPageObserver)) is not IMentorPageObserver { IsOn: true } observer) return;
+        try
+        {
+            _observation = await JS.InvokeAsync<IJSObjectReference>("import", MentorPageObservation.Module);
+            _observationRef = DotNetObjectReference.Create(new MentorPageObservation(observer, Logger));
+            await _observation.InvokeVoidAsync("start", _observationRef);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            Logger.LogDebug("[MentorAgent:UI] page.observe: the observation of the pages could not start ({Type}).", ex.GetType().Name);
+        }
+    }
+
+    private void StopObservation()
+    {
+        var module = _observation;
+        _observation = null;
+        if (module is not null) _ = StopAsync(module);
+        _observationRef?.Dispose();
+        _observationRef = null;
+
+        static async Task StopAsync(IJSObjectReference module)
+        {
+            try
+            {
+                await module.InvokeVoidAsync("stop");
+                await module.DisposeAsync();
+            }
+            catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+            {
+                // The page or the circuit is already gone: nothing is observed any more.
             }
         }
     }
@@ -284,10 +437,36 @@ public partial class ChatWidget : IDisposable
         State.OnMcpServerStatusChanged += OnMcpServerStatusChanged;
         State.OnHostedToolsDeclared   += OnHostedToolsDeclared;
         State.OnTeamMemberSpeaking    += OnTeamMemberSpeaking;
+
+        // Story 1290 — the application's switch: none registered, the assistant is on.
+        _assistantStatus = Services.GetService(typeof(IMentorAssistantStatus)) as IMentorAssistantStatus;
+        if (_assistantStatus is not null) _assistantStatus.Changed += OnAssistantStatusChanged;
+    }
+
+    private IMentorAssistantStatus? _assistantStatus;
+
+    /// <summary>Story 1290 — the application turned its assistant off: nothing can be sent, and the widget says why.</summary>
+    private bool AssistantOff => _assistantStatus is { IsOn: false };
+
+    /// <summary>
+    /// Raised by the application's service, possibly on a background thread, and only when the value changed: the
+    /// widget renders again on its own dispatcher, and returns at once. A circuit already gone has nothing to render.
+    /// </summary>
+    private void OnAssistantStatusChanged(object? sender, EventArgs e)
+    {
+        try
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+        catch (ObjectDisposedException)
+        {
+            // The renderer is disposed: the widget is gone.
+        }
     }
 
     public void Dispose()
     {
+        if (_assistantStatus is not null) _assistantStatus.Changed -= OnAssistantStatusChanged;
         State.OnStreamingChunk        -= OnChunk;
         State.OnStreamingCompleted    -= OnCompleted;
         State.OnBusyChanged           -= OnBusy;
@@ -303,6 +482,9 @@ public partial class ChatWidget : IDisposable
         State.OnMcpServerStatusChanged -= OnMcpServerStatusChanged;
         State.OnHostedToolsDeclared   -= OnHostedToolsDeclared;
         State.OnTeamMemberSpeaking    -= OnTeamMemberSpeaking;
+        StopObservation();
+        _gone.Cancel();
+        _gone.Dispose();
     }
 
     // â”€â”€ UI Actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -313,10 +495,34 @@ public partial class ChatWidget : IDisposable
     {
         _open = true;
         _unread = 0;
+        _focusInput = true;   // story 750: the focus goes to the message's field
+        _focusConfirm = _confirmRequest is not null;   // A6: or to the confirmation still waiting, the field being disabled
         await MaybeStartTourAsync();
     }
 
-    private void Close() => _open = false;
+    private void Close()
+    {
+        _open = false;
+        _focusFab = true;   // story 750: the focus goes back to the button that opens it
+    }
+
+    /// <summary>
+    /// Story 750 — Esc closes the innermost layer first: the tour, the image URL's field, a detail opened in the header;
+    /// then the panel. A confirmation waiting for its answer is never answered by it: closing the panel decides nothing,
+    /// and the banner is there again when the panel opens.
+    /// </summary>
+    private async Task OnPanelKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key != "Escape" || !_open) return;
+        if (_tourOpen) { await CloseTour(); return; }
+        if (_input?.CloseInnerLayer() == true) return;
+        if (_hostedDetailOpen || _mcpDetailOpen || _a2aDetailOpen)
+        {
+            _hostedDetailOpen = _mcpDetailOpen = _a2aDetailOpen = false;
+            return;
+        }
+        Close();
+    }
 
     // ── Onboarding tour (#18) ─────────────────────────────────────────────────
 
@@ -353,6 +559,7 @@ public partial class ChatWidget : IDisposable
 
             _tourIndex = Core.TourProgress.OpenAt(saved, _tourSteps.Count);
             _tourOpen = true;
+            _focusInput = _open;   // story 750, A11: the tour opens after the panel or from its button; the focus goes to it
             StateHasChanged();
         }
         catch (Exception ex)
@@ -379,6 +586,13 @@ public partial class ChatWidget : IDisposable
     /// </summary>
     private async Task EndTourAsync()
     {
+        // Story 750: the tour leaves the focus in the field, not on the page; or on a confirmation that came meanwhile,
+        // inert until now (BUG-262).
+        if (_tourOpen && _open)
+        {
+            if (_confirmRequest is not null) _focusConfirm = true;
+            else _focusInput = true;
+        }
         _tourOpen = false;
         _tourIndex = 0;
         try
@@ -451,6 +665,7 @@ public partial class ChatWidget : IDisposable
                 : Core.TourProgress.OpenAt(saved, _tourSteps.Count);
 
             _tourOpen = true;
+            _focusInput = _open;   // story 750, A11: the tour opens after the panel or from its button; the focus goes to it
             StateHasChanged();
         }
         catch (Exception ex)
@@ -524,8 +739,12 @@ public partial class ChatWidget : IDisposable
     /// </summary>
     private async Task SendUserMessage(MentorUserMessage msg)
     {
-        if (_busy) return;
+        if (_busy || AssistantOff) return;
         if (string.IsNullOrWhiteSpace(msg.Text) && !msg.HasAttachments) return;
+        _focusAfterReply = true;   // story 750, A5: the field is disabled while the reply comes; then the focus is back
+        // BUG-258: the turn has begun before the first await. The render of that await came with neither busy nor
+        // awaiting set: it spent the focus on the field, the field was then disabled, and the focus was lost.
+        _awaitingReply = true;
 
         // #17 barge-in — sending is taking the floor. Without this the previous answer keeps
         // playing over the new question, and in hands-free mode into the open microphone.
@@ -535,7 +754,6 @@ public partial class ChatWidget : IDisposable
         _messages.Add(BuildEcho(msg));
         _messageTimestamps.Add(DateTime.Now);
         _streamingText.Clear();
-        _awaitingReply = true;
         StateHasChanged();
         await ScrollToBottom();
 
@@ -584,6 +802,7 @@ public partial class ChatWidget : IDisposable
         Logger.LogDebug("[MentorAgent:UI] HandleConfirm called — _confirmRequest={IsNull}", _confirmRequest is null ? "NULL" : _confirmRequest.ActionId.ToString());
         var req = _confirmRequest;
         _confirmRequest = null;
+        _focusAfterReply = true;   // story 750: its buttons gone, the focus goes back to the field once the turn is over
         StateHasChanged();
         if (req is not null)
             await State.ConfirmAsync(req.ActionId);
@@ -596,6 +815,7 @@ public partial class ChatWidget : IDisposable
         Logger.LogDebug("[MentorAgent:UI] HandleCancel called — _confirmRequest={IsNull}", _confirmRequest is null ? "NULL" : _confirmRequest.ActionId.ToString());
         var req = _confirmRequest;
         _confirmRequest = null;
+        _focusAfterReply = true;   // story 750: its buttons gone, the focus goes back to the field once the turn is over
         StateHasChanged();
         if (req is not null)
             State.Cancel(req.ActionId);
@@ -766,7 +986,7 @@ public partial class ChatWidget : IDisposable
         });
 
     private void OnConfirmationRequired(ConfirmationRequest req)
-        => InvokeAsync(() => { _confirmRequest = req; StateHasChanged(); });
+        => InvokeAsync(() => { _confirmRequest = req; _focusConfirm = true; StateHasChanged(); });
 
     private void OnNavigationRequested(string url)
         => InvokeAsync(() => { Nav.NavigateTo(url); StateHasChanged(); });
@@ -903,7 +1123,27 @@ public partial class ChatWidget : IDisposable
         _voiceOutputEnabled = !_voiceOutputEnabled;
         if (!_voiceOutputEnabled)
             await StopSpeakingAsync();
+        // BUG-260: remembered in this browser, as the tour's progress is; a browser that refuses keeps it for the visit.
+        try { await JS.InvokeVoidAsync("MentorAgent.valueSet", VoiceOutputKey, _voiceOutputEnabled ? "1" : "0"); } catch { }
         StateHasChanged();
+    }
+
+    /// <summary>The visitor's choice of the voice, remembered in this browser (BUG-260).</summary>
+    private const string VoiceOutputKey = "mentoragent.voice.output";
+
+    /// <summary>The choice this visitor made, or null when there is none. Never throws.</summary>
+    private async Task<bool?> LoadVoiceOutputChoiceAsync()
+    {
+        try
+        {
+            return await JS.InvokeAsync<string?>("MentorAgent.valueGet", VoiceOutputKey) switch
+            {
+                "0" => false,
+                "1" => true,
+                _   => null,
+            };
+        }
+        catch { return null; }
     }
 
     // â”€â”€ Theme builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

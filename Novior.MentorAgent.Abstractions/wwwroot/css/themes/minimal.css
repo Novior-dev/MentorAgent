@@ -13,7 +13,7 @@
     --bm-bg-hover: #e2e8f0;
     --bm-text-primary: #0f172a;
     --bm-text-secondary: #475569;
-    --bm-text-muted: #94a3b8;
+    --bm-text-muted: #5b6b82;   /* 4.9:1 or more on every surface (story 750) */
     --bm-border: rgba(0, 0, 0, .1);
     --bm-border-accent: rgba(0, 0, 0, .2);
     --bm-shadow-panel: 0 8px 40px rgba(0, 0, 0, .15), 0 0 0 1px rgba(0, 0, 0, .08), inset 0 1px 0 rgba(255, 255, 255, .8);
@@ -24,4 +24,8 @@
     --bm-hosted-text-strong: #92400e;
     --bm-a2a-text: #4338ca;
     --bm-a2a-text-strong: #3730a3;
+    /* Story 750: the bright accent and the "online" green are text too (status, links, connecting pills); on white
+       the dark theme's #60a5fa and #34d399 read at 2.5:1 and 1.9:1. Blue-700 and emerald-700 read at 4.5:1 or more. */
+    --bm-accent-bright: #1d4ed8;
+    --bm-status-online: #047857;
 }

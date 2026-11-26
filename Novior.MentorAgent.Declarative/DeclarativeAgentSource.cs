@@ -92,7 +92,10 @@ internal sealed class DeclarativeAgentSource : IMentorAgentSource
             ct.ThrowIfCancellationRequested();
             try
             {
-                var agent = await factory.CreateFromYamlAsync(yaml, ct);
+                // BUG-243: as written first; rewritten only if the factory's reader refuses valid YAML. BUG-244: or if it
+                // made fewer tools than the definition lists, which it does without a word.
+                var agent = await DeclarativeYaml.CreateAsync(yaml, factory.CreateFromYamlAsync, ct,
+                    toolsMade: a => a.GetService(typeof(ChatOptions)) is ChatOptions { Tools: { } made } ? made.Count : 0);
                 if (agent is null)
                 {
                     // A factory may answer null for a definition kind it does not handle. The Agent

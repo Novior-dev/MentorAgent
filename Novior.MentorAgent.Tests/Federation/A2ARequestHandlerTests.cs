@@ -3,6 +3,7 @@ using A2A;
 using FluentAssertions;
 using Novior.MentorAgent.Core;
 using Novior.MentorAgent.Extensions;
+using Novior.MentorAgent.Tests.Fakes;
 using Novior.MentorAgent.Tests.Harness;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,20 +57,30 @@ public sealed class A2ARequestHandlerTests
         var agent = new MentorAgentA2AHandler(Substitute.For<IServiceScopeFactory>(), NullLogger<MentorAgentA2AHandler>.Instance);
         var wrapper = new MentorA2ARequestHandler(sdk, agent);
 
+        // From A2A 1.0.0-preview4 every request carries the transport's request context: the wrapper hands it on with
+        // the token, never null in its place. Its constructor is the SDK's own, so the test takes an empty instance.
+        var context = (A2ARequestContext)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(A2ARequestContext));
+        using var cts = new CancellationTokenSource();
+
         var methods = typeof(IA2ARequestHandler).GetMethods();
-        methods.Should().NotBeEmpty();
+        methods.Should().HaveCount(11);
         foreach (var method in methods)
         {
             var args = method.GetParameters()
-                .Select(p => p.ParameterType == typeof(CancellationToken) ? CancellationToken.None : Activator.CreateInstance(p.ParameterType))
+                .Select(p => p.ParameterType == typeof(CancellationToken) ? cts.Token
+                    : p.ParameterType == typeof(A2ARequestContext) ? context
+                    : Activator.CreateInstance(p.ParameterType))
                 .ToArray();
             if (args.FirstOrDefault() is CancelTaskRequest cancel) cancel.Id = "task-1";
             method.Invoke(wrapper, args);
         }
         await wrapper.DisposeAsync();
 
-        sdk.ReceivedCalls().Select(c => c.GetMethodInfo().Name).Should().Contain(methods.Select(m => m.Name),
+        var calls = sdk.ReceivedCalls().Where(c => c.GetMethodInfo().DeclaringType == typeof(IA2ARequestHandler)).ToList();
+        calls.Select(c => c.GetMethodInfo().Name).Should().BeEquivalentTo(methods.Select(m => m.Name),
             "every request goes on to the SDK");
+        calls.Should().OnlyContain(c => c.GetArguments().Contains(context) && c.GetArguments().Contains(cts.Token),
+            "the request context and the token go on with every request");
         await ((IAsyncDisposable)sdk).Received(1).DisposeAsync();
     }
 
@@ -119,5 +130,67 @@ public sealed class A2ARequestHandlerTests
             await Task.Delay(20);
         }
         handler.RunningTasks.Should().Be(0, "no task leaves its turn behind");
+    }
+
+    /// <summary>A scoped service the task's turn resolves: whether its scope was disposed.</summary>
+    private sealed class ScopeProbe : IAsyncDisposable
+    {
+        public volatile bool Disposed;
+        public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+    }
+
+    [Fact]
+    public async Task A_cancelled_turn_that_ignores_the_token_keeps_its_scope_and_its_place_until_it_ends()
+    {
+        // From A2A 1.0.0-preview4 the execution returns at the caller's cancel, so that the SDK can answer it, while a turn
+        // that does not watch the token runs on. Its scope and its place among the running turns go only when it ends.
+        var probes = new System.Collections.Concurrent.ConcurrentDictionary<ScopeProbe, byte>();
+        var policy = new TestActionPolicy
+        {
+            Before = (request, _) =>
+            {
+                probes.TryAdd(request.Services.GetRequiredService<ScopeProbe>(), 0);
+                return Task.CompletedTask;
+            },
+        };
+        await using var app = await HostAsync(s =>
+        {
+            s.AddScoped<ScopeProbe>();
+            s.AddMentorActionPolicy(policy);
+        });
+        var handler = (MentorAgentA2AHandler)app.Services.GetRequiredService<IAgentHandler>();
+        var client = new A2AClient(new Uri("http://localhost/a2a"), app.Client);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var model = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.Chat.BeforeRespond = () => model.Task;   // does not watch the token
+        app.Chat.CallTool("count_open_orders").Say("Two open orders.");
+        var sent = client.SendMessageAsync(new SendMessageRequest
+        {
+            Message = new Message { Role = Role.User, MessageId = Guid.NewGuid().ToString("N"), Parts = [Part.FromText("how many open orders?")] },
+        }, deadline.Token);
+        string? taskId = null;
+        while (taskId is null || app.Chat.CallCount == 0)
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            await Task.Delay(20);
+            taskId = app.Logs.Records.Select(r => Regex.Match(r.Message, @"Task '([0-9a-f]+)' received")).LastOrDefault(m => m.Success)?.Groups[1].Value;
+        }
+
+        var cancelled = await client.CancelTaskAsync(new CancelTaskRequest { Id = taskId }, deadline.Token);
+        var runningAfterTheCancel = handler.RunningTasks;
+        var disposedAfterTheCancel = probes.Keys.Any(p => p.Disposed);
+        model.SetResult();
+        await sent;
+        while (handler.RunningTasks > 0 || !probes.Keys.All(p => p.Disposed))
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            await Task.Delay(20);
+        }
+
+        cancelled.Status.State.Should().Be(TaskState.Canceled, "the cancel is answered while the turn still runs");
+        probes.Should().ContainSingle("the turn's policies were asked in its one scope");
+        runningAfterTheCancel.Should().Be(1, "the stopped turn is still running when the cancel is answered");
+        disposedAfterTheCancel.Should().BeFalse("nothing of the turn is disposed while it runs");
     }
 }

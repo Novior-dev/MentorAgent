@@ -114,6 +114,27 @@ public sealed class ForcedActionTests
     }
 
     [Fact]
+    public async Task The_classifiers_call_reaches_the_observers_as_a_request_check()
+    {
+        // Story 1289 — the question of the request is a call the provider bills: the observers hear of it, with its purpose.
+        var observer = new Novior.MentorAgent.Tests.Gating.ModelCallObserverTests.CallObserver();
+        await using var host = MentorHostFixture.Create(o =>
+        {
+            o.EnableToolFiltering = true;
+            o.ToolFilterMinScore = 0.35f;
+            o.MemoryAutoCapture = false;
+            o.RequireActionForChangeRequests = true;
+        }, s => Novior.MentorAgent.Extensions.ServiceCollectionExtensions.AddMentorActionObserver(s, observer), withEmbeddings: true);
+        SeedMatch(host, "issue_refund: Issues a refund", Refund);
+        host.Chat!.Say("OTHER").Say("Quale ordine?");
+
+        await host.RunTurnAsync(Refund);
+        await host.Get<MentorActionDecisions>().FlushAsync();
+
+        observer.Calls.Select(c => c.Purpose).Should().Equal(MentorModelCallPurpose.RequestCheck, MentorModelCallPurpose.Reply);
+    }
+
+    [Fact]
     public async Task The_classifier_sees_what_the_action_needs_and_is_asked_deterministically()
     {
         await using var host = Host();

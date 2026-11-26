@@ -70,6 +70,21 @@ public sealed record MentorActionRequest
     public MentorActionKind Kind { get; init; }
 
     /// <summary>
+    /// Who provides the tool: the application, an MCP server it consumes, or MentorAgent itself, with
+    /// <see cref="ProvenanceName"/> naming the provider when there is one. A policy can be stricter with what the
+    /// application does not provide itself. Every request MentorAgent makes says it;
+    /// <see cref="MentorActionProvenance.Unknown"/>, the default of a request built by hand, is to be treated as not
+    /// trusted, and so is a value added in a later version.
+    /// </summary>
+    public MentorActionProvenance Provenance { get; init; }
+
+    /// <summary>
+    /// The provider's name, when <see cref="Provenance"/> has one: for <see cref="MentorActionProvenance.McpServer"/>, the
+    /// server's <c>Name</c> in <c>MentorOptions.McpServers</c>. <see langword="null"/> otherwise.
+    /// </summary>
+    public string? ProvenanceName { get; init; }
+
+    /// <summary>
     /// The roles the action requires, any one of which is enough; empty when it requires none. The
     /// <c>IMentorActionGovernor</c>'s when it gives them; a question to the governor itself carries the code's.
     /// </summary>

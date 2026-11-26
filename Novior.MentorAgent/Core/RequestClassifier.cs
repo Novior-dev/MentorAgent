@@ -29,6 +29,13 @@ internal enum RequestKind
 internal sealed record RequestShape(bool Lookup, IReadOnlyList<string> Actions, bool Navigation)
 {
     internal bool IsEmpty => !Lookup && Actions.Count == 0 && !Navigation;
+
+    /// <summary>
+    /// BUG-247 — the page's own actions offered on the turn, one line each (<see cref="RequestClassifier.PageActions"/>):
+    /// a message that asks for what one of them does is no record question, even when it names entries. None: the
+    /// question is the one measured without them.
+    /// </summary>
+    internal IReadOnlyList<string> PageActions { get; init; } = [];
 }
 
 /// <summary>
@@ -85,6 +92,17 @@ internal static class RequestClassifier
                 "specific entries: the price, quantity, stock, total, count, status, date, name or another detail of particular " +
                 "products, orders, customers or similar entries — including whether such an entry exists, or a list of them. ");
 
+        // BUG-247: the page's actions, not the application's reads, serve a request for what they do on the page. Said of
+        // the actions in general, with no example of a request: an example pulls its look-alikes into the label. With
+        // actions offered too the rule comes after them (BUG-251), below; without, it is the text measured for BUG-247.
+        if (shape.Lookup && shape.PageActions.Count > 0 && !actions)
+            sb.Append("The page the user has open has actions of its own, which the assistant carries out on that page:\n")
+              .AppendJoin('\n', shape.PageActions)
+              .Append('\n')
+              .Append(
+                "A message that asks the assistant to do on the open page what one of these actions does is OTHER, not LOOKUP. " +
+                "A question about a value the records hold is still LOOKUP, even when the open page shows those records. ");
+
         if (actions)
             sb.Append(
                 "Answer ACTION only if the message asks the assistant to carry out one of the actions listed below and itself " +
@@ -97,6 +115,20 @@ internal static class RequestClassifier
                 "actions:\n")
               .AppendJoin('\n', shape.Actions)
               .Append('\n');
+
+        // BUG-251: nor do the confirmation-gated actions serve it. "Ordina per priorità" (sort by priority, or place an
+        // order) read as a complete request for update_order_status, and the first call was required to be one.
+        if (actions && shape.PageActions.Count > 0)
+        {
+            sb.Append("The page the user has open has actions of its own, which the assistant carries out on that page:\n")
+              .AppendJoin('\n', shape.PageActions)
+              .Append('\n')
+              .Append("A message that asks the assistant to do on the open page what one of these actions does is OTHER, not ")
+              .Append(shape.Lookup ? "LOOKUP or ACTION. " : "ACTION. ");
+            if (shape.Lookup)
+                sb.Append("A question about a value the records hold is still LOOKUP, even when the open page shows those records. ");
+            sb.Append("A complete request for one of the actions listed above is still ACTION, even when that page is open. ");
+        }
 
         if (shape.Navigation)
         {
@@ -138,6 +170,17 @@ internal static class RequestClassifier
         return sb.Append("Answer with exactly one word: ").AppendJoin(", ", labels).Append(" or ").Append(Other).Append('.')
             .ToString();
     }
+
+    /// <summary>
+    /// BUG-247 — the page's actions among <paramref name="tools"/> (<see cref="Middleware.UIActionTools.IsPageAction"/>),
+    /// one line each: the name and what it does.
+    /// </summary>
+    internal static IReadOnlyList<string> PageActions(IEnumerable<Microsoft.Extensions.AI.AITool> tools)
+        => [.. tools.Where(Middleware.UIActionTools.IsPageAction).Select(t =>
+        {
+            var what = OneLine(t.Description, 200).TrimEnd('.');
+            return "- " + OneLine(t.Name, 80) + (what.Length > 0 ? ": " + what : "");
+        })];
 
     /// <summary>
     /// One line of the ACTION list: the action's name, what it does and the inputs it cannot run without — the

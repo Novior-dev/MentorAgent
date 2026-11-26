@@ -133,7 +133,7 @@ public sealed class TemplateTests
     public void The_template_is_neither_built_nor_packed_with_the_library()
     {
         // In 1.3.0 the template is installed from this folder; it is not a package yet, and the release pipeline
-        // expects the five packages of the solution.
+        // expects the packages of the solution.
         File.ReadAllText(Path.Combine(RepoFiles.Root, RepoFiles.Solution)).Should().NotContain("templates/");
         File.ReadAllText(Path.Combine(RepoFiles.Root, "templates", "Directory.Build.props"))
             .Should().Contain("<IsPackable>false</IsPackable>");
@@ -151,7 +151,7 @@ public sealed class TemplateBuildCollection
 /// <summary>
 /// The criterion of the template: <c>dotnet new</c> creates a project that builds, and whose tests see the assistant
 /// run an action after a confirmation. The template is installed from its folder in a private hive, the project is
-/// restored from the five packages of this build and the packages already on the machine, with no source on the
+/// restored from the packages of this build and the packages already on the machine, with no source on the
 /// network, and its tests run. Minutes, not seconds: in the release run only, and alone, so its builds do not slow
 /// the other tests.
 /// </summary>
@@ -170,7 +170,7 @@ public sealed class TemplateBuildTests
         var work = Directory.CreateTempSubdirectory("mentoragent-template-").FullName;
         try
         {
-            // The five packages of this build, and nothing else, as the package source.
+            // The packages of this build, and nothing else, as the package source.
             var feed = Directory.CreateDirectory(Path.Combine(work, "feed")).FullName;
             foreach (var id in RepoFiles.Packages)
             {
@@ -221,7 +221,7 @@ public sealed class TemplateBuildTests
     /// here never lands in the machine's cache; that cache as a read-only fallback for everything else. A package
     /// missing from it fails the restore (NU1101) instead of being downloaded.
     /// </summary>
-    private static string NuGetConfig(string feed, string packages)
+    internal static string NuGetConfig(string feed, string packages)
     {
         var cache = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 } named
             ? named
@@ -245,7 +245,7 @@ public sealed class TemplateBuildTests
             """;
     }
 
-    private static async Task DotnetAsync(string directory, params string[] arguments)
+    internal static async Task DotnetAsync(string directory, params string[] arguments)
     {
         var start = new ProcessStartInfo("dotnet")
         {

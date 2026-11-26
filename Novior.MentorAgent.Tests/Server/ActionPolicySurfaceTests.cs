@@ -116,6 +116,24 @@ public sealed class ActionPolicySurfaceTests
     }
 
     [Fact]
+    public async Task On_the_mcp_server_the_refusal_of_a_confirmation_nobody_can_give_is_in_the_applications_language()
+    {
+        // BUG-249: it was the one refusal of a policy in English, the Stop and the failure beside it in the app's language.
+        var observer = new RecordingActionObserver();
+        var policy = new TestActionPolicy { Verdict = _ => MentorActionVerdict.Confirm("oltre il limite") };
+        await using var app = await McpAsync(observer, policy, o => o.Language = MentorLanguage.Italian);
+        var ada = await McpTestSession.OpenAsync(app.Client);
+
+        var (text, isError) = await ada.CallAsync("show_order_card", new { orderId = 7 });
+        await FlushAsync(app);
+
+        isError.Should().BeTrue();
+        text.Should().Contain("Non eseguita: questa azione richiede la conferma di una persona")
+            .And.Contain("server MCP").And.NotContain("nobody to ask");
+        observer.Steps("show_order_card").Should().Equal(["Denied/nobody-to-confirm"]);
+    }
+
+    [Fact]
     public async Task On_the_mcp_server_a_policy_that_fails_stops_the_call()
     {
         var observer = new RecordingActionObserver();
@@ -223,7 +241,8 @@ public sealed class ActionPolicySurfaceTests
             Verdict = _ => MentorActionVerdict.Stop("closed for the night"),
             Before = (r, _) =>
             {
-                probes.Enqueue(r.Services.GetRequiredService<ScopedProbe>());
+                // The agent card asks too, at MentorActionStage.Card, in a scope of its own (BUG-250): not a task's.
+                if (r.Stage != MentorActionStage.Card) probes.Enqueue(r.Services.GetRequiredService<ScopedProbe>());
                 return Task.CompletedTask;
             },
         };

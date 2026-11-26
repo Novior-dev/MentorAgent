@@ -6,6 +6,8 @@ using Novior.MentorAgent.Extensions;
 using Novior.MentorAgent.Options;
 using Novior.MentorAgent.Tests.Fakes;
 using Novior.MentorAgent.Tests.Harness;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -174,5 +176,80 @@ public sealed class UIActionGateTests
             "the request after the navigation offers the actions of the page now shown");
         observer.Steps("highlight_order").Should().Equal(["Allowed/allowed", "Executed/completed"],
             "an action added during the run is gated like one the run started with");
+    }
+
+    // ── BUG-241: a handler that throws ───────────────────────────────────────────
+
+    /// <summary>The kind of text an exception carries: a user's e-mail address.</summary>
+    private const string Secret = "the grid of mario.rossi@example.com is gone";
+
+    /// <summary>The results of the tools the model was given, in every request it received.</summary>
+    private static string ToolResults(FakeChatClient chat) => string.Join("\n", chat.Calls
+        .SelectMany(c => c.Messages).SelectMany(m => m.Contents).OfType<FunctionResultContent>()
+        .Select(r => r.Result?.ToString() ?? ""));
+
+    [Fact]
+    public async Task A_UI_action_whose_handler_throws_failed_with_the_type_of_its_exception()
+    {
+        // Up to 1.4.0 the observers were told the action was executed: its tool answered the error as a result (BUG-241).
+        var observer = new RecordingActionObserver();
+        await using var host = Host(observer, _ => { }, withRecorder: true);
+        host.Get<IMentorPageContext>().RegisterUIActionAsync("highlight_order", "Highlights an order",
+            _ => throw new InvalidOperationException(Secret));
+        host.Chat!.CallTool("highlight_order", new { parameter = 42 }).Say("I could not highlight it.");
+
+        (await host.RunTurnAsync("highlight order 42")).Should().BeNull();
+        await FlushAsync(host);
+
+        observer.Steps("highlight_order").Should().Equal(["Allowed/allowed", "Failed/exception"],
+            "the handler threw: the action was not executed");
+        var failed = observer.Seen.Single(d => d.ToolName == "highlight_order" && d.Outcome == MentorActionOutcome.Failed);
+        failed.ExceptionType.Should().Be("System.InvalidOperationException", "the type of the handler's own exception");
+        ToolResults(host.Chat!).Should().Contain(Secret, "without OnException the model gets the handler's message, as before");
+        host.Recorder!.Sequence.Where(e => e.Contains("Action", StringComparison.Ordinal)).Should().Equal(
+            [nameof(RecordingStateService.NotifyUIActionExecuting)],
+            "the widget shows the action's start and no end, as before, and no failed line of the gate's");
+    }
+
+    [Fact]
+    public async Task With_OnException_set_a_UI_action_that_throws_gives_the_model_the_apps_message()
+    {
+        var observer = new RecordingActionObserver();
+        await using var host = Host(observer, o => o.OnException = _ => "The grid is not available.");
+        host.Get<IMentorPageContext>().RegisterUIAction("highlight_order", "Highlights an order",
+            _ => throw new InvalidOperationException(Secret));
+        host.Chat!.CallTool("highlight_order", new { parameter = 42 }).Say("I could not highlight it.");
+
+        (await host.RunTurnAsync("highlight order 42")).Should().BeNull();
+        await FlushAsync(host);
+
+        observer.Steps("highlight_order").Should().Equal(["Allowed/allowed", "Failed/exception"]);
+        ToolResults(host.Chat!).Should().Contain("The grid is not available.").And.NotContain(Secret,
+            "the hook says what of an exception reaches the model, for a UI action as for any other");
+    }
+
+    [Fact]
+    public async Task Under_a_pre_built_agent_invoke_ui_action_failed_when_the_handler_threw()
+    {
+        // Path B: the page's actions are reached through the invoke_ui_action dispatcher, which answered the error too.
+        var observer = new RecordingActionObserver();
+        var inner = new FakeChatClient();
+        await using var host = MentorHostFixture.Create(o =>
+        {
+            o.MemoryAutoCapture = false;
+            o.ChatClient = null;
+            o.Agent = inner.AsAIAgent(instructions: "You are a test agent.");
+        }, s => s.AddMentorActionObserver(observer), withChatClient: false);
+        host.Get<IMentorPageContext>().RegisterUIAction("highlight_row", "Highlights a row",
+            _ => throw new InvalidOperationException(Secret));
+        inner.CallTool("invoke_ui_action", new { actionName = "highlight_row" }).Say("I could not highlight it.");
+
+        await host.RunTurnAsync("highlight row 5");
+        await FlushAsync(host);
+
+        observer.Steps("invoke_ui_action").Should().Equal(["Allowed/allowed", "Failed/exception"]);
+        observer.Seen.Single(d => d.Outcome == MentorActionOutcome.Failed).ExceptionType
+            .Should().Be("System.InvalidOperationException");
+        ToolResults(inner).Should().Contain(Secret);
     }
 }

@@ -26,6 +26,8 @@
     <None Include="..\LICENSE" Pack="true" PackagePath="\" />
     <None Include="..\NOTICE" Pack="true" PackagePath="\" />
     <None Include="IconMA.png" Pack="true" PackagePath="IconMA.png" />
+    <!-- Story 1635: embeds the AutoMentor's manifest of the pages in the application that references the package. -->
+    <None Include="buildTransitive\Novior.MentorAgent.targets" Pack="true" PackagePath="buildTransitive\" />
   </ItemGroup>
 
   <ItemGroup>
@@ -44,6 +46,9 @@
          free of ASP.NET Core. They still drive the core's own handlers (tool collection, call handler,
          A2A handler, discovery), which are wiring rather than public API. -->
     <InternalsVisibleTo Include="Novior.MentorAgent.Server" />
+    <!-- Story 1636: the scan of the pages reads the pages the host knows (MentorPageDirectory) and writes the manifest in
+         the format this package reads (MentorUiManifest), with its limits and exclusions. -->
+    <InternalsVisibleTo Include="Novior.MentorAgent.Scanner" />
   </ItemGroup>
 
   <ItemGroup>
@@ -51,14 +56,14 @@
          (A2A.AspNetCore through Microsoft.Agents.AI.Hosting.A2A.AspNetCore, ModelContextProtocol.AspNetCore)
          require Microsoft.AspNetCore.App, which does not exist for Android, iOS or Mac Catalyst — so they
          belong to Novior.MentorAgent.Server, and a MAUI app can reference this package on every target. -->
-    <PackageReference Include="A2A" Version="1.0.0-preview3" />
-    <PackageReference Include="Microsoft.Agents.AI" Version="1.27.0" />
-    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.27.0" />
+    <PackageReference Include="A2A" Version="1.0.0-preview4" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.28.0" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.28.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="10.0.3" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.11.0" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="11.0.0" />
     <!-- Story 159: MentorVectorStoreRagSource reads any collection of Microsoft.Extensions.VectorData. Agent Framework
-         brings this package already (Microsoft.Agents.AI 1.27.0); referenced here at the same version so that the
+         brings this package already (Microsoft.Agents.AI 1.28.0); referenced here at the same version so that the
          public API does not hang on a transitive dependency. -->
     <PackageReference Include="Microsoft.Extensions.VectorData.Abstractions" Version="10.10.0" />
     <PackageReference Include="ModelContextProtocol" Version="2.3.0" />

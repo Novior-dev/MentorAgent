@@ -46,7 +46,17 @@ public static class ServerServiceExtensions
         // falls back to the global ones, so the size raised below would never be applied.
         services.AddSignalR().AddHubOptions<MentorHub>(_ => { });
         services.AddSingleton<HubPageContextStore>();
+
+        // Story 1290 — the assistant turned off or on reaches every hub connection (AssistantStatus); nothing without
+        // an IMentorAssistantStatus.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<Microsoft.Extensions.Hosting.IHostedService, MentorAssistantStatusBroadcaster>());
         services.AddScoped<HubStateServiceDecorator>();
+
+        // Story 1638, slice C — in a hub connection's scope a recipe runs in the WebAssembly client, which the hub asks;
+        // in any other scope of the same host (a circuit) in the scope's own browser, as AddMentorAgent registers it.
+        services.TryAddScoped<HubRecipeRunner>();
+        services.Replace(ServiceDescriptor.Scoped<Novior.MentorAgent.Core.IMentorRecipeRunner>(sp =>
+            sp.GetRequiredService<HubRecipeRunner>() is { IsBound: true } hub ? hub : new Novior.MentorAgent.Core.MentorHostRecipeRunner(sp)));
 
         // ── Message size for image attachments (roadmap #13) ──────────────────
         // Image attachments ride inside the SendMessage hub invocation as base64. SignalR's
@@ -72,7 +82,10 @@ public static class ServerServiceExtensions
             });
 
         // One DI scope per SignalR connection (built once, reused per message) — see MentorHubScopes.
-        services.AddSingleton<MentorHubScopes>();
+        services.AddSingleton(sp => new MentorHubScopes(sp.GetRequiredService<IServiceScopeFactory>())
+        {
+            Logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<MentorHubScopes>>(),
+        });
 
         // /mentor/session hands snapshots to clients protected and bound to their owner (BUG-110).
         // Idempotent: a host that configured Data Protection (a persisted key ring) keeps its setup.

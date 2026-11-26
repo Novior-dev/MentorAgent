@@ -24,7 +24,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.3" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.11.0" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="11.0.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -33,6 +33,10 @@
     <InternalsVisibleTo Include="Novior.MentorAgent.Tests" />
     <InternalsVisibleTo Include="Novior.MentorAgent" />
     <InternalsVisibleTo Include="Novior.MentorAgent.Blazor" />
+    <!-- Story 1638: the hub reads the path of the client's page from its page context (PageContextSnapshot.Path). -->
+    <InternalsVisibleTo Include="Novior.MentorAgent.Server" />
+    <!-- Story 1636: the scan of the pages reads the routes' rules (MentorPageRoutes). -->
+    <InternalsVisibleTo Include="Novior.MentorAgent.Scanner" />
   </ItemGroup>
 
 </Project>

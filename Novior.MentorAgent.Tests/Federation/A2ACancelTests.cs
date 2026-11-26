@@ -10,6 +10,7 @@ using Novior.MentorAgent.Tests.Fakes;
 using Novior.MentorAgent.Tests.Harness;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Novior.MentorAgent.Tests.Federation;
@@ -139,6 +140,38 @@ public sealed class A2ACancelTests
             "the turn that was stopped does not end the task a second time");
         app.Logs.Records.Should().Contain(r => r.Message.Contains($"Task '{taskId}' cancelled by the caller", StringComparison.Ordinal));
         app.Logs.HasWarning("produced no reply").Should().BeFalse("a cancelled task is not a failed one");
+    }
+
+    [Theory]
+    [InlineData(Ask.Streamed)]
+    [InlineData(Ask.ReturnImmediately)]
+    [InlineData(Ask.Blocking)]
+    public async Task A_task_cancelled_while_a_model_that_watches_the_token_thinks_ends_Canceled_and_no_action_runs(Ask ask)
+    {
+        // The test above has a model that does not watch the token, the case A2A 1.0.0-preview4 made hang: the SDK runs
+        // tasks/cancel only once the execution has returned. This one gives up its request on the cancel, as a real
+        // model's client does.
+        var observer = new RecordingActionObserver();
+        await using var app = await HostAsync(observer);
+        var model = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.Chat.BeforeRespond = () => model.Task;
+        app.Chat.HonourCancellation = true;
+        app.Chat.CallTool("count_open_orders").Say("Two open orders.");
+        var client = await ClientAsync(app);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var taskId = await StartAsync(app, client, "how many open orders are there?", ask, deadline.Token);
+        await Until(() => app.Chat.CallCount > 0, "the turn to reach the model");
+
+        var cancelled = await client.CancelTaskAsync(new CancelTaskRequest { Id = taskId }, deadline.Token);
+        await Until(() => Ended(app, taskId), "the turn to end");
+        model.SetResult();   // too late: the model's request was given up
+
+        cancelled.Status.State.Should().Be(TaskState.Canceled, "tasks/cancel answers with the task it cancelled");
+        app.Services.GetRequiredService<TestOrderService>().Invoked.Should().BeEmpty("nothing starts after the cancel");
+        (await StateAsync(client, taskId, deadline.Token)).Should().Be(TaskState.Canceled);
+        app.Logs.HasWarning("produced no reply").Should().BeFalse("a cancelled task is not a failed one");
+        app.Logs.Records.Should().NotContain(r => r.Level >= LogLevel.Error, "a cancel is not an error");
     }
 
     [Fact]

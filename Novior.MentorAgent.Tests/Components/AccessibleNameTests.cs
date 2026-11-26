@@ -66,6 +66,10 @@ public sealed class AccessibleNameTests : ComponentTestBase
         => [.. cut.FindAll("button").Concat(cut.FindAll("label"))
             .Where(b => string.IsNullOrWhiteSpace(b.TextContent))
             .Where(b => string.IsNullOrWhiteSpace(b.GetAttribute("aria-label")))
+            // Story 750, A7: the label of an input that carries the name is its visible target; the keyboard reaches the
+            // input, and a label may not have an aria-label of its own.
+            .Where(b => !(b.LocalName == "label" && b.GetAttribute("for") is { Length: > 0 } id
+                && cut.FindAll($"[id='{id}']").Any(i => !string.IsNullOrWhiteSpace(i.GetAttribute("aria-label")))))
             .Select(b => $"{b.LocalName}.{b.ClassName} (title={b.GetAttribute("title") ?? "none"})")];
 
     /// <summary>The widget renders the launcher only until it is clicked; the panel is what this file is about.</summary>
@@ -74,6 +78,17 @@ public sealed class AccessibleNameTests : ComponentTestBase
         var cut = Render<ChatWidget>();
         cut.Find(".bm-fab").Click();
         return cut;
+    }
+
+    [Fact]
+    public void The_message_field_has_a_name_of_its_own_and_not_only_a_placeholder()
+    {
+        // Story 750: a placeholder goes away as one writes, and not every screen reader reads it.
+        var cut = OpenWidget();
+        var field = cut.Find("textarea.bm-input");
+
+        field.GetAttribute("aria-label").Should().NotBeNullOrWhiteSpace();
+        field.GetAttribute("aria-label").Should().NotBe(field.GetAttribute("placeholder"));
     }
 
     [Fact]

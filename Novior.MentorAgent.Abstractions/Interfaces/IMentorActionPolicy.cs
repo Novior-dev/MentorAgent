@@ -34,6 +34,8 @@ public interface IMentorActionPolicy
     /// <see cref="MentorActionRequest.Stage"/> <see cref="MentorActionStage.Offer"/> and no
     /// arguments; and before every call, with <see cref="MentorActionStage.Call"/> and the arguments, again
     /// after the user confirmed. <see langword="false"/>: the action is not offered, and a call to it does not run.
+    /// From 1.5.0 also when the A2A agent card is built, with <see cref="MentorActionStage.Card"/> and nobody:
+    /// <see langword="false"/> there only for an action off for every caller (BUG-250).
     /// Asked for every action offered on every turn: keep it fast, for example with a cache per user.
     /// </summary>
     /// <param name="request">The action, the user, and where the call comes from.</param>

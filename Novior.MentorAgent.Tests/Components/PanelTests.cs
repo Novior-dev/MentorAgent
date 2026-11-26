@@ -176,7 +176,8 @@ public sealed class PanelTests : ComponentTestBase
         var cut = Render<WelcomePanel>(p => p.Add(c => c.OnChipClick, (string s) => sent = s));
 
         var chips = cut.FindAll(".bm-chip");
-        var secondLabel = chips[1].TextContent;
+        // Its words, without the icon (BUG-257).
+        var secondLabel = chips[1].QuerySelector(".bm-chip__label")!.TextContent;
         chips[1].Click();
 
         sent.Should().Be(secondLabel, "each chip must send its own label, not the last one bound");

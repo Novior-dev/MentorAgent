@@ -1,0 +1,13 @@
+<Project>
+  <!-- Novior.MentorAgent.Scanner: where the scan writes the manifest of the pages. The same file the targets of
+       Novior.MentorAgent embed: the project's mentor-ui-manifest.json, or the one its MentorUiManifest property names.
+       And where it keeps what it read last time, to read again only the pages that changed: the project's obj folder.
+       Holds no target and no check: it cannot stop a build. -->
+  <PropertyGroup>
+    <MentorUiManifest Condition="'$(MentorUiManifest)' == ''">$(MSBuildProjectDirectory)\mentor-ui-manifest.json</MentorUiManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="Novior.MentorAgent.UiManifestPath" Value="$(MentorUiManifest)" />
+    <AssemblyMetadata Include="Novior.MentorAgent.UiScanStatePath" Value="$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'mentor-ui-scan.state.json'))" />
+  </ItemGroup>
+</Project>

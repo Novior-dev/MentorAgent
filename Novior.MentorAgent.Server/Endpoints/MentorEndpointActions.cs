@@ -272,6 +272,16 @@ internal sealed class MentorEndpointActionDiscovery(
 internal sealed class MentorEndpointActionRunner(ILogger<MentorEndpointActionFunction> logger) : IMentorEndpointActionRunner
 {
     public AIFunction Create(MethodDiscoveryInfo action, IServiceProvider services)
+        => new MentorEndpointActionFunction(Described(action), (MentorEndpointBinding)action.Endpoint!, services, logger);
+
+    /// <inheritdoc/>
+    public System.Text.Json.JsonElement Schema(MethodDiscoveryInfo action) => Described(action).JsonSchema;
+
+    /// <summary>
+    /// The function that describes the action to the model: its name, its description and the schema of its arguments.
+    /// It never runs the handler.
+    /// </summary>
+    private static AIFunction Described(MethodDiscoveryInfo action)
     {
         var binding = (MentorEndpointBinding)action.Endpoint!;
         var fromTheModel = binding.Parameters
@@ -289,11 +299,9 @@ internal sealed class MentorEndpointActionRunner(ILogger<MentorEndpointActionFun
                 ? default
                 : new AIFunctionFactoryOptions.ParameterBindingOptions { ExcludeFromSchema = true, BindParameter = (_, _) => null },
         };
-        var schema = action.Method.IsStatic
+        return action.Method.IsStatic
             ? AIFunctionFactory.Create(action.Method, target: null, factory)
             : AIFunctionFactory.Create(action.Method, _ => throw new InvalidOperationException("The endpoint runs the handler."), factory);
-
-        return new MentorEndpointActionFunction(schema, binding, services, logger);
     }
 }
 

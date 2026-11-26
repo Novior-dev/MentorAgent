@@ -66,6 +66,32 @@ public sealed class HostedToolDomainScopeTests
         }, withEmbeddings: true);
 
     [Fact]
+    public async Task The_gates_call_reaches_the_observers_as_a_scope_check()
+    {
+        // Story 1289 — the gate's question is a call the provider bills: the observers hear of it, with its purpose.
+        var observer = new Novior.MentorAgent.Tests.Gating.ModelCallObserverTests.CallObserver();
+        var classifier = new Novior.MentorAgent.Tests.Fakes.FakeChatClient { ModelId = "gate-classifier" };
+        classifier.SayRepeatedly("IN", 4);
+        await using var host = MentorHostFixture.Create(o =>
+        {
+            o.EnableToolFiltering   = true;
+            o.HostedTools           = MentorHostedTools.WebSearch;
+            o.HostedToolDomainCheck = true;
+            o.MemoryAutoCapture     = false;
+            o.ClassifierChatClient  = classifier;
+            o.FilterHostedTools     = false;
+        }, s => Novior.MentorAgent.Extensions.ServiceCollectionExtensions.AddMentorActionObserver(s, observer), withEmbeddings: true);
+        host.Chat!.SayRepeatedly("ok", times: 4);
+
+        await host.RunTurnAsync("quanti ordini sono aperti?");
+        await host.Get<Novior.MentorAgent.Core.MentorActionDecisions>().FlushAsync();
+
+        classifier.CallCount.Should().BeGreaterThan(0, "the gate had to judge the message");
+        observer.Calls.Should().Contain(c => c.Purpose == MentorModelCallPurpose.ScopeCheck && c.AgentKind == null,
+            "the gate asked: {0}", string.Join(", ", observer.Calls.Select(c => c.Purpose)));
+    }
+
+    [Fact]
     public async Task The_scope_names_image_generation_when_the_operator_enabled_it()
     {
         // The live repro. Without this the classifier reads a description of orders and products and

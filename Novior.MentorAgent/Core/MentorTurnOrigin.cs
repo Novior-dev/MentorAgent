@@ -101,6 +101,22 @@ internal sealed class MentorTurnOrigin
         "stated. Do not present a figure, name, date or status for it — tell the user this " +
         "application could not provide it.";
 
+    /// <summary>
+    /// BUG-265 — called by the orchestrator when the announced-action check sends its second request in the turn, before
+    /// anything of it is streamed. The A2A handler collects every streamed chunk of a task into one reply: the two replies
+    /// of such a turn came back joined ("…2 ordini.Sono stati consegnati…"), the first of them the one judged to report an
+    /// action that did not run. The handler keeps the first aside, and returns the second alone, as it does after its own
+    /// retry for a grounded answer. Null outside the A2A handler: the widget shows each reply as a message of its own.
+    /// </summary>
+    internal Action? SecondRequestStarting { get; set; }
+
+    /// <summary>
+    /// BUG-265 — called when that second request is over, with <see langword="true"/> when it did not end as it should:
+    /// it failed, was stopped, or its branch was dropped (BUG-238). The handler then returns the first reply, as it does
+    /// when the second wrote nothing.
+    /// </summary>
+    internal Action<bool>? SecondRequestEnded { get; set; }
+
     /// <summary>The notice for this turn: the rule, the caller's name for us when it sent one, and the retry note.</summary>
     internal string Notice =>
         HeadlessNotice

@@ -34,6 +34,12 @@ public sealed class A2ACallerStopTests
             configureApp: a => a.UseEndpoints(e => e.MapMentorAgentA2A()));
 
     /// <summary>
+    /// How long the caller waits for the peer to take the cancel. The library's 2 seconds were not always enough on a
+    /// machine loaded by the rest of the tests, and the cancel then ended in a Debug line, not in its confirmation.
+    /// </summary>
+    private static readonly TimeSpan CancelTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// The caller's client for the peer, built from its card as the remote agents are, and a second client to read the
     /// peer's tasks with. A peer that does not stream publishes a card that says so; here it is the same server.
     /// </summary>
@@ -47,7 +53,9 @@ public sealed class A2ACallerStopTests
         if (!streamed)
             card.Capabilities.Streaming = false;
         var logger = new TestLoggerProvider(callerLog).CreateLogger("caller");
-        return (A2AChatClient.ForCard(card, A2AClientFactory.Create(card, peer.Client), "PeerInstance", logger), reader);
+        var caller = A2AChatClient.ForCard(card, A2AClientFactory.Create(card, peer.Client), "PeerInstance", logger);
+        caller.CancelTimeout = CancelTimeout;
+        return (caller, reader);
     }
 
     /// <summary>The delegated request, read as the handoff workflow reads an agent: streaming.</summary>
@@ -116,6 +124,43 @@ public sealed class A2ACallerStopTests
             .Should().Be(TaskState.Canceled, "nobody waits for the task once the turn that delegated it is stopped");
         peer.Services.GetRequiredService<TestOrderService>().Invoked.Should().BeEmpty("the peer runs nothing after the Stop");
         peer.Logs.Records.Should().Contain(r => r.Message.Contains($"Task '{taskId}' cancelled by the caller", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_stop_during_the_delegation_to_a_peer_whose_model_watches_the_token_cancels_its_task_and_no_action_runs(bool streamed)
+    {
+        // The test above has a peer model that does not watch the token, so the peer's turn outlives the cancel and its
+        // model then asks for an action. Here the peer's model gives up its request on the cancel, as a real one does.
+        await using var peer = await PeerAsync();
+        var model = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        peer.Chat.BeforeRespond = () => model.Task;
+        peer.Chat.HonourCancellation = true;
+        peer.Chat.CallTool("count_open_orders").Say("Two open orders.");
+        var callerLog = new TestLogCollector();
+        var (caller, reader) = await ConnectAsync(peer, streamed, callerLog);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+
+        var delegation = DelegateAsync(caller, stop.Token);
+        await Until(() => peer.Chat.CallCount > 0, "the peer's turn to reach its model");
+        var taskId = TaskId(peer);
+
+        stop.Cancel();   // the user's Stop
+        var stoppedAlone = await Task.WhenAny(delegation, Task.Delay(TimeSpan.FromSeconds(5), deadline.Token)) == delegation;
+        await Until(() => Ended(peer, taskId), "the peer's turn to end");
+        model.SetResult();
+
+        var said = string.Join(Environment.NewLine, callerLog.Records.Select(r => $"[{r.Level}] {r.Message}"))
+                   + Environment.NewLine + callerLog.ExceptionText;
+        stoppedAlone.Should().BeTrue("the stopped turn does not wait for the peer to finish");
+        await FluentActions.Awaiting(() => delegation).Should().ThrowAsync<OperationCanceledException>();
+        callerLog.Records.Should().Contain(r => r.Message.Contains($"Task '{taskId}' of the remote agent 'PeerInstance' cancelled",
+            StringComparison.Ordinal), $"the caller cancels the task it delegated; it logged:{Environment.NewLine}{said}");
+        (await reader.GetTaskAsync(new GetTaskRequest { Id = taskId }, deadline.Token)).Status.State
+            .Should().Be(TaskState.Canceled);
+        peer.Services.GetRequiredService<TestOrderService>().Invoked.Should().BeEmpty("the peer runs nothing after the Stop");
     }
 
     [Theory]

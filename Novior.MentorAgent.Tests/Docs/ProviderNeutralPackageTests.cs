@@ -45,20 +45,76 @@ public sealed class ProviderNeutralPackageTests
             "System.ClientModel is all the library reads from a provider: the status of ClientResultException");
     }
 
+    /// <summary>
+    /// BUG-120 — a build or buildTransitive target runs in every consumer's build, and MENTOR001 was one: up to rc.14 a
+    /// check of this kind stopped every build that resolved OpenAI 2.11 or later. The core package carries one file there
+    /// and no other, <c>buildTransitive/Novior.MentorAgent.targets</c>, which embeds the AutoMentor's manifest of the
+    /// pages when the project has the file and does nothing without it (story 1635). It is allowed because it cannot stop
+    /// a build: it holds property and item groups only — a default path the project can change, the manifest embedded
+    /// under a fixed name, taken out of Content and None — and every item group asks whether the file exists. Anything
+    /// else, a target, an error, a warning, a message, a task, an import, a choice or an element not listed here, fails
+    /// this test.
+    /// </summary>
     [Fact]
-    public void The_core_package_ships_no_build_targets()
+    public void The_core_package_ships_only_the_build_file_that_embeds_the_manifest_and_it_cannot_stop_a_build()
     {
         var packed = CoreProject().Descendants("None")
             .Where(n => (string?)n.Attribute("Pack") == "true")
-            .Select(n => (string?)n.Attribute("PackagePath") ?? "");
+            .Where(n => ((string?)n.Attribute("PackagePath") ?? "").StartsWith("build", StringComparison.OrdinalIgnoreCase))
+            .Select(n => ((string?)n.Attribute("Include"), (string?)n.Attribute("PackagePath")));
+        packed.Should().Equal([(@"buildTransitive\Novior.MentorAgent.targets", @"buildTransitive\")],
+            "the one build file of the core package is the targets that embed the manifest");
 
-        packed.Should().NotContain(p => p.StartsWith("build", StringComparison.OrdinalIgnoreCase),
-            "a build or buildTransitive target runs in every consumer's build — MENTOR001 was one");
-
-        // The folder first: under another name the second assertion would hold for any package.
+        // The folder first: under another name the assertions below would hold for any package.
         var core = Path.Combine(RepoFiles.Root, RepoFiles.Core);
         Directory.Exists(core).Should().BeTrue("the core package lives in {0}", core);
         Directory.Exists(Path.Combine(core, "build")).Should().BeFalse();
+        Directory.EnumerateFileSystemEntries(Path.Combine(core, "buildTransitive")).Select(Path.GetFileName)
+            .Should().Equal("Novior.MentorAgent.targets");
+
+        var project = XDocument.Load(Path.Combine(core, "buildTransitive", "Novior.MentorAgent.targets")).Root!;
+        project.Name.LocalName.Should().Be("Project");
+        project.Attributes().Should().BeEmpty("no Sdk, no InitialTargets, no DefaultTargets");
+
+        foreach (var group in project.Elements())
+        {
+            group.Name.LocalName.Should().BeOneOf(["PropertyGroup", "ItemGroup"], "only property and item groups, nothing that runs");
+            if (group.Name.LocalName == "PropertyGroup")
+            {
+                group.Attributes().Should().BeEmpty();
+                var property = group.Elements().Should().ContainSingle().Subject;
+                property.Name.LocalName.Should().Be("MentorUiManifest");
+                property.Attributes().Select(a => (a.Name.LocalName, a.Value))
+                    .Should().Equal([("Condition", "'$(MentorUiManifest)' == ''")], "the project can set another path");
+                property.Value.Should().StartWith("$(MSBuildProjectDirectory)", "the default path is the project's");
+                property.Elements().Should().BeEmpty();
+            }
+            else
+            {
+                group.Attributes().Select(a => a.Name.LocalName).Should().Equal("Condition");
+                group.Attribute("Condition")!.Value.Should().Contain("Exists(", "without the file it does nothing");
+                foreach (var item in group.Elements())
+                {
+                    item.Elements().Should().BeEmpty();
+                    var attributes = item.Attributes().Select(a => a.Name.LocalName).ToList();
+                    switch (item.Name.LocalName)
+                    {
+                        case "EmbeddedResource":
+                            attributes.Should().Equal("Include", "LogicalName");
+                            item.Attribute("LogicalName")!.Value.Should().Be("Novior.MentorAgent.UiManifest.json",
+                                "a fixed name: reading it does not depend on the application's RootNamespace");
+                            break;
+                        case "Content" or "None":
+                            attributes.Should().Equal("Remove");
+                            break;
+                        default:
+                            item.Name.LocalName.Should().BeOneOf(["EmbeddedResource", "Content", "None"],
+                                "the only items are the manifest embedded, and taken out of Content and None");
+                            break;
+                    }
+                }
+            }
+        }
     }
 
     [Fact]

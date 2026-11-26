@@ -22,6 +22,7 @@ Expose a fully-featured AI assistant backend from **any ASP.NET Core application
   - [Angular component](#complete-chat-component--angular)
   - [Vue component](#complete-chat-component--vue)
   - [.NET MAUI / console](#net-maui--console)
+- [Recipes in React, Angular and other front ends](#recipes-in-react-angular-and-other-front-ends)
 - [Multimodal image input](#multimodal-image-input)
 - [Hosted tools (web search, code interpreter, file search, images, remote MCP)](#hosted-tools-web-search-code-interpreter-file-search-images-remote-mcp)
 - [AI providers](#ai-providers)
@@ -76,6 +77,8 @@ Expose a fully-featured AI assistant backend from **any ASP.NET Core application
 | `/mentor/chat` | **SSE streaming** | React, Vue, Angular, fetch API, curl — no library needed. `GET` for text, `POST` for [text + images](#multimodal-image-input) |
 | `/mentor/approve` | **HTTP POST** | All clients — HITL confirmation/rejection (see [HITL note](#hitl--confirming-actions)) |
 | `/mentor/cancel` | **HTTP POST** | All SignalR clients — stops the in-flight turn (`?connectionId=...`). HTTP, not a hub method: SignalR cannot dispatch one while `SendMessage` is streaming. Returns **200** when the connection exists, even if no turn is running, and **404** when the connection is closed or the id is unknown: the connection's turn stopped when it closed, so reconnect before sending again |
+| `/mentor/recipe-result` | **HTTP POST** | The Novior.MentorAgent.Blazor WebAssembly client, and a front end with [`/mentor/agent.js`](#recipes-in-react-angular-and-other-front-ends) — its answer to `RecipeRequested` (`?connectionId=...&runId=...&done=true\|false&step=...&reason=...`): a recipe of the page done in the browser, or the step that was not done and why. HTTP for the reason of `/mentor/cancel`, and owner-checked like it. The `runId` is the one `RecipeRequested` carried, and is answered once. **404** when no turn of that connection waits for that run, **400** for a step the run does not have or a reason that is not one of the runner's, and the run still waits |
+| `/mentor/agent.js` | **HTTP GET** | React, Angular, any front end that is not Blazor — a JavaScript module that runs the [recipes](#recipes-in-react-angular-and-other-front-ends) of the page the hub asks for, on the front end's own SignalR connection. Served to anyone, with the hub's CORS and never its authorization |
 | `/mentor/tour` | **HTTP GET** | All clients — [onboarding tour](#onboarding-tour) steps as JSON; `?language=it` for the tour in that language |
 | `/mentor/session` | **HTTP GET / POST** | All SignalR clients: saves and restores the connection's conversation (`?connectionId=...`). `GET` returns the snapshot — opaque, protected with ASP.NET Core Data Protection and bound to the connection's user (`204` when there is nothing to save yet). `POST` with that snapshot as JSON body restores it (`400` if it is not one this server issued for this user, was edited, cannot be used by this host, or does not parse; `415` unless the request's content type is JSON). Owner-checked like approve/cancel, before the body is read. A `404` right after connecting means the connection's scope is not registered yet: restore after the first hub call, or retry once |
 | `/mentor/admin/metrics` | **HTTP GET** | Operator dashboards — [token & cost snapshot](#token--cost-dashboard), role-gated. Never expose to end users |
@@ -83,7 +86,7 @@ Expose a fully-featured AI assistant backend from **any ASP.NET Core application
 | `/.well-known/agent-card.json` + `/a2a` | **A2A agent** | Other AI agents, orchestrators |
 
 Behind a load balancer every request of a client — the hub connection and its `/mentor/approve`,
-`/mentor/cancel` and `/mentor/session` — must reach the same instance: see *Running more than one instance* in
+`/mentor/cancel`, `/mentor/recipe-result` and `/mentor/session` — must reach the same instance: see *Running more than one instance* in
 the MentorAgent README.
 
 A reconnect is a new connection and therefore a new conversation. Save while the connection is alive and restore on the new one:
@@ -294,7 +297,7 @@ Requires `options.EnableImageInput = true` and a vision-capable model — see [M
 
 ### Option B — SignalR (full feature set)
 
-All 19 events. SSE covers the six that decide what the user sees; SignalR adds the rest — UI actions,
+All 21 events. SSE covers the six that decide what the user sees; SignalR adds the rest — UI actions,
 RAG citations, team collaboration, per-action feedback, MCP and hosted-tool status, busy state.
 Choose it when your client drives the page, not only the conversation.
 
@@ -329,9 +332,12 @@ connection.on('UIActionCompleted',    name         => onUIActionEnd(name));
 connection.on('McpServerStatusChanged', (name, ok) => setMcpBadge(name, ok));
 connection.on('HostedToolsDeclared',  flags        => showHostedToolBadges(flags)); // once, on connect
 connection.on('GeneratedImages',      images       => attachImages(images));        // data: URIs or absolute URLs
+// RecipeRequested (runId, steps) reaches only a client that sends the path of its page: today the Blazor WASM client.
 connection.on('Cards',                cards        => renderCards(cards));          // numeric enums over SignalR, see below
+connection.on('AssistantStatus',      on           => setInputDisabled(!on));       // only when it is turned off or on
 
 await connection.start();
+setInputDisabled(!(await connection.invoke('GetAssistantStatus')));               // and again in onreconnected
 
 // ── Send messages ─────────────────────────────────────────────────────────────
 // Always two arguments — see the note under the protocol reference.
@@ -394,8 +400,10 @@ await fetch(`/mentor/approve?actionId=${actionId}&approved=false`, { method: 'PO
 | `UIActionRequested` | `actionName: string`, `parameterJson: string?` | AI invoked a client-side UI action | Execute the registered handler for `actionName` |
 | `UIActionExecuting` | `actionName: string` | UI action started | Optional: show feedback |
 | `UIActionCompleted` | `actionName: string` | UI action completed | Optional: hide feedback |
+| `RecipeRequested` | `runId: string`, `steps: object[]` | A recipe of the page is to run in the browser. Sent only to a client that sent the path of its page with its page context: the Novior.MentorAgent.Blazor WebAssembly client, or a front end with [`/mentor/agent.js`](#recipes-in-react-angular-and-other-front-ends) | Run the steps and answer with `POST /mentor/recipe-result`. Other clients never receive it |
 | `McpServerStatusChanged` | `name: string`, `connected: boolean` | An MCP client server connected (`true`) or failed/disconnected (`false`) | Update the MCP status badge (green/red) for that server |
 | `HostedToolsDeclared` | `flags: number` | **Once on connect**, before any message | Render your capability badge from this rather than mirroring the server's configuration in the client — see [Hosted tools](#hosted-tools-web-search-code-interpreter-file-search-images-remote-mcp). The value is the `MentorHostedTools` bit flags |
+| `AssistantStatus` | `on: boolean` | To every connection, only when the application turns its assistant off or on (an `IMentorAssistantStatus` registered in the server; Novior.MentorAgent README, «Showing that the assistant is off»). Never sent without one | While `false`, disable the input and say the assistant was turned off. The server does not refuse the requests by itself: the switch that turns the assistant off does. Read the value on connect and on reconnect with `GetAssistantStatus`, since this is sent only at a change. `/mentor/agent.js` does both (`assistantIsOn()`, `onAssistantStatus`) |
 | *(client)* `onreconnecting` / `onclose` | `error?: Error` | The SignalR client's own callbacks, not hub events: the connection dropped or closed | Clear busy, the streaming text and an open confirmation. The turn in flight is lost with the connection, and the reconnected connection (a new scope) never sends `BusyChanged(false)` for it |
 | *(client)* `onreconnected` | `connectionId?: string` | The SignalR client reconnected — on a **new** connection, with a new conversation | Restore the saved session with `POST /mentor/session` (see [What Novior.MentorAgent.Server exposes](#what-noviormentoragentserver-exposes)) |
 
@@ -404,6 +412,9 @@ await fetch(`/mentor/approve?actionId=${actionId}&approved=false`, { method: 'PO
 | Method | Parameters | Description |
 |--------|-----------|-------------|
 | `UpdatePageContext` | `snapshot: PageContextSnapshot` | Send current page state before each message. Call before `SendMessage` |
+| `ReportPages` | `pages: { route, component }[]` | The client's pages, as its router knows them, once a connection opens. The WebAssembly client of Novior.MentorAgent.Blazor sends them itself. A server with `AutoMentor.Enabled` lists them; one with it off ignores them. A route starts with `/`; a route or a component of another shape is not listed (Novior.MentorAgent README, «Pages from your routes») |
+| `ReportObservedPage` | `path: string`, `elements: { element, role, label, type, form, selector }[]`, `limit: string \| null` → `boolean` | What the widget observed of the page at `path`: the WebAssembly client of Novior.MentorAgent.Blazor sends it itself. Structure only, no field for a value. A server with `AutoMentor.Enabled` and `ObservePages` keeps an element once two users saw it the same, checks each as a manifest's and never keeps the path. Answers whether to go on: `false` when the observation is off or past a limit (200 messages a connection); `limit` names the browser's own limit on its last message (Novior.MentorAgent README, «What the users' browsers show») |
+| `GetAssistantStatus` | → `boolean` | Whether the application's assistant is on: `true` when it registers no `IMentorAssistantStatus`. Call it once a connection opens, and at every reconnection; the changes then come as `AssistantStatus`. The WebAssembly client of Novior.MentorAgent.Blazor and `/mentor/agent.js` call it themselves |
 | `SendMessage` | `text: string`, `attachments: MentorAttachment[] \| null` | Send a user message to the AI. `attachments` carries images for a multimodal turn. For a text-only turn pass `null` (or `[]`). The argument is **required on the wire**, see the note below. Each item is `{ mimeType, dataBase64? , url?, fileName? }` — exactly one of `dataBase64` / `url`. An image-only turn (empty `text`) is valid |
 | `SendUserMessage` | `message: { text, attachments, language }` | Sends a user message as `SendMessage` does, with the language of this turn: the name (`"Italian"`) or the ISO code (`"it"`) of a `MentorLanguage`, in any case. A number, a boolean or a name that is not one counts as the application's `Language`, with no error; so does no `language`. `text` and `attachments` are those of `SendMessage`. The WebAssembly client calls it only when its widget has a `Language` |
 | ~~`CancelRequest`~~ | — | ⚠️ **Only works while idle.** SignalR sequential dispatch means it cannot run while `SendMessage` is streaming — exactly when Stop is needed. Use `POST /mentor/cancel?connectionId=...` instead |
@@ -493,7 +504,7 @@ interface UIActionInfo {
 
 The hint is the only thing that tells the model what shape the argument takes, so send one for every action that takes a parameter. The WebAssembly client (`Novior.MentorAgent.Blazor`) generates it from the handler's parameter type when you do not supply one, in the same form as Blazor Server (`integer`, `string (A|B)`, `array<string>`, `{ id: integer, ... }`).
 
-A UI action requested through the hub is **fire-and-forget**: the server sends `UIActionRequested` and tells the model the action succeeded once the request is sent — the client's handler result is not waited for.
+A UI action requested through the hub is **fire-and-forget**: the server sends `UIActionRequested` and tells the model the action succeeded once the request is sent — the client's handler result is not waited for. The action observers see it the same way: its `Executed` means the request was sent to the client, not that the handler ran or succeeded.
 
 #### `RagSource` object
 
@@ -515,10 +526,12 @@ interface RagSource {
 
 Two files: the hook that manages the SignalR connection, and the component that renders the UI.
 
-All three components (React, Angular, Vue) handle 16 of the 19 events. The other three have sections
-of their own: `HostedToolsDeclared` and `GeneratedImages` in
+All three components (React, Angular, Vue) handle 16 of the 21 events. The other five are elsewhere:
+`HostedToolsDeclared` and `GeneratedImages` in
 [Hosted tools](#hosted-tools-web-search-code-interpreter-file-search-images-remote-mcp), `Cards` in
-[Generative UI — cards](#generative-ui--cards-level-2).
+[Generative UI — cards](#generative-ui--cards-level-2), and `RecipeRequested` and `AssistantStatus`, which
+`/mentor/agent.js` handles for a front end that loads it, in
+[Recipes in React, Angular and other front ends](#recipes-in-react-angular-and-other-front-ends).
 
 They also do the same four things beyond the events:
 
@@ -1204,6 +1217,75 @@ await connection.StopAsync();
 
 ---
 
+## Recipes in React, Angular and other front ends
+
+A recipe is a sequence of steps on one page, approved in a console and offered to the model as one of the page's UI
+actions (see the core package's README). Blazor runs them by itself. A front end that is not Blazor runs them with
+**`/mentor/agent.js`**, a JavaScript module that this package serves: the same runner the Blazor widget uses, tied to
+the front end's own `@microsoft/signalr` connection. No npm package is needed.
+
+```html
+<script type="module">
+  import { attach, path } from 'https://api.example.com/mentor/agent.js?v=1.5.0';
+
+  const connection = new signalR.HubConnectionBuilder()
+    .withUrl('https://api.example.com/mentor-hub', { accessTokenFactory: () => token() })
+    .withAutomaticReconnect()
+    .build();
+  await connection.start();
+
+  // After start: the recipes the hub asks for run in this page, and the routes reach the server.
+  const mentor = attach(connection, {
+    accessToken: () => token(),                // the bearer of POST /mentor/recipe-result; without it, the cookies
+    routes: ['/orders', '/orders/:id'],        // optional: without them, the links of the page
+  });
+
+  // With every page context: the path of the page shown, without its query or fragment.
+  await connection.invoke('UpdatePageContext', { pageName: 'Orders', contextData: {}, uiActions: [], path: path() });
+</script>
+```
+
+- **The page.** The hub offers the recipes of the page whose `path` the page context carries. A front end that sends
+  no path is offered none. With a hash router, send the path of the route yourself, without its query: a path with
+  a query or a fragment is no page's, and they can carry what the user typed.
+- **The fields.** A step writes a field as typing would: the native setter, then `input` and `change`, so React's
+  controlled fields keep the value in their state and Angular's forms read it, then the field is left (`blur`), as
+  `updateOn: 'blur'` needs. A combobox of a component library is chosen by its ARIA roles (`combobox`, then `option`).
+- **The answer.** The module sends done, or the step that was not done and why, with `POST /mentor/recipe-result`,
+  never a value of the page. Only the connection's owner may answer, so give it the token the connection uses
+  (`accessToken`), or let the cookies go (`credentials: 'include'`, the default).
+- **The routes.** `attach` sends the front end's routes with `ReportPages` at once and at every reconnection;
+  `mentor.report()` sends them again after a navigation. `/orders/:id` is `/orders/{id}`, `:id?` is `{id?}`, `*` and
+  `**` are a catch-all; an entry is a string or `{ route, component }`. Without `routes`, the path of the page and its
+  links of the same origin are sent, without query or fragment, and none inside `data-mentor-exclude`. A server with
+  `AutoMentor.Enabled` lists them as the pages of a client.
+- **The router's own routes.** `routes` also takes the configuration the router is given: Angular's `Routes`
+  (`attach(connection, { routes })`, the array given to `provideRouter`) or React Router's route objects. A child's
+  `path` is under its parent's, unless it starts with `/`; an entry with `children` is not a page itself, its children
+  are, and `path: ''` or `index: true` is the parent's own page; a `redirectTo` is not a page, nor an entry without a
+  `path` (a `matcher`); the children of `loadChildren` are not read, so list them as strings. A component is named
+  only by a string: a class is named by its route, since a production build renames classes.
+- **CORS.** A module of another origin runs only with CORS: the browser refuses it, and says so in its console only.
+  The script has the CORS of the hub: the host's `app.UseCors(...)` (see [CORS](#cors--required-for-cross-origin-clients)),
+  and a `RequireCors` given to `configureTransports`. It is served to anyone, also when the hub requires a user: it is
+  the library's code, and a browser loads a module without the front end's token.
+- **The cache.** The address with the package's version (`?v=1.5.0`) is cached for a year; any other is checked with
+  the server each time. Change the `?v=` with the package.
+- **The assistant turned off.** When the application turns its assistant off (an `IMentorAssistantStatus` registered
+  in the server), `mentor.assistantIsOn()` is `false`: read with `GetAssistantStatus` when `attach` runs and at every
+  reconnection, then followed through `AssistantStatus`. `mentor.onAssistantStatus(on => ...)` calls back at each
+  change and returns the function that stops it; a callback that throws does not stop the others. Disable the page's
+  own input while it is off:
+
+  ```js
+  const input = document.querySelector('#chat-input');
+  input.disabled = !mentor.assistantIsOn();
+  const stop = mentor.onAssistantStatus(on => { input.disabled = !on; });
+  ```
+
+  `mentor.detach()` stops the recipes and the status.
+- **Not yet.** React and Angular do not observe the pages (`AutoMentor.ObservePages`): only the Blazor widget does.
+
 ## Protecting the endpoints
 
 `MapMentorAgentServer()` maps everything **unauthenticated by default**, because the package cannot
@@ -1216,6 +1298,7 @@ anything else, so here is what each endpoint exposes and what to do about it.
 | `GET`/`POST /mentor/chat` | ✅ | Run turns — **your model spend** | `configureTransports` |
 | `POST /mentor/approve` | — | For a confirmation raised over the **hub**: nothing, because only the principal it was raised for may answer it. A confirmation raised over **SSE** (or in-process) has no recorded owner, so anyone holding its `actionId` can answer it. Keep `/mentor/chat` authenticated and treat the `actionId` as a secret. When the hub connection closes, its turn ends with it, and a late answer gets `404` | *(enforced for hub connections)* |
 | `POST /mentor/cancel` | — | Nothing: owner-only, same rule | *(enforced)* |
+| `POST /mentor/recipe-result` | — | Nothing: owner-only, same rule | *(enforced)* |
 | `GET`/`POST /mentor/session` | — | Nothing: owner-only, same rule | *(enforced)* |
 | `GET /mentor/admin/metrics` | — | Nothing, when `DashboardRole` is set; with an `IMentorTenantResolver`, an administrator reads only their own tenant's figures | `DashboardRole` |
 | `GET /mentor/tour` | ✅ | Read the tour — public screen names and the descriptions of the actions that need no role, identical for every user, no counts and no per-user data. Deliberate | — |
@@ -1904,6 +1987,22 @@ await connection.invoke('UpdatePageContext', {
     ]
 });
 await connection.invoke('SendMessage', 'Highlight order 42', null);
+```
+
+**Client sends its pages, once a connection opens (for a server with `AutoMentor.Enabled`):**
+```javascript
+await connection.invoke('ReportPages', [
+    { route: '/orders',          component: 'Shop.Pages.Orders' },
+    { route: '/orders/{id:int}', component: 'Shop.Pages.OrderDetail' }
+]);
+```
+
+**Client sends what it observed of a page, structure only (for a server with `AutoMentor.ObservePages`):**
+```javascript
+const goOn = await connection.invoke('ReportObservedPage', '/orders/42', [
+    { element: 'button', role: null, label: 'Confirm', type: 'button', form: null, selector: '#confirm' }
+], null);   // the last argument names the browser's own limit on its last message
+if (!goOn) stopObserving();   // off, or past a limit
 ```
 
 **Server invokes the UI action — client receives:**
@@ -2984,7 +3083,7 @@ first connection.
 | `ToolFilterMinScore` | `float` | `0.35` | Minimum cosine similarity (0–1) for a tool to be relevant |
 | `RequireLookupForRecordQuestions` | `bool` | `false` | Opt-in. When a classifier says a message asks for a value of your records, the first model call must call a declared read-only action (or hand over to a specialist): with semantic tool filtering, one the filter selected; without it, any declared read the user may run. One classifier call per turn whose selection holds a read — without the filter, nearly every turn. Needs declared reads. See [Semantic tool filtering](#semantic-tool-filtering) |
 | `RequireActionForChangeRequests` | `bool` | `false` | Opt-in. When a classifier says a message asks to carry out one of your confirmation-gated actions and gives every input it needs, the first model call must call one of those actions the filter selected (or hand over to a specialist), so the banner comes first; when it asks for a page, `navigate_to`. A request that leaves an input out is not forced. One classifier call per turn, shared with `RequireLookupForRecordQuestions`. Unlike that option, needs `EnableToolFiltering` and an `EmbeddingGenerator`, and `RequireConfirmation` for actions. See [Semantic tool filtering](#semantic-tool-filtering) |
-| `CheckAnnouncedActions` | `bool` | `true` | After a turn in which the coordinator called no tool, asks a model whether its reply announces an action or reports one as done; if so, one more request in the same turn, with the same tools, told to call the tool now or to say it was not done. Never a required call, once per turn. The question goes to `ClassifierChatClient`, or to `ChatClient` without one. No effect with `UseServiceManagedHistory` or a pre-built `Agent`. Read at every turn. BUG-220 |
+| `CheckAnnouncedActions` | `bool` | `true` | After a turn in which the coordinator called no tool, asks a model whether its reply announces an action or reports one as done; if so, one more request in the same turn, with the same tools, told to call the tool now or to say it was not done. Never a required call, once per turn. The question goes to `ClassifierChatClient`, or to `ChatClient` without one. With `UseServiceManagedHistory`, only a turn of one request is checked, and the second request is sent from the response the turn started from (BUG-238). No effect with a pre-built `Agent`. Read at every turn. BUG-220 |
 | `EnableCompaction` | `bool` | `false` | Compact long conversation history before each call — what is sent, never what is stored (BUG-104). Locally kept history only (Path A); not installed with `UseServiceManagedHistory` |
 | `CompactionTokenThreshold` | `int` | `4000` | Token budget that triggers compaction |
 | `CompactionMaxTurns` | `int` | `8` | Recent turns kept intact |

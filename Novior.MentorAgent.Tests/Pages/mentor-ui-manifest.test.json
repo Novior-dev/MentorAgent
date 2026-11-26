@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "route": "/l1/orders",
+      "scannedAt": "2026-11-17T09:00:00Z",
+      "elements": [
+        { "element": "input", "role": "textbox", "label": "Customer", "type": "text", "form": "order", "selector": "#customer", "roles": [ "Sales" ], "value": "Mario Rossi" },
+        { "element": "select", "role": "combobox", "label": "Status", "options": [ "Open", "Closed" ], "form": "order", "selector": "[name=status]" },
+        { "element": "input", "type": "password", "label": "Password", "selector": "#pwd" },
+        { "element": "input", "type": "text", "autocomplete": "billing cc-number", "label": "Card number", "selector": "#card" },
+        { "element": "button", "label": "Hidden action", "selector": "#hidden", "hidden": true },
+        { "element": "button", "label": "Disabled action", "selector": "#disabled", "disabled": true },
+        { "element": "button", "label": "Excluded action", "selector": "#excluded", "excluded": true },
+        { "element": "button", "role": "button", "label": "Save", "selector": "[data-testid=save]" }
+      ]
+    },
+    {
+      "route": "/m1/manifest-only",
+      "scannedAt": "2026-11-17T09:00:00Z",
+      "elements": []
+    }
+  ]
+}

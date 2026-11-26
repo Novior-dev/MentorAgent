@@ -8,7 +8,7 @@ namespace Novior.MentorAgent.Middleware;
 /// The forced first call of a turn, on Path A: what is left of the client that ran the page's UI actions.
 ///
 /// <para>
-/// Up to 1.3.0 this client added the page's UI actions to every request and ran their calls in a loop of its own,
+/// Up to 1.3.1 this client added the page's UI actions to every request and ran their calls in a loop of its own,
 /// because the agent's function-invoking client did not know them; the gate never saw those calls. From story 1288
 /// they are tools of the run (<see cref="UIActionTools"/>), called by the agent and gated like every other action, and
 /// this client neither adds nor runs anything.

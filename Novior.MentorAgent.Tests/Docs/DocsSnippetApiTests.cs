@@ -183,6 +183,8 @@ public sealed class DocsSnippetApiTests(ITestOutputHelper output)
             typeof(Novior.MentorAgent.Options.MentorOptions),
             typeof(Novior.MentorAgent.Abstractions.Models.MentorWidgetOptions),
             typeof(Novior.MentorAgent.Declarative.MentorDeclarativeOptions),
+            typeof(Novior.MentorAgent.Scanner.MentorUiScannerOptions),
+            typeof(Novior.MentorAgent.Abstractions.Interfaces.MentorGridOptions),   // story 1319 B: o.Filter = false
         ];
 
         var names = optionTypes

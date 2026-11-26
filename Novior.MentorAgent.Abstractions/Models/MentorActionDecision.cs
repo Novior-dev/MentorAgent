@@ -75,6 +75,15 @@ public sealed record MentorActionDecision
     public MentorActionKind Kind { get; init; }
 
     /// <summary>
+    /// Who provides the tool, as <see cref="MentorActionRequest.Provenance"/> says: the application, an MCP server it
+    /// consumes, or MentorAgent itself. Treat <see cref="MentorActionProvenance.Unknown"/> as not trusted.
+    /// </summary>
+    public MentorActionProvenance Provenance { get; init; }
+
+    /// <summary>The provider's name, as <see cref="MentorActionRequest.ProvenanceName"/> says: an MCP server's <c>Name</c>.</summary>
+    public string? ProvenanceName { get; init; }
+
+    /// <summary>
     /// The page the user is on, as the page named it with <c>IMentorPageContext.SetPageName</c>, read when the decision
     /// was taken: for a <see cref="MentorActionKind.UI"/> action, the page that declared it. <see langword="null"/> when no
     /// page set one, on the MCP server and in a task from another agent.

@@ -29,6 +29,9 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
     {
         public MentorOrchestrator Orchestrator => orchestrator;
         public volatile bool CancelledByCaller;
+
+        /// <summary>Completed when the caller cancels the task: what lets <see cref="ExecuteAsync"/> return before the turn ends.</summary>
+        public TaskCompletionSource Stopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     public MentorAgentA2AHandler(
@@ -56,11 +59,63 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
         // Async scope: MentorOrchestrator is IAsyncDisposable only, and disposing a plain scope
         // that resolved it throws "type only implements IAsyncDisposable" — after the turn had run
         // and been paid for, turning every answer into "An internal error occurred" (BUG-078).
-        await using var scope = _scopeFactory.CreateAsyncScope();
-
-        // The turn is known by the task's id before the caller is told the id, so a tasks/cancel finds the turn it names.
-        var running = new RunningTask(scope.ServiceProvider.GetRequiredService<MentorOrchestrator>());
+        var scope = _scopeFactory.CreateAsyncScope();
+        RunningTask running;
+        try
+        {
+            // The turn is known by the task's id before the caller is told the id, so a tasks/cancel finds the turn it names.
+            running = new RunningTask(scope.ServiceProvider.GetRequiredService<MentorOrchestrator>());
+        }
+        catch
+        {
+            await scope.DisposeAsync();
+            throw;
+        }
         _running[context.TaskId] = running;
+
+        var turn = RunToTheEndAsync(context, queue, scope, running, caller, cancellationToken);
+
+        // From A2A 1.0.0-preview4 the SDK runs a task's tasks/cancel only once this method has returned: it holds a lock
+        // per task for the whole execution. A turn that does not give up at once on the cancel — a model client or an
+        // application action that does not watch the token — kept the cancel waiting, the caller gave up on it, and the
+        // task stayed Working (BUG-199 back). So this method returns as soon as the caller stops the task. The turn is
+        // already stopped as with Stop: the gate refuses every call it still makes, and it reports nothing (RunAsync).
+        // It ends on its own, and only then leaves the running turns and gives up its scope.
+        if (await Task.WhenAny(turn, running.Stopped.Task) == turn)
+        {
+            await turn;
+            return;
+        }
+
+        _logger.LogDebug("[MentorAgent:A2A] Task '{TaskId}': the execution returns at the caller's cancel; the stopped turn ends on its own.",
+            context.TaskId);
+
+        // The task ends Canceled in this execution: a caller waiting for the reply of a blocking request reads only this
+        // execution's events, and one that ended on a Working task was answered with an error. MentorA2ARequestHandler
+        // answers the tasks/cancel with the task once it is Canceled.
+        try
+        {
+            await new TaskUpdater(queue, context.TaskId, context.ContextId).CancelAsync(cancellationToken: CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or InvalidOperationException
+                                       or System.Threading.Channels.ChannelClosedException)
+        {
+            _logger.LogDebug(ex, "[MentorAgent:A2A] Task '{TaskId}': Canceled is left to the SDK's tasks/cancel.", context.TaskId);
+        }
+        _ = turn.ContinueWith(
+            t => _logger.LogDebug(t.Exception, "[MentorAgent:A2A] Task '{TaskId}': the stopped turn failed after the cancel; the task is Canceled.", context.TaskId),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+    }
+
+    /// <summary>Runs the task's turn, then takes it out of the running turns and disposes its scope, however it ends.</summary>
+    private async Task RunToTheEndAsync(
+        RequestContext context,
+        AgentEventQueue queue,
+        AsyncServiceScope scope,
+        RunningTask running,
+        ClaimsPrincipal? caller,
+        CancellationToken cancellationToken)
+    {
         try
         {
             await RunAsync(context, queue, scope.ServiceProvider, running, caller, cancellationToken);
@@ -68,6 +123,7 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
         finally
         {
             _running.TryRemove(KeyValuePair.Create(context.TaskId, running));
+            await scope.DisposeAsync();
         }
     }
 
@@ -118,6 +174,26 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
         void OnChunk(string chunk) => responseBuilder.Append(chunk);
         stateService.OnStreamingChunk += OnChunk;
 
+        // BUG-265 — the announced-action check's second request writes a second reply in the same turn: only that one is
+        // returned, as after the retry below, since the first was judged to report an action that did not run. The first
+        // comes back when the second fails, is stopped, or writes nothing.
+        string? firstReply = null;
+        origin.SecondRequestStarting = () =>
+        {
+            firstReply = responseBuilder.ToString();
+            responseBuilder.Clear();
+        };
+        origin.SecondRequestEnded = endedBadly =>
+        {
+            if (firstReply is null) return;
+            if (endedBadly || responseBuilder.Length == 0)
+            {
+                responseBuilder.Clear();
+                responseBuilder.Append(firstReply);
+            }
+            firstReply = null;
+        };
+
         try
         {
             await orchestrator.SendMessageAsync(userText, cancellationToken);
@@ -162,6 +238,14 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
                 }
             }
         }
+        catch (Exception ex) when (running.CancelledByCaller)
+        {
+            // The caller cancelled the task, and the execution may have returned already: the task is Canceled, and a
+            // stopped turn reports nothing, not even its failure (BUG-199).
+            _logger.LogDebug(ex, "[MentorAgent:A2A] Task '{TaskId}': the caller cancelled it — the stopped turn ended with an exception, nothing is reported.",
+                context.TaskId);
+            return;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[MentorAgent:A2A] Error executing task '{TaskId}'.", context.TaskId);
@@ -179,6 +263,8 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
         finally
         {
             stateService.OnStreamingChunk -= OnChunk;
+            origin.SecondRequestStarting = null;
+            origin.SecondRequestEnded = null;
         }
 
         // The caller cancelled the task, and CancelAsync ended it Canceled: a stopped turn reports nothing more — not the
@@ -248,8 +334,8 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
         AgentEventQueue queue,
         CancellationToken cancellationToken)
     {
-        StopByCaller(context.TaskId);
-        _logger.LogInformation("[MentorAgent:A2A] Task '{TaskId}' cancelled by the caller.", context.TaskId);
+        if (!StopByCaller(context.TaskId))
+            _logger.LogInformation("[MentorAgent:A2A] Task '{TaskId}' cancelled by the caller.", context.TaskId);
         await new TaskUpdater(queue, context.TaskId, context.ContextId).CancelAsync(cancellationToken: cancellationToken);
     }
 
@@ -258,11 +344,15 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
     /// <c>stop</c>, and nothing of the task is reported after it. <see cref="MentorA2ARequestHandler"/> calls it before
     /// the SDK cancels the turn's token; <see cref="CancelAsync"/>, after.
     /// </summary>
-    internal void StopByCaller(string taskId)
+    /// <returns>Whether a turn of the task was running here.</returns>
+    internal bool StopByCaller(string taskId)
     {
-        if (!_running.TryGetValue(taskId, out var running)) return;
+        if (!_running.TryGetValue(taskId, out var running)) return false;
 
+        if (!running.CancelledByCaller)
+            _logger.LogInformation("[MentorAgent:A2A] Task '{TaskId}' cancelled by the caller.", taskId);
         running.CancelledByCaller = true;
+        running.Stopped.TrySetResult();
         try
         {
             running.Orchestrator.CancelCurrentRequest();
@@ -271,6 +361,7 @@ internal sealed class MentorAgentA2AHandler : IAgentHandler
         {
             // The turn ended in between.
         }
+        return true;
     }
 
     /// <summary>How many tasks have a turn running here; each one leaves when its task ends, however it ends.</summary>

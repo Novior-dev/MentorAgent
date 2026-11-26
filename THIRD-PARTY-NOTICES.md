@@ -80,3 +80,20 @@ Both fonts are licensed under the SIL Open Font License 1.1. The files and the f
 Sora: Copyright 2019 The Sora Project Authors (https://github.com/sora-xor/sora-font)
 
 JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+
+## Test only, not shipped: React and the SignalR client in Novior.MentorAgent.Tests
+
+The test project runs a real React front end in a browser with files copied unchanged from npm: React 19.2.7,
+React DOM 19.2.7 and Scheduler 0.27.0 (MIT License, Copyright (c) Meta Platforms, Inc. and affiliates), and
+`@microsoft/signalr` 10.0.0 (MIT License, Copyright (c) .NET Foundation and Contributors). They are in
+`Novior.MentorAgent.Tests/FrontEnd/` with their license texts (`LICENSE-react.txt`, `LICENSE-signalr.txt`) and
+`SOURCE.txt`. The test project is not packed: no package contains them.
+
+It also runs a real Angular front end: `angular.main.js`, built by the Angular CLI 22.2.4 from `FrontEnd/angular/`,
+bundles parts of Angular 22.2.4 (`@angular/core`, `common`, `forms`, `platform-browser`; MIT License, Copyright (c)
+2010-2026 Google LLC), RxJS 7.8.2 (Apache License 2.0) and tslib 2.9.1 (0BSD). Their license texts, as the build
+extracted them, are in `LICENSE-angular.txt`.
+
+It measures the widget's accessibility with axe-core 4.10.3 (Mozilla Public License 2.0, Copyright (c) 2015 - 2025
+Deque Systems, Inc.): `axe.min.js`, copied unchanged from the npm package, with its license text
+(`LICENSE-axe-core.txt`). It is loaded into the test page only while a test runs.

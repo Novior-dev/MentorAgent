@@ -21,6 +21,9 @@ internal sealed class GateCall
     /// </summary>
     internal bool PageAction { get; init; }
 
+    /// <summary>Story 1638 — the recipe a page action runs, with its own roles and confirmation; null for any other.</summary>
+    internal Novior.MentorAgent.Core.MentorRecipe? Recipe { get; init; }
+
     /// <summary>Read once, at the first decision.</summary>
     internal string? DisplayName { get; set; }
 

@@ -49,6 +49,18 @@ public sealed class MentorTelemetry : IDisposable
     /// <summary>The tag that names the type of an exception, never its message (story 195).</summary>
     internal const string ErrorTypeTag = "mentoragent.error.type";
 
+    /// <summary>Story 1289 — on the span of a call to a model, the agent that made it (GenAI semantic conventions).</summary>
+    internal const string AgentNameTag = "gen_ai.agent.name";
+
+    /// <summary>
+    /// Story 1289 — on the span of a call to a model, the kind of the agent that made it: the coordinator and the router
+    /// of the handoff share a name.
+    /// </summary>
+    internal const string AgentKindTag = "mentoragent.agent.kind";
+
+    /// <summary>Story 1289 — on the span of a call to a model, what the call was for (<see cref="MentorModelCallPurpose"/>).</summary>
+    internal const string ModelPurposeTag = "mentoragent.model.purpose";
+
     /// <summary>Starts a MentorAgent span, or returns <see langword="null"/> when nobody is listening.</summary>
     public Activity? StartActivity(string name) => ActivitySource.StartActivity(name);
 

@@ -176,11 +176,14 @@ public static class EndpointRouteBuilderExtensions
         {
             var o = opts.Value;
             var skills = BuildAgentSkills(sp, o);
-            // IMentorActionCatalog says which actions the card lists: the ones built here, once (story 153).
+            // IMentorActionCatalog says which actions the code lets the card list (story 153). The policies asked at
+            // MentorActionStage.Card take an action off the card when it is read, not off the catalogue: read once, as a
+            // bridge does, the catalogue must not depend on whether the card was read before (BUG-250).
             if (sp.GetService<IMentorActionCatalog>() is Core.MentorActionCatalog catalog)
                 catalog.AgentCardSkills = new HashSet<string>(skills.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
 
-            var card = new A2A.AgentCard
+            // BUG-250: built for the requests that read it, with the policies asked at MentorActionStage.Card.
+            A2A.AgentCard Card(List<A2A.AgentSkill> listed) => new A2A.AgentCard
             {
                 Name        = o.AppName,
                 Description = string.IsNullOrEmpty(o.AppDescription) ? string.Empty : o.AppDescription,
@@ -220,8 +223,9 @@ public static class EndpointRouteBuilderExtensions
                 // actions from the MCP surface (BUG-021): the card is the same for every caller,
                 // signed in or not, and nobody answers a confirmation, so advertising a gated action
                 // would be advertising a refusal. Only actions a turn can run, once per name (BUG-177).
-                // It is not filtered by an IMentorActionPolicy either: one card for every caller, built at startup.
-                Skills = skills,
+                // Less what a policy turns off for every caller (BUG-250, MentorActionStage.Card): the card has no
+                // caller, so what a policy decides per caller is decided at the task, with its caller.
+                Skills = listed,
 
                 // Text in, text out; images too when the host accepts them. An empty list is not
                 // "unknown" to a client, it is "nothing", so these are stated rather than omitted.
@@ -231,7 +235,8 @@ public static class EndpointRouteBuilderExtensions
                 // MentorAgent streams every turn; a peer that can consume a stream should know.
                 Capabilities = new A2A.AgentCapabilities { Streaming = true },
             };
-            var wellKnown = endpoints.MapWellKnownAgentCard(card);
+            var cards = new Novior.MentorAgent.Server.Endpoints.MentorAgentCard(sp, skills, Card);
+            var wellKnown = cards.Map(endpoints);
             configure?.Invoke(wellKnown);
         }
 
